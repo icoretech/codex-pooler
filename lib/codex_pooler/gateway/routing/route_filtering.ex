@@ -49,6 +49,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
              saved_reset_scan_at,
              saved_reset_opts
            ),
+         {:ok, candidates} <-
+           filter_account_denied_candidates(filter_input, candidates, quota_decision, route_state, quota_mode),
          request_options =
            request_options
            |> put_reset_probe(route_state.reset_probe)
@@ -107,6 +109,16 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
         |> maybe_allow_missing_quota(filter_input, quota_mode, route_state)
     end
   end
+
+  # A workspace-level provider denial removes the account for every model and
+  # Pool (findings#206 row 206-509). It runs after the saved-reset decisions so
+  # it can never change when an automatic redemption fires; routes that do not
+  # require quota evidence (file selection) keep today's behaviour.
+  defp filter_account_denied_candidates(filter_input, candidates, quota_decision, route_state, :required),
+    do: CandidateEligibility.AccountDenial.filter_candidates(filter_input, candidates, quota_decision, route_state)
+
+  defp filter_account_denied_candidates(_filter_input, candidates, _quota_decision, _route_state, _quota_mode),
+    do: {:ok, candidates}
 
   defp maybe_allow_missing_quota(
          {:error, %{code: code}},

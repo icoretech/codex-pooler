@@ -10,6 +10,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   alias CodexPooler.Upstreams.{
     Quota,
     Quota.RoutingQuotaSnapshot,
+    Quota.Windows.AccountDenial,
     Quota.Windows.Attributes,
     Quota.Windows.EvidenceStore,
     Quota.Windows.ExpiredPruning,
@@ -341,6 +342,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   def routing_quota_eligibility_from_snapshot(%RoutingQuotaSnapshot{} = snapshot, opts \\ []) do
     Routing.eligibility_from_snapshot(snapshot, opts)
   end
+
+  @doc """
+  The workspace-level provider denial in force for the snapshot's identity, or
+  nil. Deliberately separate from routing eligibility; see `AccountDenial`.
+  """
+  @spec routing_account_denial(RoutingQuotaSnapshot.t() | nil) :: AccountDenial.t() | nil
+  def routing_account_denial(snapshot), do: AccountDenial.active(snapshot)
 
   @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
           [Quota.AccountQuotaWindow.t()]

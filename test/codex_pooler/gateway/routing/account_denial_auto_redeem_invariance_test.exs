@@ -1,0 +1,255 @@
+defmodule CodexPooler.Gateway.Routing.AccountDenialAutoRedeemInvarianceTest do
+  # The workspace-level account denial filter (findings#206 row 206-509) must
+  # not move a single automatic saved-reset decision in either direction: a
+  # consume spends a real banked reset in production. Each case below records
+  # how many consume calls the fake provider receives with and without a
+  # `workspace_*` marker on the target or on its sibling; the expected counts
+  # are the ones the tree before the filter produces, and this file is run on
+  # both trees. Only fake upstreams are involved.
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
+
+  alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.RouteFiltering
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Repo
+  alias CodexPooler.SavedResetConfirmationFixtures
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+
+  @consume_path "/api/codex/rate-limit-reset-credits/consume"
+
+  # {mode, target quota, sibling quota, marker on, expected consume count}. The
+  # counts were read from the tree before the filter (P124 baseline-2.log) and
+  # are unchanged after it. Two facts they record predate the filter: a
+  # workspace marker observed on the target already keeps it from being
+  # redeemed, and two 97% weekly candidates never reach threshold pressure in
+  # this arrangement.
+  @cases [
+    {"blocked", :weekly_exhausted, :missing, :none, 1},
+    {"blocked", :weekly_exhausted, :missing, :target, 0},
+    {"blocked", :weekly_exhausted, :missing, :target_first, 0},
+    {"threshold", :weekly_exhausted, :missing, :none, 1},
+    {"threshold", :weekly_exhausted, :missing, :target, 0},
+    {"threshold", :weekly_exhausted, :missing, :target_first, 0},
+    {"blocked", :weekly_exhausted, :missing, :target_weekly, 0},
+    {"threshold", :weekly_exhausted, :missing, :target_weekly, 0},
+    {"blocked", :weekly_exhausted, :primary_exhausted, :none, 1},
+    {"blocked", :weekly_exhausted, :primary_exhausted, :sibling, 1},
+    {"threshold", :weekly_exhausted, :usable, :none, 0},
+    {"threshold", :weekly_exhausted, :usable, :sibling, 0},
+    {"blocked", :weekly_exhausted, :usable, :sibling, 0},
+    {"blocked", :usable, :missing, :target, 0},
+    {"threshold", :usable, :missing, :target, 0},
+    {"threshold", :weekly_pressure, :weekly_pressure, :none, 0},
+    {"threshold", :weekly_pressure, :weekly_pressure, :target, 0},
+    {"threshold", :weekly_pressure, :weekly_pressure, :target_first, 0},
+    {"threshold", :weekly_pressure, :weekly_pressure, :sibling, 0}
+  ]
+
+  for {mode, target_quota, sibling_quota, marker, expected} <- @cases do
+    test "#{mode} mode, #{target_quota} target, #{sibling_quota} sibling, #{marker} marker: #{expected} consume" do
+      %{upstream: upstream, input: input, target: target} =
+        arrangement(unquote(mode), unquote(target_quota), unquote(sibling_quota), unquote(marker))
+
+      capture_log(fn -> filter(input) end)
+
+      assert consume_count(upstream) == unquote(expected)
+      redeemed? = get_in(Repo.reload!(target.identity).metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
+      assert redeemed? == (unquote(expected) == 1)
+    end
+  end
+
+  defp arrangement(mode, target_quota, sibling_quota, marker) do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           @consume_path => {200, %{"code" => "reset"}},
+           "/api/codex/usage" => {200, usage_payload(1)}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    target = active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 2)})
+    sibling = active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+    target = %{target | identity: enable_auto_redeem!(target.identity, mode)}
+    sibling = %{sibling | identity: enable_auto_redeem!(sibling.identity, mode)}
+
+    if marker == :target_first, do: put_workspace_marker!(target.identity)
+    put_quota!(target.identity, target_quota)
+    put_quota!(sibling.identity, sibling_quota)
+
+    case marker do
+      :target -> put_workspace_marker!(target.identity)
+      :target_weekly -> put_workspace_marker!(target.identity, :weekly)
+      :sibling -> put_workspace_marker!(sibling.identity)
+      _none_or_first -> :ok
+    end
+
+    candidates = [
+      {sibling.assignment, Repo.reload!(sibling.identity)},
+      {target.assignment, Repo.reload!(target.identity)}
+    ]
+
+    %{upstream: upstream, target: target, input: filter_input(pool, api_key, candidates)}
+  end
+
+  defp filter(%FilterInput{} = input) do
+    route_state =
+      RouteState.new(%{visible_model: input.model, candidates: input.candidates})
+      |> RouteState.preload_routing_snapshots(input.auth, input.model, input.request_options)
+
+    RouteFiltering.filter_candidates_with_route_state(input, route_state)
+  end
+
+  defp put_quota!(_identity, :missing), do: :ok
+
+  defp put_quota!(identity, :weekly_exhausted) do
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [weekly_attrs(Decimal.new("100"))])
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
+  end
+
+  defp put_quota!(identity, :weekly_pressure) do
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [weekly_attrs(Decimal.new("97"))])
+    SavedResetConfirmationFixtures.confirm_automatic_pressure!(identity)
+  end
+
+  defp put_quota!(identity, :primary_exhausted) do
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("100"))])
+  end
+
+  defp put_quota!(identity, :usable) do
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_attrs(Decimal.new("10"))])
+  end
+
+  # The real header path, as a provider 429 records it.
+  defp put_workspace_marker!(identity, shape \\ :primary) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    window_headers =
+      case shape do
+        :primary ->
+          [
+            {"x-codex-primary-used-percent", "40"},
+            {"x-codex-primary-window-minutes", "300"},
+            {"x-codex-primary-reset-at", Integer.to_string(DateTime.to_unix(now) + 3_600)}
+          ]
+
+        # The weekly window the usage row already reports exhausted, same reset.
+        :weekly ->
+          [
+            {"x-codex-secondary-used-percent", "100"},
+            {"x-codex-secondary-window-minutes", "10080"},
+            {"x-codex-secondary-reset-at", Integer.to_string(DateTime.to_unix(DateTime.add(now, 2, :hour)))}
+          ]
+      end
+
+    headers = window_headers ++ [{"x-codex-rate-limit-reached-type", "workspace_member_credits_depleted"}]
+
+    assert {:ok, [window]} = QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers, now)
+    assert window.metadata["rate_limit_reached_type"] == "workspace_member_credits_depleted"
+  end
+
+  defp weekly_attrs(used_percent) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: used_percent,
+      reset_at: DateTime.add(now, 2, :hour),
+      observed_at: now,
+      last_sync_at: now,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh"
+    }
+  end
+
+  defp primary_attrs(used_percent) do
+    Map.merge(weekly_attrs(used_percent), %{window_kind: "primary", window_minutes: 300})
+  end
+
+  defp enable_auto_redeem!(%UpstreamIdentity{} = identity, mode) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      saved_reset_auto_redeem_enabled: true,
+      saved_reset_auto_redeem_min_blocked_minutes: 60,
+      saved_reset_auto_redeem_keep_credits: 0,
+      saved_reset_auto_redeem_trigger_mode: mode,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp saved_reset_metadata(upstream, available_count) do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+    %{
+      "usage_base_url" => FakeUpstream.url(upstream),
+      "saved_resets" => %{
+        "status" => "reported",
+        "available_count" => available_count,
+        "source" => "codex_usage_api",
+        "path_style" => "codex_api",
+        "observed_at" => observed_at,
+        "usage_path" => "/api/codex/usage",
+        "reason" => nil
+      }
+    }
+  end
+
+  defp filter_input(pool, api_key, candidates) do
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-denial-invariance-#{System.unique_integer([:positive])}",
+        metadata: %{"source_assignment_ids" => Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)}
+      })
+
+    payload = %{"model" => model.exposed_model_id, "input" => "route filtering"}
+
+    FilterInput.new(%{
+      auth: %{pool: pool, api_key: api_key},
+      model: model,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      request_options:
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.put_routing(reset_probe: ResetProbe.new()),
+      candidates: candidates
+    })
+  end
+
+  defp usage_payload(available_count) do
+    reset_at = System.system_time(:second) + 900
+
+    %{
+      "plan_type" => "pro",
+      "rate_limit_reset_credits" => %{"available_count" => available_count},
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 10,
+          "limit_window_seconds" => 18_000,
+          "reset_after_seconds" => 900,
+          "reset_at" => reset_at
+        }
+      }
+    }
+  end
+
+  defp consume_count(upstream) do
+    Enum.count(FakeUpstream.requests(upstream), &(&1.path == @consume_path))
+  end
+end
