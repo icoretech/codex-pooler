@@ -1313,7 +1313,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              sentinels
            )
 
-    assert canonical_full_failure_response?(response, 429)
+    # A Full 429 keeps the tokens the client classifies it by instead of the
+    # canonical server_error body (findings#206 row 206-589).
+    assert response.status == 429
+
+    assert CodexPooler.JSON.decode(response.resp_body) ==
+             {:ok, %{"error" => %{"code" => "upstream_rate_limited", "message" => "upstream rate limited the request", "type" => "rate_limit_error"}}}
   end
 
   test "streaming 400 without content type persists bounded rejection facts only as metadata", %{

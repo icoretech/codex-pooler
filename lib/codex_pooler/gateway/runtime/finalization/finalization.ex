@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
     Metadata,
+    NativeRateLimitRelay,
     ProviderUsageLimit,
     ResponseUsage,
     SettlementAttrs,
@@ -608,16 +609,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     index_map = request_options.runtime.upstream_input_index_map
 
     result =
-      failure_result(
-        response.status,
-        headers,
-        body,
-        request_options,
-        payload,
-        error_code,
-        Keyword.put(opts, :validation_rejection, ValidationRejection.for_client(validation_rejection, index_map)),
-        response |> Metadata.rejection_error() |> ValidationRejection.for_client(index_map)
-      )
+      if native_rate_limit_relay?(response, request_options) do
+        native_rate_limit_result(response, headers)
+      else
+        failure_result(
+          response.status,
+          headers,
+          body,
+          request_options,
+          payload,
+          error_code,
+          Keyword.put(opts, :validation_rejection, ValidationRejection.for_client(validation_rejection, index_map)),
+          response |> Metadata.rejection_error() |> ValidationRejection.for_client(index_map)
+        )
+      end
 
     case result do
       {:error, error} -> {:error, error}
@@ -829,6 +834,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       headers: json_content_type(headers),
       raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
       public_validation_rejection: validation_rejection
+    }
+  end
+
+  # A native `429` the terminal usage limit did not answer keeps the tokens
+  # the released client classifies it by, in Full and Lite, streaming or not
+  # (findings#206 row 206-589; `NativeRateLimitRelay`). The compaction
+  # bridges keep their own result shapes.
+  defp native_rate_limit_relay?(%Req.Response{status: 429}, request_options) do
+    native_ordinary_responses_route?(request_options) and not native_compaction_websocket?(request_options) and
+      not CompactionTrigger.streaming_result?(request_options)
+  end
+
+  defp native_rate_limit_relay?(_response, _request_options), do: false
+
+  defp native_rate_limit_result(response, headers) do
+    %{
+      status: 429,
+      headers: json_content_type(headers),
+      raw_body: CodexPooler.JSON.encode!(%{"error" => NativeRateLimitRelay.error(response)})
     }
   end
 

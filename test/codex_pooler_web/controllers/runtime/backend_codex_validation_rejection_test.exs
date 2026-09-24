@@ -233,7 +233,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     conn: conn
   } do
     # A 401 exhausts the auth-refresh path into its fixed 503 error; a 429 keeps
-    # the rate-limited status with no relayed body. That 503 is a server-side
+    # the rate-limited status with the Pooler's throttle body, which carries no
+    # provider token outside the ones the client classifies a 429 by
+    # (findings#206 row 206-589; it used to go out with no body). That 503 is a server-side
     # failure whose own message says to retry, so it is `server_error`: a 5xx the
     # Pooler authors is never typed as a client error (findings#191).
     cases = [
@@ -247,7 +249,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
             "type" => "server_error"
           }
         }}},
-      {429, 429, {:error, {:unexpected_end, 0}}}
+      {429, 429, {:ok, %{"error" => %{"code" => "upstream_rate_limited", "message" => "upstream rate limited the request", "type" => "rate_limit_error"}}}}
     ]
 
     for {status, expected_status, expected_body} <- cases do
@@ -664,8 +666,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
        %{conn: conn} do
     # provenance: synthetic_adversarial. 429 and 5xx are deliberately outside
     # the persisted rejection-metadata window, so nothing sanitized exists to
-    # relay and the server-owned body must stay byte-identical.
-    for status <- [429, 500] do
+    # relay: a 5xx keeps the server-owned body byte-identical, and a 429 the
+    # Pooler's throttle body in Full as in Lite (findings#206 row 206-589).
+    for {status, expected_error} <- [
+          {429, %{"code" => "upstream_rate_limited", "message" => "upstream rate limited the request", "type" => "rate_limit_error"}},
+          {500, %{"code" => "server_error", "message" => "upstream request failed", "type" => "server_error"}}
+        ] do
       upstream =
         start_upstream(FakeUpstream.repeat_last([validation_rejection(status, "invalid_value", "tools")]))
 
@@ -675,16 +681,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
 
       assert response.status == status, "status #{status}"
 
-      assert CodexPooler.JSON.decode(response.resp_body) ==
-               {:ok,
-                %{
-                  "error" => %{
-                    "code" => "server_error",
-                    "message" => "upstream request failed",
-                    "type" => "server_error"
-                  }
-                }},
-             "status #{status}"
+      assert CodexPooler.JSON.decode(response.resp_body) == {:ok, %{"error" => expected_error}}, "status #{status}"
 
       refute response.resp_body =~ @provider_sentinel, "status #{status}"
       refute response.resp_body =~ "invalid_value", "status #{status}"
