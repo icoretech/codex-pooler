@@ -219,7 +219,7 @@ Default policy fields check:
 
 Leave a field blank when no cap should be saved. A blank limit is different from a zero limit.
 
-The model-scoped override is an optional single-model override. A matching active override replaces the default binding for that request; its blank fields do not inherit default limits. Its thresholds still compare against usage across the whole key, not a separate model allowance. Additional model rows are not part of the current wizard. Policy changes and moving the key between Pools do not reset its budget history.
+The model-scoped override is an optional single-model override. A matching active override replaces the default binding for that request; its blank fields do not inherit default limits. Its thresholds still compare against usage across the whole key, not a separate model allowance. The wizard edits one model override. A key that already has overrides for more than one model, for example one created programmatically, shows the others read-only under **Other model overrides**. Saving keeps them as they are, and the editable override cannot name a model that one of them already limits. Saving also keeps the key's stored labels. Policy changes and moving the key between Pools do not reset its budget history.
 
 ### Active request limit
 
