@@ -11,11 +11,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendChainSecondHopTest 
   # (findings#206 rows 206-519 and 206-525). The next resend must be served
   # once, as that cut resend's successor, and never dispatched twice.
   #
-  # One node, native websocket `/backend-api/codex/responses`, the Pool's model
-  # forced to Full and to Lite, FakeUpstream. Real sockets for every request;
-  # the owner's replay suspender is replaced by one that fails, which is the
-  # only fault injected. Turn metadata and frame shapes are the released
-  # client's; text and identifiers synthetic.
+  # Owner forwarding off: the HTTPS fallback after a websocket chain of two is
+  # served once as the cut resend's successor (row 206-526).
+  #
+  # One node, native websocket `/backend-api/codex/responses` and its native
+  # HTTP fallback, the Pool's model forced to Full and to Lite, FakeUpstream.
+  # Real sockets for every websocket request; with forwarding on the owner's
+  # replay suspender is replaced by one that fails, which is the only fault
+  # injected. Turn metadata and frame shapes are the released client's; text
+  # and identifiers synthetic.
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -48,6 +52,136 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendChainSecondHopTest 
       assert measured.duplicate_after_success == {"error", "duplicate_turn"}
       assert measured.upstream_requests_after_duplicate == 3
     end
+  end
+
+  # Owner forwarding off, the HTTPS fallback after a websocket chain of two: the
+  # turn's first request is cut after the provider's lifecycle frames reached
+  # the client (a delivered cut, so the native HTTP claim walk judges the chain
+  # through the resend policy instead of stepping over it), its websocket
+  # resend is chained onto it and cut before any output, and the released
+  # client then falls back to HTTPS with the same request. The HTTP walk chains
+  # onto the cut resend under the chain-edge rule (findings#206 rows 206-519
+  # and 206-526): served once, linked, and one more identical HTTPS resend
+  # after it was served stays a duplicate.
+  for mode <- ["full", "lite"] do
+    @tag serving_mode: mode
+    test "websocket direct #{mode}: the HTTPS fallback after a two-request websocket chain is served once as the cut resend's successor", ctx do
+      measured = run_direct_https_fallback(ctx.serving_mode)
+      CodexPooler.TestDiagnostics.puts(fn -> "https fallback direct #{ctx.serving_mode}: #{inspect(measured)}" end)
+
+      assert measured.cut_resend == {"failed", "client_disconnected", nil, :no_entitlement}
+      assert measured.fallback == {200, "response.completed"}
+      assert measured.requests == [{"failed", "upstream_stream_error", "websocket"}, {"failed", "client_disconnected", "websocket"}, {"succeeded", nil, "http_sse"}]
+      assert measured.links == [{0, 1}, {1, 2}]
+      assert measured.client_resend == [nil, 0, 1]
+      assert measured.generations == [[0], [0], [0]]
+      assert measured.recorded_settlements == [1, 1, 1]
+      assert measured.upstream_requests == 3
+      assert measured.duplicate_after_success == {409, "duplicate_turn"}
+      assert measured.upstream_requests_after_duplicate == 3
+    end
+  end
+
+  defp run_direct_https_fallback(mode) do
+    put_owner_forwarding!(false)
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        # provenance: observed findings issue 124 (lifecycle frames, transport close) and row 232-231 (the released client's HTTPS fallback of a websocket request); every reply frame synthetic
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", respond: lifecycle_cut_frames()),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            respond: FakeUpstream.websocket_close_without_terminal_barrier(notify: self(), release_ref: release_ref, code: 1001, reason: "synthetic pre-visible loss")
+          ),
+          FakeUpstream.expect_request(method: "POST", path: "/backend-api/codex/responses", respond: FakeUpstream.sse_stream(completed_events("resp_https_fallback_served")))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_serving_mode!(setup, mode)
+    port = start_public_endpoint!()
+    thread = "ws-https-fallback-#{System.unique_integer([:positive])}"
+    frame = setup |> released_frame(thread, Ecto.UUID.generate(), native_text_input("synthetic cut turn")) |> CodexPooler.JSON.encode!()
+
+    # Socket 1: the provider's lifecycle frames reach the client, then its
+    # stream is cut; the client drops the socket.
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+    {conn, _websocket, failure} = receive_until_terminal(conn, websocket, ref)
+    assert %{"type" => "error"} = failure
+    Mint.HTTP.close(conn)
+    assert await_rows!(setup, 1) == [{"failed", "upstream_stream_error"}]
+
+    # Socket 2: the resend is chained onto it, reaches the provider, which
+    # holds it, and the client leaves before any output.
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, thread)
+    {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref}, @detection_timeout_ms
+    cut_request = Repo.one!(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
+    Mint.HTTP.close(conn)
+    await_settled!(cut_request.id)
+    send(upstream_pid, {:fake_upstream_release_websocket, release_ref})
+
+    # The HTTPS fallback of the same request.
+    {status, body} = post_https_fallback!(setup, thread, frame)
+    rows = await_rows!(setup, 3)
+    requests = pool_requests(setup)
+    upstream_requests = FakeUpstream.count(upstream)
+
+    {duplicate_status, duplicate_body} = post_https_fallback!(setup, thread, frame)
+
+    %{
+      cut_resend: cut_resend_shape(cut_request.id),
+      fallback: {status, if(body =~ "response.completed", do: "response.completed", else: :missing)},
+      requests: Enum.zip_with(rows, requests, fn {status, code}, request -> {status, code, request.transport} end),
+      links: links(requests),
+      client_resend: client_resend_indexes(requests),
+      generations: Enum.map(requests, &generations/1),
+      recorded_settlements: Enum.map(requests, &recorded_settlements/1),
+      upstream_requests: upstream_requests,
+      duplicate_after_success: {duplicate_status, get_in(CodexPooler.JSON.decode!(duplicate_body), ["error", "code"])},
+      upstream_requests_after_duplicate: FakeUpstream.count(upstream)
+    }
+  end
+
+  # The released client's HTTPS fallback of the websocket request: the same
+  # body without the frame's `type`, the turn state as a header.
+  defp post_https_fallback!(setup, thread, frame) do
+    body = frame |> CodexPooler.JSON.decode!() |> Map.delete("type")
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("x-codex-turn-state", thread)
+      |> put_req_header("content-type", "application/json")
+      |> post("/backend-api/codex/responses", CodexPooler.JSON.encode!(body))
+
+    {conn.status, conn.resp_body}
+  end
+
+  # For each request, the index of the request its turn claim chained it onto.
+  defp client_resend_indexes(requests) do
+    index = requests |> Enum.with_index() |> Map.new(fn {request, i} -> {request.id, i} end)
+    Enum.map(requests, &Map.get(index, get_in(&1.request_metadata, ["client_resend", "predecessor_request_id"])))
+  end
+
+  defp lifecycle_cut_frames do
+    response_id = "resp_https_fallback_cut"
+
+    FakeUpstream.websocket_text_frames_then_abrupt_close([
+      CodexPooler.JSON.encode!(%{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}}),
+      CodexPooler.JSON.encode!(%{"type" => "response.in_progress", "response" => %{"id" => response_id, "status" => "in_progress"}})
+    ])
+  end
+
+  defp completed_events(response_id) do
+    [
+      %{"type" => "response.created", "response" => %{"id" => response_id, "status" => "in_progress"}},
+      %{"type" => "response.completed", "response" => %{"id" => response_id, "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}}}
+    ]
   end
 
   defp run_forwarded_failed_suspension(mode) do
