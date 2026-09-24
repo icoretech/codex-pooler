@@ -19,11 +19,18 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
   `User-Agent`, which the same Codex build derives from the same package
   version, so the `x-models-etag` a turn carries matches the catalog ETag that
   client holds and never triggers a catalog refetch loop.
+
+  Clients inside the window `CodexModelDecodeContract` was verified against
+  get `:decode_checked`: the template-only entries minus every entry that
+  client would fail to decode, because one such entry makes it discard the
+  whole catalog (findings#258 row 258-34). Clients outside the window get the
+  unchecked catalog, since the contract is not known to hold for them.
   """
 
+  alias CodexPooler.Gateway.Metadata.CodexModelDecodeContract
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
-  @type t :: :verbatim | :instructions_template
+  @type t :: :verbatim | :instructions_template | :decode_checked
 
   # First whole version whose every build decodes `model_messages` with the
   # template taking precedence (`deserialize_model_infos_with_legacy_base`
@@ -76,7 +83,8 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
   are missing.
   """
   @spec apply_to_model(map(), t()) :: map()
-  def apply_to_model(model, :instructions_template) when is_map(model) do
+  def apply_to_model(model, representation)
+      when is_map(model) and representation in [:instructions_template, :decode_checked] do
     case model do
       %{"model_messages" => %{"instructions_template" => template}, "base_instructions" => _base}
       when is_binary(template) ->
@@ -92,6 +100,10 @@ defmodule CodexPooler.Gateway.Metadata.CatalogRepresentation do
   defp for_whole_version(major, minor, patch) do
     version = {String.to_integer(major), String.to_integer(minor), String.to_integer(patch)}
 
-    if version >= @template_only_since, do: :instructions_template, else: :verbatim
+    cond do
+      CodexModelDecodeContract.verified_version?(version) -> :decode_checked
+      version >= @template_only_since -> :instructions_template
+      true -> :verbatim
+    end
   end
 end

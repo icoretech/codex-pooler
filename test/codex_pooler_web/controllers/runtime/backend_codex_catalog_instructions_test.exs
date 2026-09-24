@@ -4,7 +4,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogInstructionsTest do
   # 0.148.0 or newer) gets entries without the mirrored `base_instructions`;
   # older, 0.147.0, absent and unparsable versions keep the entry verbatim. The
   # ETag is the digest of the served representation, and a Responses turn names
-  # the representation the same client's catalog fetch selected.
+  # the representation the same client's catalog fetch selected. The sources
+  # are decodable by the released client, so the decode-checked representation
+  # of 0.155.0 and 0.156.0 (row 258-34) serves the same bytes as 0.148.0.
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPooler.PoolerFixtures
@@ -197,6 +199,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCatalogInstructionsTest do
         "supported_reasoning_levels" => [%{"effort" => "high", "description" => "High"}],
         "shell_type" => "shell_command",
         "visibility" => "list",
+        "supported_in_api" => true,
+        "priority" => 1,
+        "support_verbosity" => false,
+        "truncation_policy" => %{"mode" => "bytes", "limit" => 10_000},
+        "experimental_supported_tools" => [],
         "use_responses_lite" => false
       },
       instructions

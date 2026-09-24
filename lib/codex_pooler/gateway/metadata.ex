@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Metadata do
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Access
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
@@ -27,6 +29,7 @@ defmodule CodexPooler.Gateway.Metadata do
           required(:body) => CodexCatalog.body(),
           required(:etag) => String.t(),
           required(:visible_models) => [Model.t()],
+          required(:undecodable_models) => [CodexCatalog.undecodable_model()],
           required(:source_identity) => CodexPooler.Upstreams.Schemas.UpstreamIdentity.t() | nil
         }
 
@@ -43,7 +46,29 @@ defmodule CodexPooler.Gateway.Metadata do
     with {:ok, snapshot} <- codex_catalog_snapshot(auth, endpoint, request_options, representation),
          :ok <-
            record_metadata_request(auth, endpoint, request_options, snapshot) do
+      log_undecodable_models(auth, snapshot.undecodable_models)
       {:ok, %{status: 200, headers: [{"etag", snapshot.etag} | json_headers()], body: snapshot.body}}
+    end
+  end
+
+  # An entry left out of the served catalog because the requesting client
+  # would fail to decode it (and so discard every other entry). Only the model
+  # slug and the field paths are named, never a value.
+  defp log_undecodable_models(auth, undecodable_models) do
+    Enum.each(undecodable_models, fn %{slug: slug, fields: fields} ->
+      Logger.warning(
+        "codex catalog entry left out: the requesting client cannot decode it " <>
+          "pool_id=#{auth.pool.id} model=#{log_slug(slug)} fields=#{fields |> Enum.take(10) |> Enum.join(",")}"
+      )
+    end)
+  end
+
+  # A slug outside the plain identifier alphabet is shown as a fingerprint.
+  defp log_slug(slug) do
+    if Regex.match?(~r/\A[A-Za-z0-9_.-]{1,80}\z/, slug) do
+      slug
+    else
+      "sha256:" <> (:crypto.hash(:sha256, slug) |> Base.encode16(case: :lower) |> String.slice(0, 12))
     end
   end
 

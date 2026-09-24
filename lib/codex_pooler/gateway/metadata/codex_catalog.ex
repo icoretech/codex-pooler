@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
   alias CodexPooler.Gateway.Metadata.CatalogRepresentation
+  alias CodexPooler.Gateway.Metadata.CodexModelDecodeContract
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -16,7 +17,12 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   @type normalized_policy :: map()
   @type body :: %{required(String.t()) => [map()]}
-  @type result :: %{required(:body) => body(), required(:etag) => String.t()}
+  @type undecodable_model :: %{required(:slug) => String.t(), required(:fields) => [String.t()]}
+  @type result :: %{
+          required(:body) => body(),
+          required(:etag) => String.t(),
+          required(:undecodable_models) => [undecodable_model()]
+        }
   @type pricing_buckets :: Catalog.pricing_bucket_map()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
   @type effective_model_serving_modes :: %{
@@ -189,16 +195,31 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   end
 
   defp result_from_models(models, representation) do
-    models =
+    {models, undecodable_models} =
       models
       |> Enum.map(&CatalogRepresentation.apply_to_model(&1, representation))
       |> Enum.sort_by(&Map.fetch!(&1, "slug"))
+      |> reject_undecodable(representation)
 
     # The ETag is the digest of the representation actually served, so a
     # client holding one representation never matches the other's token.
     body = %{"models" => models}
-    %{body: body, etag: etag(body)}
+    %{body: body, etag: etag(body), undecodable_models: undecodable_models}
   end
+
+  # One entry the client cannot decode makes it discard the whole catalog, so
+  # for a client whose decode contract is known the entry is left out instead;
+  # the model stays routable and the client keeps every other entry.
+  defp reject_undecodable(models, :decode_checked) do
+    {decodable, undecodable} =
+      models
+      |> Enum.map(&{&1, CodexModelDecodeContract.violations(&1)})
+      |> Enum.split_with(fn {_model, fields} -> fields == [] end)
+
+    {Enum.map(decodable, &elem(&1, 0)), Enum.map(undecodable, fn {model, fields} -> %{slug: Map.fetch!(model, "slug"), fields: fields} end)}
+  end
+
+  defp reject_undecodable(models, _representation), do: {models, []}
 
   defp policy_visible_models(routable_models, normalized_policy) do
     CandidateEligibility.policy_visible_models(routable_models, normalized_policy)
