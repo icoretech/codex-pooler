@@ -62,7 +62,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
         list and its total for a screen reader before the sentences, which is
         the one thing the pager cannot do. --%>
         <p class="sr-only">
-          Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
+          Audit logs, {format_total(@audit_logs.total)}{if Map.get(@audit_logs, :total_exact?) == false,
+            do: " or more"} matching redacted audit events
         </p>
         <section
           :for={{day, events} <- @day_groups}

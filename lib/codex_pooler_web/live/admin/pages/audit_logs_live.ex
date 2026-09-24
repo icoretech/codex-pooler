@@ -23,6 +23,13 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   # reconnecting client retries the same URL.
   @max_page 10_000
 
+  # How far past the current page the total is counted. `audit_events` has no
+  # retention, so an exact total of the all-Pools view reads the whole audit
+  # history on every load (findings#206 row 206-414). Past this many events the
+  # pager says "10000+": the operator still sees that more match and can page
+  # on, and never a wrong number.
+  @count_window 10_000
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -182,14 +189,15 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   end
 
   defp audit_events(_socket, selected_pool, filters, offset) when not is_nil(selected_pool) do
-    Audit.list_events(selected_pool, limit: @page_size, offset: offset, filters: filters)
+    Audit.list_events(selected_pool, limit: @page_size, offset: offset, filters: filters, count_limit: offset + @count_window)
   end
 
   defp audit_events(socket, _selected_pool, filters, offset) do
     Audit.list_events_for_scope(socket.assigns.current_scope,
       limit: @page_size,
       offset: offset,
-      filters: filters
+      filters: filters,
+      count_limit: offset + @count_window
     )
   end
 
@@ -392,7 +400,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
 
   defp form_errors(errors), do: Enum.map(errors, &{&1.field, {&1.message, []}})
 
-  defp empty_audit_logs, do: %{items: [], total: 0, limit: @page_size, offset: 0}
+  defp empty_audit_logs, do: %{items: [], total: 0, total_exact?: true, limit: @page_size, offset: 0}
 
   defp selected_audit_event(nil, _events), do: nil
 

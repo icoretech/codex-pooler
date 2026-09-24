@@ -98,10 +98,11 @@ defmodule CodexPooler.MCP.AuditLogsToolsTest do
              "limit",
              "nextOffset",
              "offset",
-             "total"
+             "total",
+             "totalExact"
            ]
 
-    assert %{"items" => [item], "total" => 1, "limit" => 10, "offset" => 0} = structured
+    assert %{"items" => [item], "total" => 1, "totalExact" => true, "limit" => 10, "offset" => 0} = structured
     assert structured["nextOffset"] == nil
 
     assert item["id"] == event.id
@@ -161,6 +162,7 @@ defmodule CodexPooler.MCP.AuditLogsToolsTest do
     assert result["structuredContent"] == %{
              "items" => [],
              "total" => 0,
+             "totalExact" => true,
              "limit" => 50,
              "offset" => 5,
              "nextOffset" => nil

@@ -92,6 +92,7 @@ defmodule CodexPooler.Audit do
           | {:filters, audit_filters()}
           | {:visible_pool_ids, [Ecto.UUID.t()]}
           | {:include_global_events, boolean()}
+          | {:count_limit, pos_integer()}
         ]
   @type audit_result ::
           {:ok, AuditEvent.t()}
@@ -118,6 +119,7 @@ defmodule CodexPooler.Audit do
   @type audit_page :: %{
           items: [audit_event_row()],
           total: non_neg_integer(),
+          total_exact?: boolean(),
           limit: pos_integer(),
           offset: non_neg_integer()
         }
@@ -261,7 +263,7 @@ defmodule CodexPooler.Audit do
       |> maybe_filter_pool(pool_id)
       |> apply_event_filters(filters)
 
-    total = Repo.aggregate(query, :count, :id)
+    {total, total_exact?} = count_events(query, Keyword.get(opts, :count_limit))
 
     items =
       Repo.all(
@@ -292,7 +294,21 @@ defmodule CodexPooler.Audit do
         }
       end)
 
-    %{items: items, total: total, limit: limit, offset: offset}
+    %{items: items, total: total, total_exact?: total_exact?, limit: limit, offset: offset}
+  end
+
+  # The exact total reads every matching event, and `audit_events` has no
+  # retention, so the all-Pools count grows with the whole history (findings#206
+  # row 206-414). With a `count_limit` the count stops one row past the limit:
+  # the reader learns either the exact total or that more than `count_limit`
+  # events match (`total_exact?: false`), and never pays for more.
+  defp count_events(query, nil), do: {Repo.aggregate(query, :count, :id), true}
+
+  defp count_events(query, count_limit) when is_integer(count_limit) and count_limit > 0 do
+    bounded = from([event, ...] in query, select: %{id: event.id}, limit: ^(count_limit + 1))
+    counted = Repo.one(from(row in subquery(bounded), select: count()))
+
+    if counted > count_limit, do: {count_limit, false}, else: {counted, true}
   end
 
   defp id_for(%{id: id}), do: id
