@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.RouteLifecycle, as: RoutingRouteLifecycle
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
+  alias CodexPooler.Gateway.Runtime.Finalization.UsageLimitRefusal
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
@@ -119,7 +120,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
         response,
         body
       ) do
-    RateLimitObserver.record_headers(identity, response, context.model.upstream_model_id)
+    # A usage-limit `429` records its windows as the provider's denial, the
+    # refusal code read from its drained body (findings#206 row 206-594).
+    RateLimitObserver.record_headers(identity, response, context.model.upstream_model_id, UsageLimitRefusal.denial_code(response))
     RateLimitObserver.record_error(identity, body)
     :ok
   end

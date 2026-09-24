@@ -35,13 +35,19 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t()) :: observer_result()
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t(), String.t() | nil) ::
           observer_result()
-  def record_headers(%UpstreamIdentity{} = identity, response, dispatched_model \\ nil) do
+  @spec record_headers(UpstreamIdentity.t(), Req.Response.t(), String.t() | nil, String.t() | nil) ::
+          observer_result()
+  # `denial_code` is the provider's usage-limit refusal code on a `429`, so the
+  # windows the refusal's headers carry are recorded as its denial, as the
+  # websocket frame headers are (findings#206 row 206-594).
+  def record_headers(%UpstreamIdentity{} = identity, response, dispatched_model \\ nil, denial_code \\ nil) do
     record_header_evidence(
       identity,
       response.headers,
       "rate_limit_headers",
       "runtime_headers",
-      dispatched_model
+      dispatched_model,
+      denial_code
     )
   end
 
@@ -56,7 +62,8 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
       headers,
       "rate_limit_websocket_upgrade_headers",
       "runtime_websocket_upgrade_headers",
-      dispatched_model
+      dispatched_model,
+      nil
     )
   end
 
@@ -67,13 +74,15 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
          headers,
          operation,
          source,
-         dispatched_model
+         dispatched_model,
+         denial_code
        ) do
     case QuotaWindows.upsert_quota_windows_from_codex_headers(
            identity,
            headers,
            DateTime.utc_now(),
-           dispatched_model
+           dispatched_model,
+           denial_code
          ) do
       {:ok, windows} ->
         maybe_converge_saved_reset(identity, windows, source)

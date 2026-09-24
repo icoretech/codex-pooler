@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     SettlementAttrs,
     SideEffects,
     Streaming,
+    UsageLimitRefusal,
     ValidationRejection,
     Websocket
   }
@@ -357,7 +358,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                ),
              before_finalize: fn ->
                SideEffects.observe_http_response(context, response, body)
-               record_status_route_failure(context, status)
+               record_status_route_health(context, response)
              end
            }) do
         {:stale_generation, finalized} -> {:ok, finalized}
@@ -374,7 +375,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       # circuit on HTTP (findings#254 row 254-50).
       finalize_upstream_status_failure(response, context, body,
         attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed"),
-        before_finalize: fn -> record_status_route_failure(context, status) end
+        before_finalize: fn -> record_status_route_health(context, response) end
       )
     end
   end
@@ -502,6 +503,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp retry_dispatch_error?(allow_retry?, endpoint, reason) do
     allow_retry? and not compact_endpoint?(endpoint) and
       TransportFailureReason.retry_safe_before_submission?(reason)
+  end
+
+  # A provider usage limit whose headers exclude the refusing account is a
+  # quota answer, not a route failure: no demotion, no circuit failure
+  # (findings#206 row 206-594; `UsageLimitRefusal`). Every other 5xx and 429
+  # keeps the status route failure.
+  defp record_status_route_health(%SelectedCandidateContext{model: model} = context, %Req.Response{status: status} = response) do
+    if UsageLimitRefusal.route_neutral?(response, model.upstream_model_id),
+      do: DispatchLifecycle.neutral_completion(context),
+      else: record_status_route_failure(context, status)
   end
 
   defp record_status_route_failure(%SelectedCandidateContext{} = context, status) do
