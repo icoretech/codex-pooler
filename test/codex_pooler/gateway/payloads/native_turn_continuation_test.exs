@@ -7,12 +7,15 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
   # `test/codex_pooler_web/controllers/runtime/backend_codex_http_duplicate_turn_test.exs`.
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   @metadata_key "x-codex-turn-metadata"
   @responses "/backend-api/codex/responses"
   @compact "/backend-api/codex/responses/compact"
+  @turn_key :crypto.hash(:sha256, "p88-steered-turn")
+  @other_turn_key :crypto.hash(:sha256, "p88-other-turn")
 
   describe "canonical_document/2" do
     test "reads the body document, the header copy, and prefers the body" do
@@ -364,6 +367,53 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
 
       assert @responses in NativeTurnContinuation.native_endpoints()
     end
+  end
+
+  # The websocket steer (findings#206 row 206-409): a frame anchored on the
+  # response its own turn just completed on this socket is a later request of
+  # that turn. Only that exact pairing counts.
+  describe "steered_continuation?/3" do
+    test "an anchored turn frame on the last response its own turn completed here is steered" do
+      assert NativeTurnContinuation.steered_continuation?(steer_payload("resp_own"), websocket_options(@turn_key, "resp_own"), @turn_key)
+    end
+
+    test "another turn's response, another anchor, no record or no anchor are not steered" do
+      refute NativeTurnContinuation.steered_continuation?(steer_payload("resp_own"), websocket_options(@other_turn_key, "resp_own"), @turn_key)
+      refute NativeTurnContinuation.steered_continuation?(steer_payload("resp_other"), websocket_options(@turn_key, "resp_own"), @turn_key)
+      refute NativeTurnContinuation.steered_continuation?(steer_payload("resp_own"), websocket_transport(options()), @turn_key)
+      refute NativeTurnContinuation.steered_continuation?(Map.delete(steer_payload("resp_own"), "previous_response_id"), websocket_options(@turn_key, "resp_own"), @turn_key)
+    end
+
+    test "a compaction, a non-websocket transport and the compact route are not steered" do
+      compaction = put_in(steer_payload("resp_own"), ["client_metadata", @metadata_key], document(%{"request_kind" => "compaction", "turn_id" => "t-steer"}))
+      refute NativeTurnContinuation.steered_continuation?(compaction, websocket_options(@turn_key, "resp_own"), @turn_key)
+
+      http = put_in(websocket_options(@turn_key, "resp_own").transport.transport, "http_sse")
+      refute NativeTurnContinuation.steered_continuation?(steer_payload("resp_own"), http, @turn_key)
+
+      compact_route = put_in(websocket_options(@turn_key, "resp_own").transport.upstream_endpoint, @compact)
+      refute NativeTurnContinuation.steered_continuation?(steer_payload("resp_own"), compact_route, @turn_key)
+    end
+  end
+
+  defp steer_payload(anchor),
+    do: %{
+      "previous_response_id" => anchor,
+      "input" => [user_message("steered")],
+      "client_metadata" => %{@metadata_key => document(%{"request_kind" => "turn", "turn_id" => "t-steer"})}
+    }
+
+  defp websocket_options(turn_key, response_id) do
+    options = websocket_transport(options())
+    record = %{semantic_turn_key: turn_key, response_digest: NativeCodexTurnMetadata.response_id_digest(response_id)}
+    %{options | extra: Map.put(options.extra, :socket_last_completed_native_response, record)}
+  end
+
+  defp websocket_transport(options) do
+    options
+    |> put_in([Access.key!(:transport), Access.key!(:transport)], "websocket")
+    |> put_in([Access.key!(:payload_context), Access.key!(:compaction_trigger_bridge?)], false)
+    |> put_in([Access.key!(:openai_compatibility), Access.key!(:public_openai_responses_stream)], false)
   end
 
   defp document(map), do: CodexPooler.JSON.encode!(map)

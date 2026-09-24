@@ -1121,6 +1121,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       ordinary_native_tool_continuation?(payload, request_options) ->
         WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
 
+      # A later request of the turn steered in by the user, anchored on the
+      # response its own turn just completed on this socket: claimed per payload
+      # like a tool-result continuation, so its identical resend is still met
+      # (findings#206 row 206-409).
+      NativeTurnContinuation.steered_continuation?(payload, request_options, semantic_turn_key) ->
+        WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+
       true ->
         prepared.turn_claim_key
     end

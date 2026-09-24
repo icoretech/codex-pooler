@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Events
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata}
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata, NativeTurnContinuation}
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
@@ -1835,6 +1835,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Adapter.response_options(true, nil)
       |> RequestOptions.capture_api_key_runtime_epoch(Map.get(state, :auth))
       |> maybe_put_native_turn_metadata(payload)
+      |> put_last_completed_native_response(state)
 
     Websocket.prepare_websocket_response(
       payload,
@@ -1842,6 +1843,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       fn data -> send(parent, {:codex_response_chunk, self(), data}) end
     )
   end
+
+  defp put_last_completed_native_response(%RequestOptions{} = options, %{last_completed_native_response: %{} = record}),
+    do: %{options | extra: Map.put(options.extra, :socket_last_completed_native_response, record)}
+
+  defp put_last_completed_native_response(%RequestOptions{} = options, _state), do: options
 
   defp maybe_put_native_turn_metadata(%RequestOptions{} = options, raw_payload) do
     with {:ok, payload} <- WebsocketCodec.decode_payload(raw_payload),
@@ -3202,6 +3208,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        }),
        do: true
 
+  # A steered frame is anchored on the response its turn just completed, like a
+  # tool-result continuation, and waits for that request to settle the same way:
+  # dispatched at once, it met the turn's still in-progress row
+  # (`codex_turns_active_semantic_turn_uq`) with owner forwarding off
+  # (findings#206 row 206-409).
+  defp continuity_ordered_prepared?(%PreparedWebsocketFrame{variant: :native_response_create, payload: payload, semantic_turn_key: <<_::256>> = key, request_options: %RequestOptions{} = options}) do
+    NativeTurnContinuation.steered_continuation?(payload, options, key) or
+      WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(payload))
+  end
+
   defp continuity_ordered_prepared?(%PreparedWebsocketFrame{payload: payload}) do
     WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(payload))
   end
@@ -3355,6 +3371,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> track_response_task(pid, monitor)
         |> put_direct_context(pid, direct_ref, parent)
         |> put_response_task_model(pid, prepared)
+        |> put_response_task_turn(pid, prepared)
         |> maybe_open_public_turn(prepared, pid)
 
       {:error, reason} ->
@@ -3385,6 +3402,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     do: %{state | response_task_models: Map.delete(models, pid)}
 
   defp forget_response_task_model(state, _pid), do: state
+
+  # The turn a native request belongs to, so the response it completes on this
+  # socket is known to be that turn's (findings#206 row 206-409).
+  defp put_response_task_turn(state, pid, %PreparedWebsocketFrame{variant: :native_response_create, semantic_turn_key: <<_::256>> = key}),
+    do: Map.update(state, :response_task_turns, %{pid => key}, &Map.put(&1, pid, key))
+
+  defp put_response_task_turn(state, _pid, _prepared), do: state
+
+  defp forget_response_task_turn(%{response_task_turns: turns} = state, pid),
+    do: %{state | response_task_turns: Map.delete(turns, pid)}
+
+  defp forget_response_task_turn(state, _pid), do: state
+
+  # The released client drains user input steered into a running turn into the
+  # same turn, right after a request of it completed, and sends it on this
+  # connection anchored on that response (`session/turn.rs`
+  # `can_drain_pending_input`, `client.rs` `prepare_websocket_request`). The
+  # codec reads this record to tell such a frame from the turn's opener, which
+  # can never be anchored on a response of its own turn (findings#206 row
+  # 206-409). Only the last response counts, because the client anchors only on
+  # the last one; any other terminal forgets it.
+  defp record_completed_native_response(state, pid, data) do
+    with {:ok, %{kind: :completed}} <- StreamProtocol.terminal_outcome(data),
+         <<_::256>> = key <- state |> Map.get(:response_task_turns, %{}) |> Map.get(pid),
+         {:ok, %{"response" => %{"id" => id}}} when is_binary(id) and id != "" <- CodexPooler.JSON.decode(data) do
+      Map.put(state, :last_completed_native_response, %{semantic_turn_key: key, response_digest: NativeCodexTurnMetadata.response_id_digest(id)})
+    else
+      _not_a_completed_native_turn_response -> Map.delete(state, :last_completed_native_response)
+    end
+  end
 
   defp put_prepared_public_context(%PreparedWebsocketFrame{} = prepared, state) do
     if prepared.variant == :public_response_create do
@@ -4569,6 +4616,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
       |> Map.update(:response_task_terminals_accepted, MapSet.new([pid]), &MapSet.put(&1, pid))
       |> maybe_mark_completed_response_task_terminal(pid, terminal_outcome(data))
+      |> record_completed_native_response(pid, data)
       |> record_downstream_terminal(pid, DeliveryReceipt.terminal_class_from_outcome(outcome))
     else
       _not_terminal -> state
@@ -4806,6 +4854,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.update(:tasks, MapSet.new(), &MapSet.delete(&1, pid))
     |> forget_response_task_model(pid)
+    |> forget_response_task_turn(pid)
     |> clear_direct_cleanup(pid)
     |> DownstreamSession.clear_cleanup_witness(pid)
   end

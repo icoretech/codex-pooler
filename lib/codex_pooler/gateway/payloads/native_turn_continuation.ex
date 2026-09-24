@@ -72,6 +72,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   # caught by `compaction_request?/2` before the opening-request question is
   # ever asked.
 
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolResultShape
 
@@ -149,6 +150,46 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   end
 
   def ordinary_tool_continuation?(_payload, %RequestOptions{}), do: false
+
+  @doc """
+  True for a native websocket frame anchored on the response a request of its
+  own turn just completed on this socket: a later request of that turn, never
+  its opener.
+
+  The released client drains user input steered into a running turn into the
+  SAME turn, under the same `turn_id`, once a request of it completed
+  (`session/turn.rs` `can_drain_pending_input`; `turn_input.rs` `steer_input`
+  returns the active turn's id), and sends it on the same connection as an
+  anchored increment: `previous_response_id` of the response just completed and
+  only the items added since (`client.rs` `prepare_websocket_request`). With no
+  tool result in that increment `turn_role/1` reads `:opening`, although the
+  turn's opener holds the bare claim (findings#206 row 206-409). An opener can
+  never be anchored on a response of its own turn -- it is sent before its turn
+  produced one -- so the anchor alone tells them apart, given the socket's
+  record of the last response it delivered and the turn that produced it
+  (`:socket_last_completed_native_response` in `extra`). Like
+  `ordinary_tool_continuation?/2` it reads the body only and requires a
+  websocket transport; the record is socket-local, so a frame on another socket
+  keeps the bare claim.
+  """
+  @spec steered_continuation?(map(), RequestOptions.t(), <<_::256>>) :: boolean()
+  def steered_continuation?(
+        %{"previous_response_id" => anchor} = payload,
+        %RequestOptions{
+          native_compaction_admission: nil,
+          transport: %{transport: "websocket"},
+          payload_context: %{compaction_trigger_bridge?: false},
+          openai_compatibility: %{public_openai_responses_stream: false},
+          extra: %{socket_last_completed_native_response: %{semantic_turn_key: semantic_turn_key, response_digest: response_digest}}
+        } = options,
+        semantic_turn_key
+      )
+      when is_binary(anchor) and anchor != "" and is_binary(response_digest) do
+    upstream_endpoint(options) != @compact_endpoint and request_kind(payload, options) == "turn" and
+      NativeCodexTurnMetadata.response_id_digest(anchor) == response_digest
+  end
+
+  def steered_continuation?(_payload, %RequestOptions{}, _semantic_turn_key), do: false
 
   @doc """
   True when this request is a compaction of a turn rather than a request of the
