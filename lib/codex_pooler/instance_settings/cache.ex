@@ -517,7 +517,7 @@ defmodule CodexPooler.InstanceSettings.Cache do
   # A stored renewal interval above a third of the effective ttl is lowered at
   # read time by `OperationalSettings`; say so once per node for each stored
   # (renewal, ttl) pair, not on every reconciliation reload.
-  defp log_clamped_owner_lease_renewal(previous, %Settings{gateway: gateway} = settings) when is_map(gateway) do
+  defp log_clamped_owner_lease_renewal(previous, %Settings{gateway: gateway} = settings) do
     stored = stored_owner_lease_renewal(settings)
     effective = OperationalSettings.effective_owner_lease_renewal_seconds(gateway)
 
@@ -530,7 +530,6 @@ defmodule CodexPooler.InstanceSettings.Cache do
     :ok
   end
 
-  defp log_clamped_owner_lease_renewal(_previous, _settings), do: :ok
 
   defp stored_owner_lease_renewal(%Settings{gateway: %{bridge_owner_lease_renewal_seconds: renewal}}), do: renewal
   defp stored_owner_lease_renewal(_settings), do: nil
