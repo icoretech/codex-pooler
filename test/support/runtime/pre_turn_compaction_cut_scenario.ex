@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
   alias CodexPooler.Accounting.{LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Transports.Websocket.{NativeCompactionAdmission, WebsocketOwnerSession}
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
@@ -350,7 +350,32 @@ defmodule CodexPoolerWeb.Runtime.PreTurnCompactionCutScenario do
       :telemetry.detach(handler_id)
       assert_received {^hold, :held, settler}, "the cut request's settlement never started while the first retry waited"
       send(settler, {hold, :release})
+      await_cut_compaction_settled!(ctx.setup.pool.id)
     end)
+  end
+
+  # The held query can be any step of the cut request's settlement, which writes
+  # the request and attempt and then the turn. The next retry is sent once the
+  # whole settlement is visible, as the released client's retry comes about
+  # 400 ms after the refusal: sent at once, it could land between those writes,
+  # where the replay preflight closes the still-open turn as orphaned
+  # (`orphaned_turn_closed`) and the predecessor is no longer a resendable cut
+  # (findings#206 row 206-607, seen on a CI runner).
+  defp await_cut_compaction_settled!(pool_id) do
+    await!(
+      fn ->
+        Repo.all(
+          from(request in Request,
+            join: turn in CodexTurn,
+            on: turn.request_id == request.id,
+            where: request.pool_id == ^pool_id and request.endpoint == @compact_endpoint,
+            select: {request.status, turn.status}
+          )
+        )
+        |> Enum.all?(fn {request_status, turn_status} -> request_status not in ["accepted", "in_progress"] and turn_status != "in_progress" end)
+      end,
+      "the cut compaction's settlement never finished after its hold was released"
+    )
   end
 
   @doc false
