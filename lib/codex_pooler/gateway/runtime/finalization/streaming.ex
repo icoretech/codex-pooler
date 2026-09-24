@@ -254,7 +254,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     response
     |> Metadata.first_event_stream_metadata(failure, error_kind, context.request_options)
     |> merge_upstream_websocket_connection(websocket_attempt_metadata.upstream_websocket_connection)
+    |> merge_usage_limit_record(Req.Response.get_private(response, :usage_limit_record))
   end
+
+  # The reset a websocket terminal usage limit advised the client, recorded as
+  # the HTTP twin records it (findings#206 rows 206-553, 206-596).
+  defp merge_usage_limit_record(metadata, %{"resets_at" => _resets_at, "resets_in_seconds" => _seconds} = record),
+    do: Map.put(metadata, "usage_limit", record)
+
+  defp merge_usage_limit_record(metadata, _record), do: metadata
 
   @spec finalize_failure(binary(), term(), ResponseContext.t()) :: finalization_result()
   @spec finalize_failure(binary(), term(), ResponseContext.t(), term()) :: finalization_result()

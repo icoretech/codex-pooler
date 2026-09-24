@@ -2,8 +2,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   @websocket_refresh_metadata_operation :merge_websocket_auth_refresh_metadata
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.FailureResponse
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
   alias CodexPooler.Gateway.Routing.CircuitRetryAfter
@@ -427,9 +430,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          response,
          failure
        ) do
-    deliver_retry_exhausted_websocket_failure(dispatch_request, response, &ProviderUsageLimit.pool_frame(&1, fn -> other_candidates_return(context) end, fn -> other_candidates_circuit_seconds(context) end))
+    delivered =
+      deliver_retry_exhausted_websocket_failure(
+        dispatch_request,
+        response,
+        &ProviderUsageLimit.pool_frame(&1, fn -> other_candidates_return(context) end, fn -> other_candidates_circuit_seconds(context) end)
+      )
 
-    response_context = retryable_websocket_response_context(context, response)
+    answer = delivered |> List.last() |> usage_limit_answer()
+    log_usage_limit_answer(answer, dispatch_request, failure)
+
+    response_context = context |> retryable_websocket_response_context(response) |> record_usage_limit_answer(answer)
 
     case Finalization.finalize_first_event_stream_failure(
            Map.get(response, :body, ""),
@@ -718,6 +729,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
   defp deliver_retry_exhausted_websocket_failure(dispatch_request, upstream_response, project \\ &Function.identity/1)
 
+  # Delivers the refused turn's frames and returns them as the client got them.
   defp deliver_retry_exhausted_websocket_failure(
          %DispatchRequest{accounting_request: %{id: request_id}, writer: writer},
          upstream_response,
@@ -726,10 +738,60 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
        when is_function(writer, 1) do
     request_id
     |> WebsocketCodec.stream_messages(Map.get(upstream_response, :body, ""))
-    |> Enum.each(&writer.(&1 |> sanitize_retry_terminal() |> project.()))
+    |> Enum.map(fn frame ->
+      projected = frame |> sanitize_retry_terminal() |> project.()
+      writer.(projected)
+      projected
+    end)
   end
 
-  defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response, _project), do: :ok
+  defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response, _project), do: []
+
+  # What the socket answers a pre-output usage-limit refusal with, read the way
+  # the socket projects the delivered frame (`ProviderUsageLimit.frame_projection/2`):
+  # the terminal usage limit and the reset it advises, or the classified relay
+  # whose Pool advice was withheld (findings#206 row 206-596).
+  defp usage_limit_answer(frame) when is_binary(frame) do
+    case CodexPooler.JSON.decode(frame) do
+      {:ok, %{} = decoded} -> decoded |> ProviderUsageLimit.frame_projection() |> projected_usage_limit_answer()
+      _other -> nil
+    end
+  end
+
+  defp usage_limit_answer(_frame), do: nil
+
+  defp projected_usage_limit_answer({:terminal, error}), do: {:terminal, Contracts.usage_limit_record(error)}
+  defp projected_usage_limit_answer({:relay, _provider_error}), do: :withheld
+  defp projected_usage_limit_answer(:canonical), do: nil
+
+  # The row records the 429 the client was answered, and the attempt the reset
+  # a terminal answer advised, like the HTTP twin (rows 206-553, 206-596).
+  defp record_usage_limit_answer(%ResponseContext{response: response} = response_context, {:terminal, record}),
+    do: %{response_context | response: response |> Map.put(:status, 429) |> Req.Response.put_private(:usage_limit_record, record)}
+
+  defp record_usage_limit_answer(%ResponseContext{response: response} = response_context, :withheld),
+    do: %{response_context | response: %{response | status: 429}}
+
+  defp record_usage_limit_answer(response_context, nil), do: response_context
+
+  defp log_usage_limit_answer(nil, _dispatch_request, _failure), do: :ok
+
+  defp log_usage_limit_answer(answer, dispatch_request, failure) do
+    advice =
+      case answer do
+        {:terminal, %{"resets_at" => resets_at, "resets_in_seconds" => seconds}} -> "advice=pool resets_at=#{resets_at} resets_in_seconds=#{seconds}"
+        {:terminal, _record} -> "advice=pool"
+        :withheld -> "advice=withheld"
+      end
+
+    Logger.info(
+      "websocket usage limit answered request_id=#{accounting_request_id(dispatch_request)} " <>
+        "status=429 error_code=#{DiagnosticTaxonomy.identifier(to_string(Map.get(failure, :code)))} " <> advice
+    )
+  end
+
+  defp accounting_request_id(%DispatchRequest{accounting_request: %{id: request_id}}), do: request_id
+  defp accounting_request_id(_dispatch_request), do: nil
 
   # The Pool a pre-output usage-limit refusal on the last candidate speaks for
   # (findings#206 rows 206-545, 206-546): the socket projects the frame without

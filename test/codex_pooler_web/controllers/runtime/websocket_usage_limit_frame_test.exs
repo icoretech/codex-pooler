@@ -21,6 +21,8 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Accounting.Request
@@ -40,6 +42,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
     test "native websocket #{topology}: a provider usage-limit frame answers the wrapped terminal 429 with its reset", _context do
       put_owner_forwarding!(@topology == :local_owner)
+      raise_answer_log_level!()
       resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
       setup = frame_setup!(resets_at)
       {_server, port} = start_public_endpoint_with_server!()
@@ -52,6 +55,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
     test "public /v1 websocket #{topology}: a provider usage-limit frame answers the wrapped terminal 429 with its reset", _context do
       put_owner_forwarding!(@topology == :local_owner)
+      raise_answer_log_level!()
       resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
       setup = frame_setup!(resets_at)
 
@@ -99,6 +103,61 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert %{"type" => "usage_limit_reached", "message" => "upstream usage limit reached", "resets_at" => ^resets_at} = error
     refute Map.has_key?(event, "headers")
     refute CodexPooler.JSON.encode!(event) =~ @provider_message
+  end
+
+  # The refused turn's row and log name what the client was told
+  # (findings#206 row 206-596): the request and attempt record the 429 the
+  # socket answered, the attempt keeps the advised reset like its HTTP twin
+  # (row 206-553), and one info line names the refusal and the reset. The
+  # suite runs at :warning; the line is an :info the production default level
+  # emits, so it is raised for its module only.
+  for topology <- [:direct, :local_owner] do
+    @topology topology
+
+    test "native websocket #{topology}: the refused turn records the 429 and the advised reset, and logs them", _context do
+      put_owner_forwarding!(@topology == :local_owner)
+      raise_answer_log_level!()
+      resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
+      setup = frame_setup!(resets_at)
+      {_server, port} = start_public_endpoint_with_server!()
+
+      {event, log} =
+        with_log([level: :info], fn ->
+          event = native_turn!(port, setup)
+          assert_recorded_failure!(setup)
+          event
+        end)
+
+      assert %{"status" => 429, "error" => %{"resets_at" => ^resets_at, "resets_in_seconds" => seconds}} = event
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.response_status_code == 429
+      assert [attempt] = Repo.all(from(a in CodexPooler.Accounting.Attempt, where: a.request_id == ^request.id))
+      assert attempt.response_metadata["usage_limit"] == %{"resets_at" => resets_at, "resets_in_seconds" => seconds}
+      assert log =~ ~r/websocket usage limit answered .*status=429.*resets_at=#{resets_at} resets_in_seconds=#{seconds}/
+      refute log =~ @provider_message
+    end
+  end
+
+  test "native websocket: a withheld-advice refusal records the 429 it relayed, without advice", _context do
+    put_owner_forwarding!(false)
+    raise_answer_log_level!()
+    resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
+    setup = sibling_setup!(resets_at)
+    open_sibling_circuit!(setup)
+    {_server, port} = start_public_endpoint_with_server!()
+
+    {_event, log} = with_log([level: :info], fn -> native_turn!(port, setup) end)
+
+    assert [request] = settled_requests!(setup)
+    assert request.response_status_code == 429
+    assert [attempt] = Repo.all(from(a in CodexPooler.Accounting.Attempt, where: a.request_id == ^request.id))
+    refute Map.has_key?(attempt.response_metadata, "usage_limit")
+    assert log =~ ~r/websocket usage limit answered .*status=429.*advice=withheld/
+  end
+
+  defp raise_answer_log_level! do
+    :ok = Logger.put_module_level(CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt, :info)
+    on_exit(fn -> Logger.delete_module_level(CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt) end)
   end
 
   defp sibling_setup!(resets_at) do
@@ -160,6 +219,11 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert seconds in (@reset_seconds - 5)..@reset_seconds
     refute Map.has_key?(error, "plan_type")
     refute inspect(error) =~ @provider_message
+  end
+
+  defp settled_requests!(setup) do
+    assert_recorded_failure!(setup)
+    Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
   end
 
   # The turn settles on the provider's refusal.
