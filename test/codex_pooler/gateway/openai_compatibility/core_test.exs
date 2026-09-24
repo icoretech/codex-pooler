@@ -3203,41 +3203,72 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert [%{"output" => ^structured_output}] = structured_payload["input"]
     end
 
-    test "function_call_output normalizes input image detail from Responses SDK tool output" do
+    # findings#206 row 206-476: the provider reads `detail` on a tool-output
+    # image (it refuses a value outside low/high/auto/original with param
+    # `input[2].output[1].detail`), so `/v1` forwards it as the native client
+    # does on a Full model; a null detail stays absent, as the native client
+    # never serializes one. Lite strips it later, in the payload normalizer.
+    test "function_call_output keeps input image detail from Responses SDK tool output" do
+      breakpoint = %{"mode" => "explicit"}
+
+      output = [
+        %{"type" => "input_text", "text" => "synthetic screenshot taken"},
+        %{"type" => "input_image", "detail" => "auto", "image_url" => "https://example.com/synthetic-image.png", "prompt_cache_breakpoint" => breakpoint},
+        %{"type" => "input_image", "detail" => "high", "file_id" => "file-fixture-image"},
+        %{"type" => "input_image", "detail" => "original", "image_url" => "https://example.com/original.png"},
+        %{"type" => "input_image", "detail" => "low", "file_id" => "file-fixture-low"},
+        %{"type" => "input_image", "detail" => nil, "file_id" => "file-fixture-null"}
+      ]
+
       assert {:ok, %{payload: payload}} =
                Responses.coerce(%{
                  "model" => "gpt-fixture-text",
+                 "input" => [%{"type" => "function_call_output", "call_id" => "call_fixture_image_detail", "output" => output}]
+               })
+
+      assert [%{"type" => "function_call_output", "call_id" => "call_fixture_image_detail", "output" => forwarded}] = payload["input"]
+
+      assert forwarded == [
+               %{"type" => "input_text", "text" => "synthetic screenshot taken"},
+               %{"type" => "input_image", "detail" => "auto", "image_url" => "https://example.com/synthetic-image.png", "prompt_cache_breakpoint" => breakpoint},
+               %{"type" => "input_image", "detail" => "high", "file_id" => "file-fixture-image"},
+               %{"type" => "input_image", "detail" => "original", "image_url" => "https://example.com/original.png"},
+               %{"type" => "input_image", "detail" => "low", "file_id" => "file-fixture-low"},
+               %{"type" => "input_image", "file_id" => "file-fixture-null"}
+             ]
+
+      assert {:ok, %{payload: tool_payload}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
                  "input" => [
-                   %{
-                     "type" => "function_call_output",
-                     "call_id" => "call_fixture_image_detail",
-                     "output" => [
-                       %{"type" => "input_text", "text" => "synthetic screenshot taken"},
-                       %{
-                         "type" => "input_image",
-                         "detail" => "auto",
-                         "image_url" => "https://example.com/synthetic-image.png",
-                         "prompt_cache_breakpoint" => %{"mode" => "explicit"}
-                       }
-                     ]
-                   }
+                   %{"role" => "tool", "tool_call_id" => "call_fixture_role_tool", "content" => [%{"type" => "input_image", "detail" => "high", "image_url" => "https://example.com/tool.png"}]}
                  ]
                })
 
-      assert [
-               %{
-                 "type" => "function_call_output",
-                 "call_id" => "call_fixture_image_detail",
-                 "output" => [
-                   %{"type" => "input_text", "text" => "synthetic screenshot taken"},
-                   %{
-                     "type" => "input_image",
-                     "image_url" => "https://example.com/synthetic-image.png",
-                     "prompt_cache_breakpoint" => %{"mode" => "explicit"}
-                   }
-                 ]
-               }
-             ] = payload["input"]
+      assert [%{"type" => "function_call_output", "output" => [%{"type" => "input_image", "detail" => "high", "image_url" => "https://example.com/tool.png"}]}] = tool_payload["input"]
+    end
+
+    test "input_image detail outside the provider enum is refused with its field path" do
+      bogus_image = %{"type" => "input_image", "detail" => "bogus", "file_id" => "file-fixture-bogus"}
+
+      cases = [
+        {[
+           %{"type" => "function_call", "call_id" => "call_bogus", "name" => "view_image", "arguments" => "{}"},
+           %{"type" => "function_call_output", "call_id" => "call_bogus", "output" => [%{"type" => "input_text", "text" => "loaded"}, bogus_image]}
+         ], "input[1].output[1].detail"},
+        {[%{"role" => "tool", "tool_call_id" => "call_bogus", "content" => [bogus_image]}], "input[0].content[0].detail"},
+        {[%{"type" => "custom_tool_call_output", "call_id" => "call_bogus", "output" => [bogus_image]}], "input[0].output[0].detail"},
+        {[%{"role" => "system", "content" => "lifted"}, %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "look"}, bogus_image]}], "input[1].content[1].detail"},
+        {[%{"type" => "function_call_output", "call_id" => "call_bogus", "output" => [%{bogus_image | "detail" => 3}]}], "input[0].output[0].detail"},
+        {[%{"type" => "function_call_output", "call_id" => "call_bogus", "output" => [%{bogus_image | "detail" => "HIGH"}]}], "input[0].output[0].detail"}
+      ]
+
+      for {input, param} <- cases do
+        assert {:error, %{status: 400, code: "invalid_value", param: ^param, message: message}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+
+        assert message == "invalid value for parameter #{param} (invalid_value); supported values: low, high, auto, original"
+      end
     end
 
     # findings#258 row 258-11: the Responses SDK types a tool-output image as

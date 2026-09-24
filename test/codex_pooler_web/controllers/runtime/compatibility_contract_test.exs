@@ -1142,6 +1142,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.accepted_url_schemes == ["https", "data:image"]
       assert fixture.unsupported_url_schemes == ["http", "sediment", "file"]
+
+      # findings#206 row 206-476: /v1 forwards a tool-output image detail on
+      # Full and refuses one outside the provider's enum before dispatch.
+      assert %{method: :post, path: "/v1/responses"} in feature.routes
+      assert feature.contract =~ "forwards input_image.detail from message and tool-output images alike on a Full model"
+      assert feature.contract =~ "400 invalid_value on the provider's field path"
+      assert fixture.v1_image_details == ["low", "high", "auto", "original"]
+      assert fixture.v1_invalid_image_detail.param == "input[2].output[1].detail"
     end
 
     test "documents non-strict function tool schema lowering scope" do

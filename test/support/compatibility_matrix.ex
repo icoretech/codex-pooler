@@ -760,10 +760,10 @@ defmodule CodexPooler.CompatibilityMatrix do
       status: :supported,
       current: :pre_reservation_rejection,
       categories: [:route, :auth, :error, :ownership],
-      routes: [%{method: :post, path: "/backend-api/codex/responses"}],
+      routes: [%{method: :post, path: "/backend-api/codex/responses"}, %{method: :post, path: "/v1/responses"}],
       future_routes: [],
       fixture: :unsupported_input_image_reference,
-      contract: "Responses input_image.file_id references are forwarded unchanged on every serving mode (Lite removes only the detail hint), and one the Pool bridged pins the request to the assignment holding the file like input_file; Codex sediment:// file URIs and unsupported URL schemes such as http:// and file:// used as input_image.image_url values are rejected before reservation or upstream dispatch"
+      contract: "Responses input_image.file_id references are forwarded unchanged on every serving mode (Lite removes only the detail hint), and one the Pool bridged pins the request to the assignment holding the file like input_file; Codex sediment:// file URIs and unsupported URL schemes such as http:// and file:// used as input_image.image_url values are rejected before reservation or upstream dispatch. Public /v1/responses forwards input_image.detail from message and tool-output images alike on a Full model and Lite removes it, as native requests do; a null detail stays absent, and a detail outside low, high, auto and original is refused on every serving mode with 400 invalid_value on the provider's field path (input[i].output[j].detail or input[i].content[j].detail, indexed on the input as the client sent it) before reservation or upstream dispatch"
     },
     %{
       slug: :first_event_stream_retry,
@@ -2793,6 +2793,8 @@ defmodule CodexPooler.CompatibilityMatrix do
     unsupported_input_image_reference: %{
       accepted_url_schemes: ["https", "data:image"],
       unsupported_url_schemes: ["http", "sediment", "file"],
+      v1_image_details: ["low", "high", "auto", "original"],
+      v1_invalid_image_detail: %{status: 400, type: "invalid_request_error", code: "invalid_value", param: "input[2].output[1].detail"},
       json: %{
         "model" => "gpt-fixture-vision",
         "input" => [

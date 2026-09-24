@@ -165,10 +165,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
             do: part
 
       # Lite removes the `detail` compatibility hint, as the released client does
-      # for a Responses Lite model, and `/v1` translates a tool-output image
-      # without it; the file reference itself is never rewritten.
+      # for a Responses Lite model; Full forwards it from a message and from a
+      # tool output alike, which the provider reads there (findings#206 row
+      # 206-476). The file reference itself is never rewritten.
       expected_detail = if mode == "lite", do: nil, else: "high"
-      expected_tool_detail = if path == "/v1/responses", do: nil, else: expected_detail
 
       assert [
                %{"file_id" => ^message_file_id} = message_image,
@@ -176,9 +176,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInputImageFileAffinityTest do
              ] = images
 
       assert message_image["detail"] == expected_detail
-      assert tool_image["detail"] == expected_tool_detail
+      assert tool_image["detail"] == expected_detail
       refute Map.has_key?(message_image, "image_url")
       refute Map.has_key?(tool_image, "image_url")
+    end
+  end
+
+  # The provider validates `detail` on every input image, a tool-output one
+  # included (400 `invalid_value` on `input[2].output[1].detail`, probed
+  # 2026-09-24), so `/v1` refuses a value outside its enum before reservation
+  # or dispatch, with the same code and field path, on either serving mode
+  # (findings#206 row 206-476).
+  for mode <- ["full", "lite"] do
+    @tag serving_mode: mode
+    test "/v1/responses refuses a tool-output input_image detail outside the provider enum on a #{mode} model", %{
+      conn: conn,
+      serving_mode: mode
+    } do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_image_should_not_run"}))
+      setup = gateway_setup(upstream, model_metadata: @vision_metadata)
+      _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [
+            %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic image question"}]},
+            %{"type" => "function_call", "call_id" => "call_image", "name" => "view_image", "arguments" => "{}"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_image",
+              "output" => [%{"type" => "input_text", "text" => "loaded"}, %{"type" => "input_image", "file_id" => "file-image-bogus", "detail" => "bogus"}]
+            }
+          ]
+        })
+
+      assert %{"error" => %{"type" => "invalid_request_error", "code" => "invalid_value", "param" => "input[2].output[1].detail", "message" => message}} = json_response(conn, 400)
+      assert message =~ "low, high, auto, original"
+      refute message =~ "bogus"
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
     end
   end
 

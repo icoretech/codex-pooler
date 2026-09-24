@@ -28,6 +28,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   @call_id_named_item_types ~w(function_call custom_tool_call shell_call shell_call_output)
 
+  # The provider's `input_image.detail` enum, in the order its refusal lists it.
+  @image_details ~w(low high auto original)
+
   @typep audio_normalization_result :: {:ok, map()} | {:error, Error.reason()}
 
   def normalize_input(%{"input" => input} = payload) when is_binary(input) do
@@ -213,6 +216,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   defp normalize_input_items(input) do
+    with :ok <- validate_input_image_details(input) do
+      normalize_valid_input_items(input)
+    end
+  end
+
+  defp normalize_valid_input_items(input) do
     Enum.reduce_while(input, {:ok, []}, fn item, {:ok, acc} ->
       case item |> drop_public_fallback_item_id() |> normalize_input_item() do
         {:ok, items} when is_list(items) -> {:cont, {:ok, Enum.reverse(items) ++ acc}}
@@ -224,6 +233,42 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
       {:ok, input} -> {:ok, Enum.reverse(input)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # The provider validates `detail` on every input image, in a message and in
+  # a tool output alike, and refuses a value outside its enum with 400
+  # `invalid_value` on the field path (findings#206 row 206-476, probed on the
+  # Codex backend and the public API). A Full model receives `detail`, so such
+  # a value is refused here with the same code and path, on the input as the
+  # client sent it, before reservation or dispatch; Lite would strip it, and
+  # the serving mode does not decide whether a request is valid. A null detail
+  # counts as absent.
+  defp validate_input_image_details(input) do
+    input
+    |> Enum.with_index()
+    |> Enum.find_value(:ok, fn {item, index} -> invalid_input_image_detail(item, index) end)
+  end
+
+  defp invalid_input_image_detail(%{"type" => type, "output" => output}, index)
+       when type in ["function_call_output", "custom_tool_call_output"] and is_list(output),
+       do: invalid_image_detail_in(output, "input[#{index}].output")
+
+  defp invalid_input_image_detail(%{"content" => content}, index) when is_list(content),
+    do: invalid_image_detail_in(content, "input[#{index}].content")
+
+  defp invalid_input_image_detail(_item, _index), do: nil
+
+  defp invalid_image_detail_in(parts, path) do
+    parts
+    |> Enum.with_index()
+    |> Enum.find_value(fn
+      {%{"type" => "input_image", "detail" => detail}, part_index} when not is_nil(detail) and detail not in @image_details ->
+        param = "#{path}[#{part_index}].detail"
+        {:error, Error.reason(400, "invalid_value", "invalid value for parameter #{param} (invalid_value); supported values: #{Enum.join(@image_details, ", ")}", param)}
+
+      _part ->
+        nil
+    end)
   end
 
   @spec normalize_audio_input_items([map()]) ::
@@ -595,6 +640,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
        when is_binary(image_url) do
     {:ok,
      %{"type" => "input_image", "image_url" => image_url}
+     |> maybe_put_image_detail(part)
      |> maybe_put_prompt_cache_breakpoint(part)}
   end
 
@@ -602,6 +648,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
        when is_binary(file_id) and file_id != "" do
     {:ok,
      %{"type" => "input_image", "file_id" => file_id}
+     |> maybe_put_image_detail(part)
      |> maybe_put_prompt_cache_breakpoint(part)}
   end
 
@@ -627,6 +674,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
        do: Map.put(acc, "prompt_cache_breakpoint", breakpoint)
 
   defp maybe_put_prompt_cache_breakpoint(acc, _part), do: acc
+
+  # A tool-output image keeps its `detail` as the native client sends it on a
+  # Full model; the Lite payload normalizer removes it later. Only an enum
+  # value reaches here (`validate_input_image_details/1`), and a null detail
+  # stays absent (findings#206 row 206-476).
+  defp maybe_put_image_detail(acc, %{"detail" => detail}) when is_binary(detail),
+    do: Map.put(acc, "detail", detail)
+
+  defp maybe_put_image_detail(acc, _part), do: acc
 
   defp normalize_message_role(%{"type" => "message", "role" => "system"} = item),
     do: Map.put(item, "role", "developer")
