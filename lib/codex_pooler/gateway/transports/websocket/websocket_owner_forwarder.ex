@@ -747,7 +747,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   # `invalid_transition` here, identically for a local and a remote owner,
   # instead of reading `owner_crashed` only when the owner is remote
   # (findings#206 row 206-402).
-  defp owner_admission_answer({:error, reason} = result, control) do
+  defp owner_admission_answer({:error, reason} = result, control) when is_atom(reason) do
     if admission_answer?(reason) do
       result
     else
@@ -758,18 +758,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp owner_admission_answer(result, _control), do: result
 
-  defp admission_answer?(reason) when is_atom(reason),
+  defp admission_answer?(reason),
     do: NativeCompactionAdmission.refusal_reason?(reason) or WebsocketOwnerContract.owner_error?(reason)
-
-  defp admission_answer?(_reason), do: false
 
   defp log_unlisted_admission_refusal(reason, control) do
     require Logger
 
-    reason_code =
-      if is_atom(reason),
-        do: DiagnosticTaxonomy.identifier(Atom.to_string(reason)),
-        else: "non_atom"
+    reason_code = DiagnosticTaxonomy.identifier(Atom.to_string(reason))
 
     Logger.warning(
       "native compaction admission refusal outside vocabulary " <>
