@@ -2205,13 +2205,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "reasoning" => %{"effort" => "high"}
       })
 
+    # Every candidate exhausted with a known reset: the Pooler's own terminal
+    # usage-limit answer, unredacted on `/v1` (findings#206 row 206-508).
     assert %{
              "error" => %{
                "code" => "quota_exhausted",
-               "message" => "upstream request failed",
-               "type" => "server_error"
+               "message" => "upstream quota is exhausted until its reset time",
+               "type" => "usage_limit_reached"
              }
-           } = json_response(response, 503)
+           } = json_response(response, 429)
 
     assert FakeUpstream.count(selected_upstream) == 0
     assert FakeUpstream.count(alternate_upstream) == 0

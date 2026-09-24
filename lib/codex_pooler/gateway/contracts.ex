@@ -46,8 +46,14 @@ defmodule CodexPooler.Gateway.Contracts do
           # Set by construction on every Pooler-authored policy denial
           # (`Denials.policy_error/4`); read only by the `/v1` redaction
           # exemption, never rendered or persisted (findings#221).
-          optional(:pooler_policy) => true
+          optional(:pooler_policy) => true,
+          # Set only by quota routing when every candidate is exhausted with a
+          # known reset (`CandidateEligibility.UsageLimit`); rendered as the
+          # provider's `usage_limit_reached` fields and retry headers, and
+          # exempt from the `/v1` redaction (findings#206 row 206-508).
+          optional(:usage_limit) => usage_limit()
         }
+  @type usage_limit :: %{required(:resets_at) => integer(), required(:resets_in_seconds) => pos_integer()}
   @type body_result :: %{
           required(:status) => pos_integer(),
           optional(:headers) => response_headers(),
@@ -160,6 +166,41 @@ defmodule CodexPooler.Gateway.Contracts do
       %{}
     end
   end
+
+  @usage_limit_error_type "usage_limit_reached"
+  @usage_limit_retry_ceiling_seconds 60
+
+  @doc """
+  The provider's own fields for an exhausted account on a Pool whose every
+  candidate is exhausted with a known reset: `error.type`
+  `usage_limit_reached`, which the released Codex client maps to its terminal
+  `UsageLimitReached` and shows with the reset time, plus `resets_at` (epoch
+  seconds) and `resets_in_seconds` (findings#206 row 206-508). No
+  `plan_type`: a Pool has no single plan, and the client parses the field as
+  its own plan enum.
+  """
+  @spec usage_limit_error_fields(gateway_error() | map()) :: %{optional(String.t()) => String.t() | integer()}
+  def usage_limit_error_fields(%{status: 429, usage_limit: %{resets_at: resets_at, resets_in_seconds: seconds}}),
+    do: %{"type" => @usage_limit_error_type, "resets_at" => resets_at, "resets_in_seconds" => seconds}
+
+  def usage_limit_error_fields(_error), do: %{}
+
+  @doc """
+  The retry advice of the same answer: `Retry-After` in seconds, and
+  `x-should-retry: false` once the wait exceeds a minute, so the OpenAI SDKs
+  (openai-node honours `retry-after` up to 60 s, openai-python up to 120 s)
+  do not resend within seconds a request no shorter wait admits. The same
+  rule as a key policy window (findings#206 row 206-427).
+  """
+  @spec usage_limit_response_headers(gateway_error() | map()) :: response_headers()
+  def usage_limit_response_headers(%{status: 429, usage_limit: %{resets_in_seconds: seconds}})
+      when seconds > @usage_limit_retry_ceiling_seconds,
+      do: [{"retry-after", Integer.to_string(seconds)}, {"x-should-retry", "false"}]
+
+  def usage_limit_response_headers(%{status: 429, usage_limit: %{resets_in_seconds: seconds}}),
+    do: [{"retry-after", Integer.to_string(seconds)}]
+
+  def usage_limit_response_headers(_error), do: []
 
   @spec recovery_contract() :: recovery_contract()
   def recovery_contract do

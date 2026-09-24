@@ -142,6 +142,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @spec redacted_gateway_error?(term()) :: boolean()
   def redacted_gateway_error?(%{public_compaction_error?: true}), do: false
 
+  # An all-exhausted Pool's terminal answer is authored by the Pooler from its
+  # own quota evidence, never relayed: `/v1` renders its code, message, reset
+  # fields and retry headers the way the backend routes do (findings#206 row
+  # 206-508). Keyed on the atom-only `usage_limit` marker quota routing sets.
+  def redacted_gateway_error?(%{usage_limit: %{}}), do: false
+
   def redacted_gateway_error?(%{} = error) do
     not public_recovery_error_token?(field(error, "code")) and
       not pooler_policy_denial?(error) and

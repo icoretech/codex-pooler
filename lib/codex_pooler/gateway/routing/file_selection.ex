@@ -126,8 +126,13 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
     |> RouteFiltering.filter_candidates_with_route_state(route_state, quota_mode: :optional)
   end
 
+  # An all-exhausted Pool's terminal usage limit keeps its reset, so the file
+  # route renders the same fields and retry headers as the turn routes
+  # (findings#206 row 206-508).
   defp route_selection_error(%{status: status, code: code, message: message} = reason, opts) do
-    safe_error(status, code, message, route_error_metadata(reason, opts))
+    status
+    |> safe_error(code, message, route_error_metadata(reason, opts))
+    |> maybe_put_usage_limit(reason)
   end
 
   defp route_selection_error(reason, opts) do
@@ -138,6 +143,9 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
       route_error_metadata(reason, opts)
     )
   end
+
+  defp maybe_put_usage_limit(error, %{usage_limit: %{} = usage_limit}), do: Map.put(error, :usage_limit, usage_limit)
+  defp maybe_put_usage_limit(error, _reason), do: error
 
   defp route_error_metadata(reason, opts) do
     reason

@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
@@ -92,19 +93,35 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
     end
   end
 
-  defp generic_quota_unavailable_error(error_details, exclusions, refresh_attempted?) do
-    {:error,
-     error(
-       503,
-       error_details.code,
-       error_details.message,
-       "model",
-       %{
-         candidate_exclusions: exclusions,
-         quota_refresh_attempted: refresh_attempted?
-       }
-     )}
+  @doc """
+  The quota exclusions of `candidates` under the same classification the
+  filter applies; a candidate that would be kept contributes none.
+  """
+  @spec candidate_exclusions(Model.t(), [CodexPooler.Gateway.Routing.CandidateEligibility.candidate()], RouteState.t()) :: [map()]
+  def candidate_exclusions(%Model{} = model, candidates, %RouteState{} = route_state) when is_list(candidates) do
+    case classify_quota_candidates(model, candidates, route_state) do
+      {:error, exclusions, _refreshable} -> exclusions
+      {:ok, _candidates, _decision} -> []
+    end
   end
+
+  # Every candidate exhausted with a known reset answers the provider's own
+  # terminal `429 usage_limit_reached` with the earliest reset; any unknown
+  # return time keeps the retryable `503` (findings#206 row 206-508).
+  defp generic_quota_unavailable_error(error_details, exclusions, refresh_attempted?) do
+    metadata = %{candidate_exclusions: exclusions, quota_refresh_attempted: refresh_attempted?}
+
+    case usage_limit(error_details.code, exclusions) do
+      {:ok, usage_limit} ->
+        {:error, error(429, error_details.code, error_details.message, "model", Map.put(metadata, :usage_limit, usage_limit))}
+
+      :unknown ->
+        {:error, error(503, error_details.code, error_details.message, "model", metadata)}
+    end
+  end
+
+  defp usage_limit("quota_exhausted", exclusions), do: UsageLimit.earliest_reset(exclusions, DateTime.utc_now())
+  defp usage_limit(_code, _exclusions), do: :unknown
 
   defp hard_pinned_quota_continuity_metadata(
          %FilterInput{request_options: request_options, model: model},

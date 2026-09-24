@@ -37,10 +37,20 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.AccountDenial do
       {kept, exclusions} = Enum.reduce(candidates, {[], []}, &classify_candidate(&1, &2, route_state))
 
       case {Enum.reverse(kept), Enum.reverse(exclusions)} do
-        {[], [_ | _] = exclusions} -> Quota.quota_unavailable_error(input, exclusions, false)
+        {[], [_ | _] = exclusions} -> Quota.quota_unavailable_error(input, quota_dropped_exclusions(input, candidates, route_state) ++ exclusions, false)
         {kept, _exclusions} -> {:ok, kept}
       end
     end
+  end
+
+  # The refusal answers for the whole Pool, so it also names the candidates
+  # quota eligibility already dropped: their resets bound the Pool's earliest
+  # return as much as the denied ones do, for example a sibling exhausted
+  # until a reset earlier than the denied account's (findings#206 row 206-508).
+  defp quota_dropped_exclusions(%FilterInput{candidates: before_quota, model: model}, candidates, route_state) do
+    kept_ids = MapSet.new(candidates, fn {assignment, _identity} -> assignment.id end)
+    dropped = Enum.reject(before_quota, fn {assignment, _identity} -> MapSet.member?(kept_ids, assignment.id) end)
+    Quota.candidate_exclusions(model, dropped, route_state)
   end
 
   defp classify_candidate({assignment, identity} = candidate, {kept, exclusions}, %RouteState{} = route_state) do

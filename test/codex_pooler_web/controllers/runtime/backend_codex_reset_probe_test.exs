@@ -224,9 +224,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
 
       assert_failure_accounting!(fixture, response_status, error_code)
       assert_probe_outcome!(fixture, expected_phase)
-      assert_no_replacement_probe!(conn, fixture, label)
+      assert_no_replacement_probe!(conn, fixture, label, replacement_status(expected_phase))
     end
   end
+
+  # A reblocked identity is exhausted with the reset the provider gave, so the
+  # replacement meets the terminal usage-limit answer; a consumed pending
+  # probe has no known return time and keeps the retryable 503 (findings#206
+  # row 206-508).
+  defp replacement_status("reblocked"), do: 429
+  defp replacement_status(_phase), do: 503
 
   test "HTTP reset probe connection close retains the one-shot claim", %{conn: conn} do
     fixture = reset_probe_fixture(FakeUpstream.close_before_headers())
@@ -247,7 +254,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert response.status == 502
     assert_failure_accounting!(fixture, 502, "upstream_network_error")
     assert_probe_outcome!(fixture, "consumed_pending_probe")
-    assert_no_replacement_probe!(conn, fixture, "connection close")
+    assert_no_replacement_probe!(conn, fixture, "connection close", 503)
   end
 
   test "HTTP reset probe receive timeout retains the one-shot claim", %{conn: conn} do
@@ -290,7 +297,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert response.status == 502
     assert_failure_accounting!(fixture, 502, "upstream_network_error")
     assert_probe_outcome!(fixture, "consumed_pending_probe")
-    assert_no_replacement_probe!(conn, fixture, "receive timeout")
+    assert_no_replacement_probe!(conn, fixture, "receive timeout", 503)
   end
 
   test "HTTP reset probe success released after its persisted deadline stays unconfirmed", %{
@@ -357,7 +364,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert persisted_redemption["probe"] == claimed_probe
     assert_private_probe_metadata!(request, attempt, claimed_probe)
     assert_probe_outcome!(fixture, "consumed_pending_probe")
-    assert_no_replacement_probe!(conn, fixture, "late success")
+    assert_no_replacement_probe!(conn, fixture, "late success", 503)
   end
 
   defp reset_probe_fixture(response_mode) do
@@ -485,7 +492,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert FakeUpstream.count(fixture.sibling_upstream) == 0
   end
 
-  defp assert_no_replacement_probe!(conn, fixture, label) do
+  defp assert_no_replacement_probe!(conn, fixture, label, expected_status) do
     claimed_probe = redemption(fixture.identity)["probe"]
     initial_probe_paths = Enum.map(FakeUpstream.requests(fixture.probe_upstream), & &1.path)
     assert [original_request] = requests_for(fixture)
@@ -515,7 +522,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert Enum.map(FakeUpstream.requests(fixture.probe_upstream), & &1.path) ==
              initial_probe_paths
 
-    assert response.status == 503, label
+    assert response.status == expected_status, label
 
     assert [replacement_request] =
              fixture
@@ -524,7 +531,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
 
     assert original_request.status in ["failed", "succeeded"]
     assert replacement_request.status == "rejected"
-    assert replacement_request.response_status_code == 503
+    assert replacement_request.response_status_code == expected_status
 
     assert replacement_request.last_error_code in [
              "quota_evidence_unavailable",

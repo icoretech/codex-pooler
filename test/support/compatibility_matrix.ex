@@ -587,6 +587,21 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "an API key policy denial that no resend of the same request can pass answers 400 invalid_request_error on every route and transport, because the released Codex client ends the turn on a 400 while it resends a 403 five times and then falls back from websocket to HTTPS for the session: model_not_allowed (the key's allowed or enforced model excludes the requested one, as the Codex backend answers 400 for a model the account cannot serve) with param model and the Pooler's own message, and the per-request estimate caps and token windows below the request's own estimate of feature api_key_reservation_policy_refusals; the refused request row records 400; image_generation_disabled stays 403 because it is answered only on the HTTP image routes, which the released client's HTTP layer and image tool never resend on a 4xx; api_key_policy_malformed stays 403 because the request is not at fault; OpenAI SDKs retry neither 400 nor 403"
     },
     %{
+      slug: :exhausted_pool_usage_limit,
+      status: :supported,
+      current: :terminal_429_usage_limit_reached,
+      categories: [:route, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :post, path: "/v1/responses"},
+        %{method: :post, path: "/v1/chat/completions"}
+      ],
+      future_routes: [],
+      fixture: :exhausted_pool_usage_limit,
+      contract: "when routing excludes every candidate of a Pool because its quota is exhausted and every exhausted window carries a reset still ahead, the refusal is the provider's own terminal answer for an exhausted account: 429 with error.type usage_limit_reached, the Pooler's code quota_exhausted and message, resets_at (epoch seconds) and resets_in_seconds for the earliest candidate reset (a candidate returns when the last of its exhausted windows resets), the HTTP Retry-After header and the websocket error event's headers retry-after in seconds, plus HTTP x-should-retry false when the wait exceeds 60 s; the released Codex client ends the turn on it and names the reset, the OpenAI SDKs stop; public /v1 renders it unredacted; with owner forwarding on or off the same request gets the same answer, in Full and Lite; the refused request row records 429; the answer stays the retryable 503 (quota_exhausted or quota_evidence_unavailable) when any candidate's return time is unknown (stale, resetless or missing evidence, a pending saved-reset probe, provider availability blocked without a window) or when an open circuit removed a candidate before quota classification; the reset is advice, because an auto-redeemed saved reset can bring an account back sooner"
+    },
+    %{
       slug: :reasoning_context,
       status: :supported,
       current: :openai_sdk_literal_normalization,
@@ -2467,6 +2482,12 @@ defmodule CodexPooler.CompatibilityMatrix do
       model_not_allowed: %{status: 400, type: "invalid_request_error", param: "model"},
       request_cap: %{status: 400, type: "invalid_request_error", code: "api_key_policy_limit_exceeded"},
       image_generation_disabled: %{status: 403, type: "invalid_request_error", routes: :http_image_routes_only},
+      recorded_status: :answered_status
+    },
+    exhausted_pool_usage_limit: %{
+      terminal: %{status: 429, type: "usage_limit_reached", code: "quota_exhausted", fields: ["resets_at", "resets_in_seconds"], retry_after: :earliest_reset_seconds, x_should_retry_false_above_seconds: 60},
+      retryable: %{status: 503, codes: ["quota_evidence_unavailable", "quota_exhausted"], when: [:reset_unknown, :circuit_excluded_candidate]},
+      v1_message: "upstream quota is exhausted until its reset time",
       recorded_status: :answered_status
     },
     api_key_reasoning_availability: %{

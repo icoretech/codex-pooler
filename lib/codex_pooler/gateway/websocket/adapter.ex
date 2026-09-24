@@ -441,6 +441,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
        when is_integer(seconds) and seconds > 0,
        do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)})
 
+  # An all-exhausted Pool's retry hint rides the same field (findings#206 row
+  # 206-508); the released client reads it with the wrapped error's body.
+  defp put_policy_retry_headers(event, %{status: 429, usage_limit: %{resets_in_seconds: seconds}}),
+    do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(seconds)})
+
   defp put_policy_retry_headers(event, _reason), do: event
 
   @spec request_id(term()) :: String.t() | nil
@@ -492,7 +497,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
         "code" => to_string(code),
         "param" => Map.get(reason, :param)
       },
-      Contracts.recovery_error_fields(reason)
+      reason |> Contracts.recovery_error_fields() |> Map.merge(Contracts.usage_limit_error_fields(reason))
     )
   end
 

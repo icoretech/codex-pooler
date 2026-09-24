@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageLimit
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -39,18 +40,22 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
 
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),
+         circuit_excluded? = length(candidates) < length(filter_input.candidates),
          route_state = RouteState.put_candidates(route_state, candidates),
          filter_input = CandidateEligibility.FilterInput.put_candidates(filter_input, candidates),
          {:ok, candidates, quota_decision, route_state} <-
-           filter_quota_eligible_candidates(
-             filter_input,
+           filter_input
+           |> filter_quota_eligible_candidates(
              route_state,
              quota_mode,
              saved_reset_scan_at,
              saved_reset_opts
-           ),
+           )
+           |> retryable_when_circuit_excluded(circuit_excluded?),
          {:ok, candidates} <-
-           filter_account_denied_candidates(filter_input, candidates, quota_decision, route_state, quota_mode),
+           filter_input
+           |> filter_account_denied_candidates(candidates, quota_decision, route_state, quota_mode)
+           |> retryable_when_circuit_excluded(circuit_excluded?),
          request_options =
            request_options
            |> put_reset_probe(route_state.reset_probe)
@@ -119,6 +124,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
 
   defp filter_account_denied_candidates(_filter_input, candidates, _quota_decision, _route_state, _quota_mode),
     do: {:ok, candidates}
+
+  # The terminal quota answer speaks for the whole Pool. A candidate the
+  # circuit filter took out first is not quota-exhausted as far as routing
+  # knows, and its circuit probes again after `circuit_open_seconds`, so the
+  # refusal stays the retryable `503` (findings#206 row 206-508), for example
+  # when one account's circuit opened after its quota `429`s while its
+  # sibling was exhausted.
+  defp retryable_when_circuit_excluded({:error, %{} = error}, true), do: {:error, UsageLimit.retryable(error)}
+  defp retryable_when_circuit_excluded(result, _circuit_excluded?), do: result
 
   defp maybe_allow_missing_quota(
          {:error, %{code: code}},

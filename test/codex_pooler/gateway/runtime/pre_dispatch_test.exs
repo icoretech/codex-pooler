@@ -1925,7 +1925,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       "input" => native_text_input("fully exhausted split pool")
     }
 
-    assert {:error, %{status: 503, code: "quota_exhausted"}} =
+    # Every seat of every partition is exhausted with a known reset, so the
+    # denial is the terminal usage limit (findings#206 row 206-508).
+    assert {:error, %{status: 429, code: "quota_exhausted", usage_limit: %{resets_in_seconds: _seconds}}} =
              Gateway.execute(
                auth,
                @endpoint_path,

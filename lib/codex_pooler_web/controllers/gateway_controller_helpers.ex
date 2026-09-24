@@ -316,13 +316,14 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
             "code" => to_string(code),
             "param" => Map.get(error, :param)
           },
-          Contracts.recovery_error_fields(error)
+          error |> Contracts.recovery_error_fields() |> Map.merge(Contracts.usage_limit_error_fields(error))
         )
     }
 
     conn
     |> put_policy_retry_header(error)
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
+    |> put_gateway_headers(Contracts.usage_limit_response_headers(error))
     |> put_status(status)
     |> json(body)
   end

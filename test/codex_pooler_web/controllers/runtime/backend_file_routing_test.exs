@@ -663,7 +663,12 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
       |> put_req_header("content-type", "application/json")
       |> post(~p"/backend-api/files", %{"file_name" => "quota.txt", "file_size" => 12})
 
-    assert %{"error" => %{"code" => "quota_exhausted"}} = json_response(conn, 503)
+    # Every assignment exhausted with a known reset: the provider's terminal
+    # usage-limit answer with the earliest reset (findings#206 row 206-508).
+    assert %{"error" => %{"code" => "quota_exhausted", "type" => "usage_limit_reached", "resets_in_seconds" => seconds}} =
+             json_response(conn, 429)
+
+    assert get_resp_header(conn, "retry-after") == [Integer.to_string(seconds)]
     assert FakeUpstream.requests(first_upstream) == []
     assert FakeUpstream.requests(second_upstream) == []
 

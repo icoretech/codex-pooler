@@ -471,6 +471,9 @@ has one type on every surface.
   succeed on a retry.
 - `rate_limit_error`: the request was throttled with HTTP `429`. Retry after
   backing off.
+- `usage_limit_reached`: HTTP `429` when every upstream account is exhausted
+  until a known reset (see below). Retry after the reset it names. The same
+  `quota_exhausted` code on a retryable `503` keeps `server_error`.
 - `invalid_request_error`: the client must change the request before retrying,
   or the connection was superseded by its own newer replacement.
 
@@ -499,6 +502,32 @@ Policy denials that Codex Pooler authors (`api_key_missing`,
 own code and message on `/v1/*`, exactly as on `/backend-api/codex/*`; they are
 never rewritten to `server_error` or `upstream request failed`, because no
 upstream was involved.
+
+### When every upstream account is exhausted
+
+When every account that can serve the requested model is excluded because its
+quota is exhausted, and Codex Pooler knows when each of them resets, the
+request is answered before any upstream work with the same terminal shape the
+Codex backend uses for an exhausted account, on every route and transport:
+
+- HTTP status `429` (and `"status": 429` on a websocket error frame);
+- `error.type` `usage_limit_reached`, `error.code` `quota_exhausted` and Codex
+  Pooler's own message, also on `/v1/*`;
+- `resets_at` (Unix seconds) and `resets_in_seconds` for the earliest reset
+  among those accounts;
+- a `Retry-After` header with the same number of seconds (in the websocket
+  error frame's `headers`), plus `x-should-retry: false` on HTTP when the wait
+  is longer than 60 seconds.
+
+The Codex client ends the turn and names the reset time; the OpenAI SDKs do not
+retry it. The time is advice rather than a promise: an automatically redeemed
+saved reset can bring an account back sooner. When the reset of any of those
+accounts is unknown (missing or stale quota evidence), or an account was taken
+out by an open circuit rather than by quota, the answer stays a retryable `503`
+(`quota_evidence_unavailable` or `quota_exhausted`) with no reset fields. When
+at least one account is still eligible, the request is routed to it as usual,
+and a provider usage-limit refusal that arrives before any output moves the
+same request to another eligible account.
 
 ### Relayed terminal errors
 

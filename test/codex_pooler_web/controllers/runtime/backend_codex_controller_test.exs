@@ -13402,8 +13402,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "POST /backend-api/codex/responses scopes exhausted model aliases before dispatch",
        %{conn: conn} do
     cases = [
-      {:model, "gpt-test-model", "provider-gpt-test-model", 503, 0},
-      {:upstream_model, nil, "provider-gpt-test-model", 503, 0},
+      {:model, "gpt-test-model", "provider-gpt-test-model", 429, 0},
+      {:upstream_model, nil, "provider-gpt-test-model", 429, 0},
       {:model, "unrelated-model", "unrelated-upstream", 200, 1}
     ]
 
@@ -13443,7 +13443,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       if status == 200 do
         assert %{"id" => "resp_model_scope_windowless"} = json_response(conn, 200)
       else
-        assert %{"error" => %{"code" => "quota_exhausted"}} = json_response(conn, 503)
+        # The model-scoped window is exhausted with a known reset, so the
+        # sole candidate answers the terminal usage limit (findings#206 row
+        # 206-508).
+        assert %{"error" => %{"code" => "quota_exhausted", "type" => "usage_limit_reached"}} = json_response(conn, status)
       end
 
       assert model_dispatch_count(upstream) == dispatch_count
@@ -14901,9 +14904,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => native_text_input("all exhausted quota rejection")
       })
 
-    response = json_response(conn, 503)
+    # Both candidates are exhausted with a known reset: the provider's terminal
+    # usage-limit answer (findings#206 row 206-508).
+    response = json_response(conn, 429)
 
-    assert %{"error" => %{"code" => "quota_exhausted", "message" => message}} = response
+    assert %{"error" => %{"code" => "quota_exhausted", "message" => message, "type" => "usage_limit_reached"}} = response
     assert message == "upstream quota is exhausted until its reset time"
     assert FakeUpstream.count(first_upstream) == 0
     assert FakeUpstream.count(second_upstream) == 0
