@@ -56,11 +56,12 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   @inference_call_id_pattern ~r/\A[A-Za-z0-9_.:-]+\z/
   @turn_metadata_header_name "x-codex-turn-metadata"
 
-  # Fixed namespace for the `session-id` the Pooler synthesizes on public
-  # `/v1` routes from the client's `prompt_cache_key`. OpenAI-compatible
-  # clients never send the provider's session headers, so the derived id is
-  # what keeps consecutive HTTP turns of one conversation on the replica that
-  # holds the warm prompt cache. It is UUID v5 of the RFC 4122 URL namespace
+  # Fixed namespace for the `session-id` the Pooler synthesizes from the
+  # client's `prompt_cache_key` on public `/v1` routes, and on native
+  # Codex-backend HTTP routes when the client sent no usable `session-id`.
+  # OpenAI-compatible clients never send the provider's session headers, so
+  # the derived id is what keeps consecutive HTTP turns of one conversation on
+  # the replica that holds the warm prompt cache. It is UUID v5 of the RFC 4122 URL namespace
   # (`6ba7b811-9dad-11d1-80b4-00c04fd430c8`) over
   # `https://github.com/icoretech/codex-pooler/v1/session-id`. Never change
   # it: every derived id would change and every warm cache would be lost.
@@ -237,8 +238,10 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   def prompt_cache_session_namespace, do: @prompt_cache_session_namespace
 
   @doc """
-  The provider `session-id` synthesized for a public `/v1` request from its
-  raw `prompt_cache_key`, scoped to the authenticated tenant: RFC 4122 UUID v5
+  The provider `session-id` synthesized from a request's raw
+  `prompt_cache_key` (every public `/v1` request, and a native Codex-backend
+  HTTP or compact request that carries no usable client `session-id`), scoped
+  to the authenticated tenant: RFC 4122 UUID v5
   over the fixed Pooler namespace and the name
 
       <pool id byte length>:<pool id>,<api key id byte length>:<api key id>,<raw key>

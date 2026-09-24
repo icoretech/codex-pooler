@@ -275,6 +275,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   def regular_runtime_forwarded_metadata_headers(%RequestOptions{} = request_options),
     do: regular_runtime_forwarded_metadata_headers(request_options, nil)
 
+  # Native Codex-backend origin: the client's own bounded metadata headers go
+  # upstream as they are, and a usable client `session-id` is never replaced.
+  # When none survives the bounds (a client that names its conversation only
+  # through a Pooler-local alias such as `session_id` or `x-session-id`, or not
+  # at all), the provider gets the same Pool- and key-scoped `session-id` the
+  # `/v1` clause below derives from the request's `prompt_cache_key`, so a
+  # full-history HTTP turn still reaches the replica holding the warm prefix.
+  # The alias itself stays local: it keys the CodexSession but carries no
+  # tenant scope, so forwarding it raw would let two keys that send the same
+  # alias share one provider session. The released Codex client always sends
+  # `session-id` (equal to its `prompt_cache_key` for a root agent), so it
+  # never reaches the derivation (findings#206 row 206-557).
   @doc false
   @spec regular_runtime_forwarded_metadata_headers(RequestOptions.t(), map() | nil) ::
           [header()]
@@ -285,11 +297,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             forwarded_metadata_headers: forwarded_headers
           },
           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-        },
-        _payload
+        } = request_options,
+        payload
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_list(forwarded_headers) do
-    TransportEnvelope.bounded_forwarded_metadata_headers(forwarded_headers)
+    forwarded = TransportEnvelope.bounded_forwarded_metadata_headers(forwarded_headers)
+
+    if List.keymember?(forwarded, "session-id", 0),
+      do: forwarded,
+      else: forwarded ++ prompt_cache_session_header(request_options, payload)
   end
 
   # Public `/v1` origin: the client's continuity headers stay local, and the
@@ -306,9 +322,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           transport: %{upstream_endpoint: endpoint},
           openai_compatibility: %{source_endpoint: source_endpoint}
         } = request_options,
-        %{"prompt_cache_key" => prompt_cache_key}
+        payload
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
+    prompt_cache_session_header(request_options, payload)
+  end
+
+  def regular_runtime_forwarded_metadata_headers(%RequestOptions{}, _payload), do: []
+
+  defp prompt_cache_session_header(%RequestOptions{} = request_options, %{"prompt_cache_key" => prompt_cache_key}) do
     case TransportEnvelope.prompt_cache_session_id(
            prompt_cache_tenant_scope(request_options),
            prompt_cache_key
@@ -318,7 +340,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  def regular_runtime_forwarded_metadata_headers(%RequestOptions{}, _payload), do: []
+  defp prompt_cache_session_header(%RequestOptions{}, _payload), do: []
 
   defp prompt_cache_tenant_scope(%RequestOptions{runtime: %{tenant_scope: scope}}), do: scope
   defp prompt_cache_tenant_scope(%RequestOptions{}), do: nil

@@ -2043,6 +2043,21 @@ defmodule CodexPooler.CompatibilityMatrix do
             owner_forwarded_turns: "carried_in_owner_request_headers_built_on_the_proxy_node",
             public_v1_origins: "caller_values_never_forwarded_derived_session_id_only"
           },
+          native_http_derived_session_id: %{
+            routes: [
+              "/backend-api/codex/responses",
+              "/backend-api/codex/v1/responses",
+              "/backend-api/codex/responses/compact",
+              "/backend-api/codex/v1/responses/compact"
+            ],
+            transports: ["http_json", "http_sse"],
+            applies_when: "no_client_session_id_within_the_provider_bound",
+            client_session_id: "forwarded_unchanged_never_replaced",
+            derivation: "same_as_public_v1_same_pool_api_key_and_prompt_cache_key_yield_the_same_value",
+            local_session: "keyed_by_the_client_continuity_header_unchanged",
+            native_websocket_handshake: "unchanged_only_the_upgrade_session_headers",
+            privacy: "derived_value_not_persisted_or_logged"
+          },
           public_v1: %{
             client_headers: "local_only_never_forwarded",
             synthesized_header: "session-id",
