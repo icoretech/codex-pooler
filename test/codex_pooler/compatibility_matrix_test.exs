@@ -613,6 +613,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                format: "weak_cp_models_v1",
                aliases_share_exact_body_and_token: true,
                cache_coherence: "eventual_after_successful_responses_token",
+               context_window_policy: %{
+                 default: "selected_upstream_default",
+                 maximum: "selected_upstream_maximum",
+                 compaction: "preserved_including_absent_or_null",
+                 pricing: "does_not_change_context_or_etag",
+                 explicit_operator_override: "retained"
+               },
                instructions_representation: %{
                  selector: "codex_build_user_agent",
                  template_only_since: "0.148.0",

@@ -46,7 +46,6 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
 
   @shell_command_types ~w(default local shell_command unified_exec)
 
-  @type pricing_buckets :: ModelMetadata.pricing_buckets()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
   @type effective_model_serving_mode :: ModelMetadata.effective_model_serving_mode()
   @type result :: {:ok, map()} | {:error, :invalid_model_metadata}
@@ -87,24 +86,21 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
   @spec project(
           map(),
           Model.t(),
-          pricing_buckets(),
           context_window_overrides(),
           effective_model_serving_mode()
         ) :: result()
   def project(
         source,
         %Model{} = model,
-        pricing_buckets,
         context_window_overrides,
         effective_model_serving_mode
       )
-      when is_map(source) and is_map(pricing_buckets) and is_map(context_window_overrides) do
+      when is_map(source) and is_map(context_window_overrides) do
     with {:ok, %{source: source}} <- canonical_source(source) do
       payload =
         source
         |> ModelMetadata.apply_context_window_policy(
           model,
-          pricing_buckets,
           context_window_overrides
         )
         |> Map.put("use_responses_lite", effective_model_serving_mode == "lite")
@@ -113,7 +109,7 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
     end
   end
 
-  def project(_source, %Model{}, _pricing_buckets, _context_window_overrides, _mode),
+  def project(_source, %Model{}, _context_window_overrides, _mode),
     do: {:error, :invalid_model_metadata}
 
   defp canonical_json_map(source) do

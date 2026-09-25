@@ -4,29 +4,27 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Routing.ModelMetadata
 
-  test "pricing context buckets cap and promote only applicable advertised windows" do
+  test "preserves upstream context defaults, maxima and compaction thresholds" do
     model = %Model{exposed_model_id: "sample-model", upstream_model_id: "sample-model"}
 
-    for {buckets, metadata, expected} <- [
-          {["short_context"], %{"context_window" => 200_000}, 128_000},
-          {["short_context"], %{"context_window" => 50_000}, 50_000},
-          {["long_context"], %{"context_window" => 200_000, "max_context_window" => 300_000}, 300_000},
-          {["long_context"], %{"context_window" => 200_000}, 200_000},
-          {["standard"], %{"context_window" => 200_000}, 200_000}
+    for metadata <- [
+          %{"context_window" => 200_000, "max_context_window" => 300_000, "auto_compact_token_limit" => nil},
+          %{"context_window" => 300_000, "max_context_window" => 300_000, "auto_compact_token_limit" => 120_000},
+          %{"context_window" => 50_000},
+          %{"max_context_window" => 300_000}
         ] do
       result =
         ModelMetadata.apply_context_window_policy(
           metadata,
           model,
-          %{"sample-model" => buckets},
           %{}
         )
 
-      assert result["context_window"] == expected
+      assert Map.take(result, Map.keys(metadata)) == metadata
     end
 
     metadata = %{"context_window" => 200_000, "effective_context_window_percent" => 80}
-    assert ModelMetadata.apply_context_window_policy(metadata, model, %{}) == metadata
+    assert ModelMetadata.apply_context_window_policy(metadata, model) == metadata
   end
 
   test "capability flags recognize explicit support and explicit streaming denial" do
@@ -73,7 +71,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
       metadata = %{"context_window" => 1_000, "auto_compact_token_limit" => limit}
 
       result =
-        ModelMetadata.apply_context_window_policy(metadata, model, %{}, %{"sample-model" => 100})
+        ModelMetadata.apply_context_window_policy(metadata, model, %{"sample-model" => 100})
 
       assert result["context_window"] == 100
       assert result["max_context_window"] == 100

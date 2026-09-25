@@ -552,7 +552,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
       visible_models = policy_visible_models(route_state.visible_models, policy)
 
-      pricing_buckets = CodexPooler.Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
       candidates_by_model_id =
@@ -563,7 +562,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_models,
           candidates_by_model_id,
           policy,
-          pricing_buckets,
           context_window_overrides,
           route_state.effective_model_serving_modes,
           routable_assignment_ids_by_model_id: fn ->

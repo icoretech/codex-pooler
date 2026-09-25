@@ -1,7 +1,6 @@
 defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   @moduledoc false
 
-  alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
   alias CodexPooler.Gateway.Metadata.CatalogRepresentation
@@ -23,7 +22,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           required(:etag) => String.t(),
           required(:undecodable_models) => [undecodable_model()]
         }
-  @type pricing_buckets :: Catalog.pricing_bucket_map()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
   @type effective_model_serving_modes :: %{
           optional(String.t()) => ModelMetadata.effective_model_serving_mode()
@@ -51,7 +49,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   @spec build_selected_sources(
           [selected_source()],
           normalized_policy(),
-          pricing_buckets(),
           context_window_overrides(),
           effective_model_serving_modes(),
           CatalogRepresentation.t()
@@ -59,12 +56,11 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   def build_selected_sources(
         selected_sources,
         normalized_policy,
-        pricing_buckets,
         context_window_overrides,
         effective_model_serving_modes,
         representation \\ :verbatim
       )
-      when is_list(selected_sources) and is_map(normalized_policy) and is_map(pricing_buckets) and
+      when is_list(selected_sources) and is_map(normalized_policy) and
              is_map(context_window_overrides) and is_map(effective_model_serving_modes) do
     selected_sources
     |> Enum.filter(fn {%Model{} = model, _source} ->
@@ -76,7 +72,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       case CanonicalModelSource.project(
              source,
              model,
-             pricing_buckets,
              context_window_overrides,
              mode
            ) do
@@ -129,7 +124,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   @spec build_selected_partitions(
           [selected_partition()],
           normalized_policy(),
-          pricing_buckets(),
           context_window_overrides(),
           effective_model_serving_modes(),
           CatalogRepresentation.t()
@@ -137,7 +131,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   def build_selected_partitions(
         partitions,
         normalized_policy,
-        pricing_buckets,
         context_window_overrides,
         effective_model_serving_modes,
         representation \\ :verbatim
@@ -152,7 +145,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     build_selected_sources(
       selected_sources,
       normalized_policy,
-      pricing_buckets,
       context_window_overrides,
       effective_model_serving_modes,
       representation
@@ -163,7 +155,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           [Model.t()],
           candidates_by_model_id(),
           normalized_policy(),
-          pricing_buckets(),
           context_window_overrides(),
           effective_model_serving_modes(),
           selection_opts()
@@ -172,7 +163,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
         models,
         candidates_by_model_id,
         normalized_policy,
-        pricing_buckets,
         context_window_overrides,
         effective_model_serving_modes,
         opts \\ []
@@ -183,7 +173,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     |> select_canonical_sources(candidates_by_model_id, opts)
     |> build_selected_partitions(
       normalized_policy,
-      pricing_buckets,
       context_window_overrides,
       effective_model_serving_modes,
       representation

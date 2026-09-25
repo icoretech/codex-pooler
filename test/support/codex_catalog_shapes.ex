@@ -155,21 +155,19 @@ defmodule CodexPooler.CodexCatalogShapes do
     slugs = Enum.map(sources, fn {model, _source} -> model.exposed_model_id end)
 
     variants = [
-      {"synced", unrestricted_policy(), %{}, %{}, %{}},
-      {"full", unrestricted_policy(), %{}, %{}, Map.new(slugs, &{&1, "full"})},
-      {"lite", unrestricted_policy(), %{}, %{}, Map.new(slugs, &{&1, "lite"})},
-      {"context-override", unrestricted_policy(), %{}, Map.new(slugs, &{&1, 400_000}), %{}},
-      {"long-context-pricing", unrestricted_policy(), Map.new(slugs, &{&1, ["long_context"]}), %{}, %{}},
-      {"short-context-pricing", unrestricted_policy(), Map.new(slugs, &{&1, ["short_context"]}), %{}, %{}},
-      {"reasoning-policy", policy(maximum_reasoning_effort: "low", enforced_service_tier: "default"), %{}, %{}, %{}},
-      {"enforced-reasoning-policy", policy(enforced_reasoning_effort: "high", enforced_service_tier: "priority"), %{}, %{}, %{}},
-      {"model-policy", policy(allowed_model_identifiers: ["gpt-shape-synced", "gpt-shape-legacy"]), %{}, %{}, %{}}
+      {"synced", unrestricted_policy(), %{}, %{}},
+      {"full", unrestricted_policy(), %{}, Map.new(slugs, &{&1, "full"})},
+      {"lite", unrestricted_policy(), %{}, Map.new(slugs, &{&1, "lite"})},
+      {"context-override", unrestricted_policy(), Map.new(slugs, &{&1, 400_000}), %{}},
+      {"reasoning-policy", policy(maximum_reasoning_effort: "low", enforced_service_tier: "default"), %{}, %{}},
+      {"enforced-reasoning-policy", policy(enforced_reasoning_effort: "high", enforced_service_tier: "priority"), %{}, %{}},
+      {"model-policy", policy(allowed_model_identifiers: ["gpt-shape-synced", "gpt-shape-legacy"]), %{}, %{}}
     ]
 
     selected =
-      for {label, policy, pricing, overrides, modes} <- variants,
+      for {label, policy, overrides, modes} <- variants,
           representation <- @representations do
-        {:ok, result} = CodexCatalog.build_selected_sources(sources, policy, pricing, overrides, modes, representation)
+        {:ok, result} = CodexCatalog.build_selected_sources(sources, policy, overrides, modes, representation)
         {"#{label}/#{representation}", representation, result.body}
       end
 
@@ -203,7 +201,7 @@ defmodule CodexPooler.CodexCatalogShapes do
 
     for representation <- @representations do
       result =
-        CodexCatalog.build_canonical([model], %{model.id => candidates}, unrestricted_policy(), %{}, %{}, %{},
+        CodexCatalog.build_canonical([model], %{model.id => candidates}, unrestricted_policy(), %{}, %{},
           routable_assignment_ids_by_model_id: fn -> %{model.id => MapSet.new(ids)} end,
           representation: representation
         )

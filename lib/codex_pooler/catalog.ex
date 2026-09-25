@@ -9,7 +9,6 @@ defmodule CodexPooler.Catalog do
     AssignmentModelSummaries,
     Model,
     ModelSelectorState,
-    PricingSnapshot,
     Sync,
     SyncRun
   }
@@ -44,7 +43,6 @@ defmodule CodexPooler.Catalog do
           | {:error, catalog_error() | Ecto.Changeset.t() | term()}
           | {:error, term(), catalog_error() | Ecto.Changeset.t() | term()}
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
-  @type pricing_bucket_map :: %{optional(String.t()) => [String.t()]}
   @type visible_models_by_pool_id :: %{optional(Ecto.UUID.t()) => [Model.t()]}
 
   @spec list_assignment_model_summaries(term()) :: [AssignmentModelSummaries.summary()]
@@ -160,37 +158,6 @@ defmodule CodexPooler.Catalog do
       "upstream_account_plan_label" => identity.plan_label
     }
   end
-
-  @spec pricing_buckets_by_identifier([Model.t()]) :: pricing_bucket_map()
-  def pricing_buckets_by_identifier(models) when is_list(models) do
-    identifiers = models |> Enum.flat_map(&pricing_identifiers/1) |> Enum.uniq()
-
-    if identifiers == [] do
-      %{}
-    else
-      PricingSnapshot
-      |> where([snapshot], snapshot.model_identifier in ^identifiers)
-      |> where([snapshot], fragment("?->>'pricing_type'", snapshot.config) == "per_1m_tokens")
-      |> select([snapshot], {
-        snapshot.model_identifier,
-        snapshot.effective_at,
-        fragment("?->>'price_bucket'", snapshot.config)
-      })
-      |> Repo.all()
-      |> latest_pricing_buckets()
-    end
-  end
-
-  def pricing_buckets_by_identifier(_models), do: %{}
-
-  @spec pricing_buckets_for_model(Model.t(), pricing_bucket_map()) :: [String.t()]
-  def pricing_buckets_for_model(%Model{} = model, pricing_buckets) when is_map(pricing_buckets) do
-    model
-    |> pricing_identifiers()
-    |> Enum.find_value([], &Map.get(pricing_buckets, &1))
-  end
-
-  def pricing_buckets_for_model(_model, _pricing_buckets), do: []
 
   @spec api_key_model_selector_state(pool_ref(), map(), keyword()) :: map()
   def api_key_model_selector_state(pool_or_id, attrs \\ %{}, opts \\ []) do
@@ -459,36 +426,6 @@ defmodule CodexPooler.Catalog do
   defp maybe_where_status(query, nil), do: query
   defp maybe_where_status(query, status), do: from(model in query, where: model.status == ^status)
 
-  defp latest_pricing_buckets(rows) do
-    rows
-    |> Enum.group_by(fn {identifier, _effective_at, _bucket} -> identifier end)
-    |> Map.new(fn {identifier, rows} ->
-      {_identifier, latest_effective_at, _bucket} =
-        Enum.max_by(rows, fn {_identifier, effective_at, _bucket} ->
-          DateTime.to_unix(effective_at, :microsecond)
-        end)
-
-      buckets =
-        rows
-        |> Enum.filter(fn {_identifier, effective_at, _bucket} ->
-          DateTime.compare(effective_at, latest_effective_at) == :eq
-        end)
-        |> Enum.map(fn {_identifier, _effective_at, bucket} -> bucket end)
-        |> Enum.reject(&blank?/1)
-        |> Enum.uniq()
-
-      {identifier, buckets}
-    end)
-  end
-
-  defp pricing_identifiers(%Model{} = model) do
-    [model.pricing_ref, model.upstream_model_id, model.exposed_model_id]
-    |> Enum.reject(&blank?/1)
-    |> Enum.uniq()
-  end
-
-  defp pricing_identifiers(_model), do: []
-
   defp pool_id(%Pool{id: id}), do: id
   defp pool_id(id) when is_binary(id), do: id
   defp pool_id(_id), do: nil
@@ -502,8 +439,6 @@ defmodule CodexPooler.Catalog do
       {key, value} -> {key, value}
     end)
   end
-
-  defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

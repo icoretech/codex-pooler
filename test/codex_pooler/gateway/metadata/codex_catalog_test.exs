@@ -8,25 +8,24 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   # findings#258 row 258-61: production serves only the canonical pristine
   # source path; the aggregate-model builder these cases used to exercise had no
   # caller outside tests and was removed. The cases that still describe served
-  # behaviour run through `build_selected_sources/5`.
+  # behaviour run through `build_selected_sources/4`.
 
-  test "projects GPT-6 long-context metadata into the raw native Codex catalog" do
+  test "preserves the upstream default and opt-in maximum in the native Codex catalog" do
     source = Map.put(gpt6_context_metadata(), "slug", "gpt-6-sol-context")
 
     assert {:ok, result} =
              CodexCatalog.build_selected_sources(
                [{model("gpt-6-sol-context", %{}), source}],
                unrestricted_policy(),
-               %{"gpt-6-sol-context" => ["long_context"]},
                %{},
                %{}
              )
 
     [model] = result.body["models"]
 
-    assert model["context_window"] == 872_000
+    assert model["context_window"] == 272_000
     assert model["max_context_window"] == 872_000
-    assert model["auto_compact_token_limit"] == 784_800
+    assert model["auto_compact_token_limit"] == nil
     assert model["effective_context_window_percent"] == 95
   end
 
@@ -114,7 +113,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     sources = [{model("gpt-a", %{}), source}]
 
     assert {:ok, explicit_lite} =
-             CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, %{}, %{"gpt-a" => "lite"})
+             CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, %{"gpt-a" => "lite"})
 
     assert get_in(explicit_lite.body, ["models", Access.at(0), "use_responses_lite"])
 
@@ -125,7 +124,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
           %{gpt_a: "full"}
         ] do
       assert {:ok, result} =
-               CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, %{}, effective_modes)
+               CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, effective_modes)
 
       refute get_in(result.body, ["models", Access.at(0), "use_responses_lite"])
       refute result.etag == explicit_lite.etag
@@ -146,7 +145,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     results =
       Enum.map(policies, fn policy ->
         assert {:ok, result} =
-                 CodexCatalog.build_selected_sources(sources, policy, %{}, %{}, %{})
+                 CodexCatalog.build_selected_sources(sources, policy, %{}, %{})
 
         result
       end)
@@ -178,12 +177,11 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
                sources,
                unrestricted_policy(),
                %{},
-               %{},
                %{}
              )
 
     assert {:ok, restricted} =
-             CodexCatalog.build_selected_sources(sources, restrictive_policy, %{}, %{}, %{})
+             CodexCatalog.build_selected_sources(sources, restrictive_policy, %{}, %{})
 
     assert restricted.body == %{"models" => [pristine_source("gpt-b")]}
     assert restricted.etag == CodexCatalog.etag(restricted.body)
@@ -222,7 +220,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
              CodexCatalog.build_selected_partitions(
                [partition],
                unrestricted_policy(),
-               %{},
                %{},
                %{}
              )
@@ -625,7 +622,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
                  first_partition,
                  unrestricted_policy(),
                  %{},
-                 %{},
                  %{}
                )
 
@@ -633,7 +629,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
                CodexCatalog.build_selected_partitions(
                  second_partition,
                  unrestricted_policy(),
-                 %{},
                  %{},
                  %{}
                )
@@ -1016,7 +1011,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   defp policy(overrides), do: Map.merge(unrestricted_policy(), Map.new(overrides))
 
   defp selected(sources),
-    do: CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, %{}, %{})
+    do: CodexCatalog.build_selected_sources(sources, unrestricted_policy(), %{}, %{})
 
   defp pristine_source(slug) do
     %{
@@ -1081,7 +1076,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
              CodexCatalog.build_selected_partitions(
                partitions,
                unrestricted_policy(),
-               %{},
                context_overrides,
                modes
              )

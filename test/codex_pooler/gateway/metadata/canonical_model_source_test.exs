@@ -21,7 +21,6 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
              CanonicalModelSource.project(
                source,
                model,
-               %{},
                %{"gpt-schema-fixture" => 256_000},
                "lite"
              )
@@ -49,7 +48,7 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     source = source_metadata()
     model = model(source)
 
-    assert {:ok, payload} = CanonicalModelSource.project(source, model, %{}, %{}, "full")
+    assert {:ok, payload} = CanonicalModelSource.project(source, model, %{}, "full")
 
     assert payload["default_reasoning_level"] == source["default_reasoning_level"]
     assert payload["supported_reasoning_levels"] == source["supported_reasoning_levels"]
@@ -67,14 +66,12 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
       })
 
     model = model(source)
-    pricing_buckets = %{"gpt-schema-fixture" => ["long_context"]}
     context_window_overrides = %{"unrelated-model" => 256_000}
 
     assert {:ok, lite} =
              CanonicalModelSource.project(
                source,
                model,
-               pricing_buckets,
                context_window_overrides,
                "lite"
              )
@@ -83,7 +80,6 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
              CanonicalModelSource.project(
                source,
                model,
-               pricing_buckets,
                context_window_overrides,
                "full"
              )
@@ -96,10 +92,10 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     ]
 
     assert Map.take(lite, context_fields) == %{
-             "context_window" => 300_000,
+             "context_window" => 272_000,
              "max_context_window" => 300_000,
              "effective_context_window_percent" => 90,
-             "auto_compact_token_limit" => 270_000
+             "auto_compact_token_limit" => nil
            }
 
     assert Map.take(full, context_fields) == Map.take(lite, context_fields)
@@ -234,8 +230,8 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     source = source_metadata()
     model = model(source)
 
-    assert {:ok, full} = CanonicalModelSource.project(source, model, %{}, %{}, "full")
-    assert {:ok, lite} = CanonicalModelSource.project(source, model, %{}, %{}, "lite")
+    assert {:ok, full} = CanonicalModelSource.project(source, model, %{}, "full")
+    assert {:ok, lite} = CanonicalModelSource.project(source, model, %{}, "lite")
 
     full_body = %{"models" => [full]}
     lite_body = %{"models" => [lite]}
@@ -256,7 +252,7 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
           %{1 => private_marker}
         ] do
       assert {:error, :invalid_model_metadata} =
-               CanonicalModelSource.project(source, model, %{}, %{}, "full")
+               CanonicalModelSource.project(source, model, %{}, "full")
     end
   end
 

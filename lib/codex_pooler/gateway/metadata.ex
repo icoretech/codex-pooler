@@ -94,7 +94,6 @@ defmodule CodexPooler.Gateway.Metadata do
       visible_models =
         CandidateEligibility.policy_visible_models(hydration.visible_models, policy)
 
-      pricing_buckets = Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
       effective_model_serving_modes =
@@ -113,7 +112,6 @@ defmodule CodexPooler.Gateway.Metadata do
           visible_models,
           hydration.candidates_by_model_id,
           policy,
-          pricing_buckets,
           context_window_overrides,
           effective_model_serving_modes,
           routable_assignment_ids_by_model_id: fn ->

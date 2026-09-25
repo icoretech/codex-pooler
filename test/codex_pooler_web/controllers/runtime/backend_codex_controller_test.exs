@@ -2848,7 +2848,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert model["effective_context_window_percent"] == 95
   end
 
-  test "GET /backend-api/codex/models derives short context window from pricing", %{conn: conn} do
+  test "GET /backend-api/codex/models preserves context metadata when short-context pricing exists", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
     Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
@@ -2877,13 +2877,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["context_window"] == 128_000
-    assert model["max_context_window"] == 128_000
-    assert model["auto_compact_token_limit"] == 115_200
+    assert model["context_window"] == 272_000
+    assert model["max_context_window"] == 272_000
+    assert model["auto_compact_token_limit"] == nil
     assert model["effective_context_window_percent"] == 95
   end
 
-  test "GET /backend-api/codex/models promotes long context window from pricing", %{conn: conn} do
+  test "GET /backend-api/codex/models preserves the opt-in maximum without promoting the default", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
     Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
@@ -2912,9 +2912,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["context_window"] == 1_000_000
+    assert model["context_window"] == 272_000
     assert model["max_context_window"] == 1_000_000
-    assert model["auto_compact_token_limit"] == 900_000
+    assert model["auto_compact_token_limit"] == nil
     assert model["effective_context_window_percent"] == 95
   end
 

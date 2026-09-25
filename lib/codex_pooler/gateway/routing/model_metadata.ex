@@ -3,14 +3,10 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   Codex-compatible model metadata and capability helpers for gateway routing.
   """
 
-  alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
 
-  @short_context_price_bucket "short_context"
-  @long_context_price_bucket "long_context"
-  @short_context_advertised_window 128_000
   @atom_metadata_keys Map.new(
                         ~w[
                           audio
@@ -36,7 +32,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
 
   @type metadata :: map()
   @type metadata_input :: Model.t() | metadata()
-  @type pricing_buckets :: Catalog.pricing_bucket_map()
   @type context_window_overrides :: %{optional(String.t()) => pos_integer()}
   @type effective_model_serving_mode :: String.t() | nil
 
@@ -408,15 +403,14 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     end
   end
 
-  @spec apply_context_window_policy(metadata(), Model.t(), pricing_buckets()) :: metadata()
-  def apply_context_window_policy(metadata, %Model{} = model, pricing_buckets)
+  @spec apply_context_window_policy(metadata(), Model.t()) :: metadata()
+  def apply_context_window_policy(metadata, %Model{} = model)
       when is_map(metadata) do
     settings = OperationalSettings.current()
 
     apply_context_window_policy(
       metadata,
       model,
-      pricing_buckets,
       settings.model_context_window_overrides
     )
   end
@@ -424,13 +418,11 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   @spec apply_context_window_policy(
           metadata(),
           Model.t(),
-          pricing_buckets(),
           context_window_overrides()
         ) :: metadata()
   def apply_context_window_policy(
         metadata,
         %Model{} = model,
-        pricing_buckets,
         context_window_overrides
       )
       when is_map(metadata) and is_map(context_window_overrides) do
@@ -440,7 +432,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
           put_context_window(metadata, context_window)
 
         _value ->
-          maybe_apply_pricing_context_window(metadata, model, pricing_buckets)
+          metadata
       end
 
     put_default_effective_context_window_percent(metadata)
@@ -499,48 +491,6 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     |> Enum.map(fn value -> value |> to_string() |> String.trim() end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
-  end
-
-  defp maybe_apply_pricing_context_window(metadata, %Model{} = model, pricing_buckets) do
-    case Catalog.pricing_buckets_for_model(model, pricing_buckets) do
-      [] ->
-        metadata
-
-      buckets ->
-        cond do
-          @long_context_price_bucket in buckets ->
-            maybe_promote_long_context_window(metadata)
-
-          @short_context_price_bucket in buckets ->
-            maybe_cap_short_context_window(metadata)
-
-          true ->
-            metadata
-        end
-    end
-  end
-
-  defp maybe_promote_long_context_window(metadata) do
-    with context_window when is_integer(context_window) <- metadata["context_window"],
-         max_context_window
-         when is_integer(max_context_window) and
-                max_context_window > context_window <-
-           metadata["max_context_window"] do
-      put_context_window(metadata, max_context_window)
-    else
-      _value -> metadata
-    end
-  end
-
-  defp maybe_cap_short_context_window(metadata) do
-    case metadata["context_window"] do
-      context_window
-      when is_integer(context_window) and context_window > @short_context_advertised_window ->
-        put_context_window(metadata, @short_context_advertised_window)
-
-      _value ->
-        metadata
-    end
   end
 
   defp put_context_window(metadata, context_window) do

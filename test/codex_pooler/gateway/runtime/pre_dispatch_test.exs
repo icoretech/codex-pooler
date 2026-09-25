@@ -85,14 +85,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Map.fetch!(route_state.circuit_snapshots, assignment.id).eligible? == true
     assert Map.fetch!(route_state.circuit_eligibility_snapshots, assignment.id).eligible? == true
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
 
     catalog =
       CodexCatalog.build_canonical(
         [setup.model],
         route_state.visible_model_context.candidates_by_model_id,
         policy,
-        pricing,
         %{},
         route_state.effective_model_serving_modes
       )
@@ -608,14 +606,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     route_state = prepared.route_state
     policy = prepared.request_options.routing.api_key_policy
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
 
     expected_catalog =
       CodexCatalog.build_canonical(
         [setup.model],
         route_state.visible_model_context.candidates_by_model_id,
         policy,
-        pricing,
         %{},
         route_state.effective_model_serving_modes,
         routable_assignment_ids_by_model_id: fn ->
@@ -688,14 +684,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert Map.get(queries, "pool_model_serving_overrides", 0) == 1
 
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
-
     expected_catalog =
       CodexCatalog.build_canonical(
         context.visible_models,
         context.candidates_by_model_id,
         policy,
-        pricing,
         %{},
         %{
           requested_model.exposed_model_id => "lite",
@@ -1850,14 +1843,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Map.get(queries, "account_quota_windows", 0) == 0
 
     policy = prepared.request_options.routing.api_key_policy
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
 
     expected_catalog =
       CodexCatalog.build_canonical(
         context.visible_models,
         context.candidates_by_model_id,
         policy,
-        pricing,
         %{},
         prepared.route_state.effective_model_serving_modes,
         routable_assignment_ids_by_model_id: fn ->

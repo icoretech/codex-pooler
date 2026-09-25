@@ -19,7 +19,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContractTest do
     test "is decodable after the JSON round trip the client receives" do
       bodies = CodexCatalogShapes.served_bodies()
 
-      assert length(bodies) == 30
+      assert length(bodies) == 24
 
       for {label, _representation, body} <- bodies do
         wire = body |> Jason.encode!() |> Jason.decode!()
@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContractTest do
       by_label = Map.new(CodexCatalogShapes.served_bodies(), fn {label, _representation, body} -> {label, body} end)
 
       checked = Enum.filter(Map.keys(by_label), &String.ends_with?(&1, "/decode_checked"))
-      assert length(checked) == 10
+      assert length(checked) == 8
 
       for label <- checked do
         template_label = String.replace_suffix(label, "/decode_checked", "/instructions_template")
@@ -116,7 +116,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContractTest do
 
   defp build(sources, representation) do
     policy = %{allowed_model_identifiers: nil, enforced_model_identifier: nil, enforced_reasoning_effort: nil, maximum_reasoning_effort: nil}
-    CodexCatalog.build_selected_sources(sources, policy, %{}, %{}, %{}, representation)
+    CodexCatalog.build_selected_sources(sources, policy, %{}, %{}, representation)
   end
 
   defp model(slug) do
