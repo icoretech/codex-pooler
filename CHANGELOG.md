@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.5...codex-pooler-v0.9.6) (2026-09-25)
+
+
+### Bug Fixes
+
+* **catalog:** preserve upstream context defaults independently of pricing ([cedaa64](https://github.com/icoretech/codex-pooler/commit/cedaa64815de22388e422f1ea820de063f6d22fe))
+
 ## [0.9.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.4...codex-pooler-v0.9.5) (2026-09-25)
 
 
