@@ -47,6 +47,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsUserAgentsTest do
       assert %{kind: "cline", label: "Cline"} = UserAgents.classify("Cline/3.16.0")
       assert %{kind: "goose", label: "Goose"} = UserAgents.classify("goose/1.35.0")
     end
+
+    test "classifies the observed DeepSeek Harness user agent" do
+      user_agent = "deepseek-harness/0.1.5-rc.3 (+https://github.com/deepseek-ai/deepseek-harness)"
+
+      assert %{kind: "deepseek_harness", label: "DeepSeek Harness"} = UserAgents.classify(user_agent)
+
+      assert %{kind: "deepseek_harness", label: "DeepSeek Harness", text: "deepseek-harness 0.1.5-rc.3"} =
+               UserAgents.display(%{user_agent: user_agent})
+
+      assert %{kind: "unknown", label: "Client"} = UserAgents.classify("unrelated-client/1.0")
+    end
   end
 
   test "display/1 keeps compact sanitized text separate from classification" do

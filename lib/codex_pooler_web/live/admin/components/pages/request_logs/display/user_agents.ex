@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.UserAgents do
     {:contains, ["continue"], "continue", "Continue", "hero-arrow-path-rounded-square", :primary},
     {:contains, ["cline"], "cline", "Cline", "hero-command-line", :primary},
     {:contains, ["goose"], "goose", "Goose", "hero-sparkles", :primary},
+    {:prefix, "deepseek-harness/", "deepseek_harness", "DeepSeek Harness", "hero-sparkles", :primary},
     {:prefix, "openai/python", "openai_python", "OpenAI Python SDK", "hero-code-bracket", :success},
     {:prefix, "asyncopenai/python", "openai_python", "OpenAI Python SDK", "hero-code-bracket", :success},
     {:prefix, "openai/js", "openai_node", "OpenAI Node SDK", "hero-cube", :success},
