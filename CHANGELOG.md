@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.4...codex-pooler-v0.9.5) (2026-09-25)
+
+
+### Bug Fixes
+
+* **compat:** split oversized Chat text without truncation ([383d439](https://github.com/icoretech/codex-pooler/commit/383d439133310dde7fecfbd6364183b02d686171))
+
 ## [0.9.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.3...codex-pooler-v0.9.4) (2026-09-25)
 
 
