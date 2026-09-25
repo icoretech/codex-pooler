@@ -5,8 +5,11 @@ sidebar:
 description: Configure Cursor BYOK with a public Codex Pooler endpoint, an explicit model, and a Pool API key.
 ---
 
-Use Cursor's OpenAI API key settings to connect an explicit model to Codex
-Pooler's narrow OpenAI-compatible `/v1` surface.
+Cursor is an AI code editor that keeps coding assistance alongside your project. Connect it to Codex Pooler to select your Pool's models for Cursor features that support your own API key. This guide covers model setup and checking that requests reach your Pooler instance.
+
+![Codex Pooler Cursor integration](/codex-pooler-cursor.png)
+
+## Before you start
 
 :::caution[Public endpoint required]
 Cursor constructs requests on its servers and then calls your endpoint.
@@ -15,19 +18,12 @@ This differs from clients that connect directly from your computer.
 See [Cursor's network explanation](https://forum.cursor.com/t/149366/3).
 :::
 
-![Codex Pooler Cursor integration](/codex-pooler-cursor.png)
+- Install [Cursor](https://cursor.com/download) for your operating system.
+- Use an active Cursor Pro or higher subscription. See the [BYOK plan requirements](https://forum.cursor.com/t/165490/5), including [Ask mode](https://forum.cursor.com/t/150484/3).
+- Have a public HTTPS Codex Pooler URL reachable from Cursor's servers.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-## Before you start
-
-- An active Cursor Pro or higher subscription. Cursor staff confirms that
-  [custom BYOK requires a paid plan](https://forum.cursor.com/t/165490/5),
-  including [Ask mode](https://forum.cursor.com/t/150484/3).
-- A public HTTPS Codex Pooler endpoint reachable from Cursor's servers.
-- A Pool API key permitted to use the selected model.
-
-Your Pool API key passes through Cursor's backend with BYOK requests. See
-[Cursor's API key documentation](https://cursor.com/help/models-and-usage/api-keys)
-for its handling of provider credentials.
+Your Pool API key passes through Cursor's backend with BYOK requests. See [Cursor's API key documentation](https://cursor.com/help/models-and-usage/api-keys) for its handling of provider credentials.
 
 ## Configure the connection
 

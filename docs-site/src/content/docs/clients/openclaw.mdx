@@ -5,27 +5,51 @@ sidebar:
 description: Configure OpenClaw with Codex Pooler's narrow OpenAI-compatible /v1 surface, current runtime id, model metadata, and optional operator MCP endpoint.
 ---
 
-OpenClaw should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep `openai/*` model names when you want OpenClaw and its tools to treat the model as the canonical OpenAI provider path. The optional MCP block is only for operator metadata tools.
+OpenClaw is an open-source AI assistant that runs on your own devices and connects to the chat channels you use. It can carry out tasks with tools while keeping conversations available through its gateway. Connect it to Codex Pooler to use your Pool's models for the main assistant and background tasks.
 
 ![Codex Pooler OpenClaw integration](/codex-pooler-openclaw.png)
 
 ## Before you start
 
-- OpenClaw installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [OpenClaw](https://docs.openclaw.ai/install) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 <a id="provider-shape"></a>
 
 ## Configure the connection
 
-Merge the following settings into `~/.openclaw/openclaw.json`, or the file selected by `OPENCLAW_CONFIG_PATH`. Make `CODEX_POOLER_API_KEY` available to the running OpenClaw process.
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.openclaw/openclaw.json` |
+| Linux | `~/.openclaw/openclaw.json` |
+| Windows | `%USERPROFILE%\.openclaw\openclaw.json` |
+
+If you set `OPENCLAW_CONFIG_PATH`, edit that file instead of the default shown below.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
+Merge the following settings into `openclaw.json` at the path for your system, or the file selected by `OPENCLAW_CONFIG_PATH`. Make `CODEX_POOLER_API_KEY` available to the running OpenClaw process:
+
+**macOS / Linux / WSL**
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
 
 OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surface, use a Pool API key for model requests, and pin the agent runtime to `openclaw`. The older `pi` runtime id is a deprecated alias and should not be used in new Codex Pooler examples.
 
-```json5 title="~/.openclaw/openclaw.json" frame="code"
+```json5 title="openclaw.json" frame="code"
 {
   agents: {
     defaults: {
@@ -111,7 +135,7 @@ That follows OpenClaw's generic custom-provider shape, but tools that look speci
 
 Add Codex Pooler as a remote Streamable HTTP MCP server only when OpenClaw should inspect metadata that the operator can already see in the admin UI. Omit this block for normal model/runtime use.
 
-```json5 title="~/.openclaw/openclaw.json" frame="code"
+```json5 title="openclaw.json" frame="code"
 {
   mcp: {
     servers: {

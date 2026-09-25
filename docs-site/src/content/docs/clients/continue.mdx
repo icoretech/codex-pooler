@@ -5,19 +5,21 @@ sidebar:
 description: Configure Continue with Codex Pooler's narrow OpenAI-compatible /v1 surface, local config.yaml file locations, model capabilities, and optional operator MCP metadata access.
 ---
 
-Continue can use Codex Pooler as an OpenAI-compatible provider by setting `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue secret. Keep the base URL at `/v1`; the installed Continue version chooses the request endpoint.
+Continue brings AI coding assistance to your editor and terminal. Use it to ask questions about your code, make edits and work through development tasks. Connect the IDE extension or CLI to Codex Pooler to use the models available to your Pool.
 
 ![Codex Pooler Continue integration](/codex-pooler-continue.png)
 
 ## Before you start
 
-- Continue CLI or the IDE extension installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [Continue CLI](https://docs.continue.dev/cli/quickstart) or the [IDE extension](https://docs.continue.dev/ide-extensions/install) using the official instructions.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 ## Configure the connection
+
+Set `provider: openai`, point `apiBase` at the `/v1` base URL and supply the Pool API key as a Continue secret. The installed Continue version chooses the request endpoint.
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
 
 ### Config file path
 
@@ -31,11 +33,13 @@ For local Continue configs, put the Codex Pooler assistant in `config.yaml`:
 
 In the IDE extension, open the Continue chat sidebar, use the config selector above the chat input, then click the gear icon beside **Local Config**. Continue creates this file on first use and reloads it after saves.
 
-Continue CLI resolves config from `--config` first, then the saved last-used config, then the default assistant or `~/.continue/config.yaml` when not logged in.
+Continue CLI resolves config from `--config` first, then the saved last-used config, then the default assistant or the local `config.yaml` listed above when not logged in. If you set `CONTINUE_GLOBAL_DIR`, use that folder instead.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
 
 Hub configs live in Continue Mission Control instead of this local file. For Codex Pooler examples, local `config.yaml` is the clearest setup because it keeps the Pool route, capabilities, and optional MCP entry inspectable.
 
-```yaml title="~/.continue/config.yaml" frame="code"
+```yaml title="config.yaml" frame="code"
 name: Codex Pooler
 version: 1.0.0
 schema: v1
@@ -103,12 +107,21 @@ Continue uses `contextLength` for request pruning and `defaultCompletionOptions.
 
 Check the headless CLI path after saving the config:
 
+**macOS / Linux / WSL**
+
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
+export CODEX_POOLER_API_KEY="<pool-api-key>"
 npx -y @continuedev/cli@latest -p \
   --config ~/.continue/config.yaml \
   --silent \
   'Reply with exactly: continue ok'
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+npx -y @continuedev/cli@latest -p --config "$env:USERPROFILE\.continue\config.yaml" --silent 'Reply with exactly: continue ok'
 ```
 
 In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
@@ -117,7 +130,7 @@ In Codex Pooler's request logs, match the request time, API key, model, and fina
 
 To enable operator metadata tools, add this top-level block to the same `config.yaml` and configure the separate `CODEX_POOLER_MCP_KEY` secret:
 
-```yaml title="~/.continue/config.yaml" frame="code"
+```yaml title="config.yaml" frame="code"
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcpServers:
   - name: codex_pooler

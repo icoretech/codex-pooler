@@ -5,40 +5,63 @@ sidebar:
 description: Configure Oh My Pi (OMP) with Codex Pooler's narrow OpenAI-compatible /v1 Responses surface and a Pool API key.
 ---
 
-Oh My Pi (OMP) should use Codex Pooler through a custom provider in `~/.omp/agent/models.yml`. Point that provider at the narrow OpenAI-compatible `/v1` surface, keep the Pool API key in the environment, and choose `openai-responses` so OMP sends agent turns through the Responses route.
+Oh My Pi (OMP) builds on Pi with additional developer tools and model roles for different tasks. Connect it to Codex Pooler to choose models from your Pool for everyday coding, planning and background work. This guide includes shared model settings and options for long-running sessions.
 
 ![Codex Pooler OMP integration](/codex-pooler-omp.png)
 
 ## Before you start
 
-- OMP installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-- Bun available for the installation command below.
+- Install [OMP](https://omp.sh/) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
-
-### Install
-
-Use the current npm package through Bun:
-
-```bash
-bun install -g @oh-my-pi/pi-coding-agent
-```
+<a id="install"></a>
 
 <a id="provider-shape"></a>
 
 ## Configure the connection
 
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+**Providers and models**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.omp/agent/models.yml` |
+| Linux | `~/.omp/agent/models.yml` |
+| Windows | `%USERPROFILE%\.omp\agent\models.yml` |
+
+**Default models and preferences**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.omp/agent/config.yml` |
+| Linux | `~/.omp/agent/config.yml` |
+| Windows | `%USERPROFILE%\.omp\agent\config.yml` |
+
+If you use an OMP profile or set `PI_CODING_AGENT_DIR`, use that profile's or directory's files instead.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
 Set the Pool API key in the shell that starts the client:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-For a deployed instance, add the provider to `~/.omp/agent/models.yml`:
+**Windows PowerShell**
 
-```yaml title="~/.omp/agent/models.yml" frame="code"
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+For a deployed instance, add the provider to `models.yml` at the path for your system:
+
+```yaml title="models.yml" frame="code"
 providers:
   codex-pooler:
     baseUrl: https://codex-pooler.example.com/v1
@@ -96,9 +119,9 @@ OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept 
 
 ### Default model roles
 
-If you want plain `omp`, `--smol`, `--slow`, `--plan`, task, vision, advisor, commit, designer, and lightweight background paths to start on Codex Pooler, add the defaults to `~/.omp/agent/config.yml`:
+If you want plain `omp`, `--smol`, `--slow`, `--plan`, task, vision, advisor, commit, designer, and lightweight background paths to start on Codex Pooler, add the defaults to `config.yml` in the same folder:
 
-```yaml title="~/.omp/agent/config.yml" frame="code"
+```yaml title="config.yml" frame="code"
 startup:
   setupWizard: false
 defaultThinkingLevel: xhigh
@@ -136,11 +159,19 @@ compaction:
 
 Run a one-shot prompt from the repository you want OMP to inspect:
 
+**macOS / Linux / WSL**
+
 ```bash
 omp --model codex-pooler/gpt-6-sol:xhigh \
   --no-session \
   --tools bash \
   -p 'Reply with exactly: omp ok'
+```
+
+**Windows PowerShell**
+
+```powershell
+omp --model codex-pooler/gpt-6-sol:xhigh --no-session --tools bash -p 'Reply with exactly: omp ok'
 ```
 
 `--no-session` keeps the check ephemeral. For normal interactive use, omit that flag if you want OMP to reuse session state.
@@ -165,7 +196,7 @@ For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist h
 
 ### Pi relationship
 
-OMP is a Pi fork, but it is not configured from Pi's files. Pi uses the `pi` binary and `~/.pi/agent/models.json`; OMP uses the `omp` binary, `~/.omp/agent/models.yml`, and `modelRoles` in `~/.omp/agent/config.yml`.
+OMP is a Pi fork, but it is not configured from Pi's files. Pi uses the `pi` binary and its own `models.json`; OMP uses the `omp` binary, `models.yml`, and `modelRoles` in `config.yml` at the OMP paths listed above.
 
 ### MCP boundary
 

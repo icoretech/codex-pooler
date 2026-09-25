@@ -3,9 +3,8 @@
 <p align="center">
   <strong>The full featured self-hosted Codex gateway, for teams, agents and you. Works with:</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
+  <a href="#opencode-setup" title="OpenCode"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/pi/" title="Pi"><img src=".github/assets/pi-favicon.png" alt="Pi" width="24" height="24"></a>
@@ -92,89 +91,154 @@ assigned Pools.
 
 ## Highlights
 
-- 🔑 **Stable Pool API keys:** give clients one Pool credential whether the Pool
-  currently has one upstream account or several, without distributing raw Codex
-  account material
-- 🎯 **Eligibility-aware routing:** route each request to an account with compatible
-  model support, usable quota evidence, matching health, session state, and Pool
-  policy
-- 🧩 **Codex backend compatibility:** point Codex-compatible clients at Codex
-  Pooler and keep responses, compacting, usage, files, audio, images, and
-  backend websocket flows working through assigned accounts
-- 🔌 **OpenAI-compatible SDK surface:** let `/v1`-only apps and agent tools use
-  Codex capacity through the same Pool boundary, with supported requests
-  translated and routed to help contain API spend
-- 🚀 **Unlock the full potential of Responses:** give your agents parallel tool
-  calls and fewer API restrictions with Full, while Pooler handles Lite
-  compatibility behind the scenes. [Learn more](https://docs.codex-pooler.com/reference/responses-lite-vs-full/)
-- 🔁 **Session-aware websockets:** keep resumable Codex sessions and websocket
-  reconnects attached to the right upstream account without translating backend
-  websocket traffic through an HTTP compatibility layer
-- ⚡ **Prompt-cache locality:** use a transient `prompt_cache_key` to prefer the
-  same eligible upstream account for repeat stateless requests, improving
-  provider-side cache locality without storing prompts or responses locally
-- 🗜️ **Per-Pool request compression:** optionally compress upstream-bound
-  Responses tool outputs before dispatch on supported request routes. The
-  option is disabled by default, request-side only, and records safe aggregate
-  savings without storing raw outputs.
-- 🏦 **Saved reset management:** surface reported saved reset capacity on upstream
-  accounts, show informational expirations when available, and let operators
-  queue account-level recovery or opt into guarded auto-redemption policy
-- 🚨 **Operator alerting:** define Pool-aware rules for capacity, upstream health,
-  saved reset events, and delivery failures, then notify operators through
-  admin incidents, email, or webhooks without exposing raw request content
-- 🖥️ **Operator dashboard:** manage Pool-scoped accounts, API keys, invites, saved
-  resets, usage, request logs, audit logs, MCP access, and the owner-only jobs,
-  operators, and system settings surfaces
-- 🔭 **Per-key Observatory:** switch on read-only Observatory access for any Pool
-  API key and its holder gets a live, self-service dashboard of just that key's
-  usage, models, latency, cache, and spend — a monitor-friendly view to keep on a
-  second screen, with no operator controls or other keys in reach
-- 🛡️ **Privacy-minded observability:** store request, routing, and audit metadata
-  without storing prompts, file bodies, audio, images, bearer tokens, cookies,
-  raw Codex account tokens, or raw API keys
-- 🧱 **Runtime ingress firewall:** optionally restrict incoming runtime traffic to
-  approved client networks for an extra deployment-level security boundary
-- ⚙️ **Configurable without code changes:** tune Pool policy, gateway defaults,
-  diagnostics, model support, limits, and operational settings from the admin UI
-- 🐳 **Built for self-hosting:** run on Elixir/Erlang's fault-tolerant runtime,
-  start locally with Docker Compose, or deploy the Helm chart with separate web,
-  worker, scheduler, and migration roles for Kubernetes-friendly, multinode
-  growth
+- 🧩 **Use the tools you already know:** connect Codex, OpenCode and other
+  supported coding agents, plus apps built with OpenAI-compatible SDKs
+- 🔑 **One key for your apps:** connect tools with a Pool API key that stays the
+  same when you add or replace Codex accounts, without sharing account credentials
+- ⚡ **High cache reuse across protocols:** over 95% cached input observed on
+  HTTP/SSE and WebSockets, backed by cache-aware routing and connection reuse
+- 🎯 **Automatic account selection:** send requests to accounts that can serve
+  the chosen model, with available quota and account health taken into account
+- 📏 **Control how much each key can use:** set request limits and daily or
+  weekly AI usage allowances
+- 🚀 **Give agents more room to work:** let them use several tools at once in
+  Full mode, with Lite compatibility when needed
+- 🖼️ **Images and voice, too:** generate and edit images or transcribe audio
+  through supported apps, using the same Pool API key
+- 🛡️ **Keep conversation content private:** track usage and troubleshoot requests
+  without saving prompts, replies, uploaded files, images or audio
+- 🔁 **Keep conversations together:** keep supported sessions linked to the
+  right account when a client reconnects
+- 🔭 **Let users track their own usage:** enable a personal Observatory dashboard
+  for each key, showing activity, response times and estimated costs
+- 🏦 **Put saved resets to use:** see available reset credits and use them to
+  restore account quota, manually or automatically when enabled
+- 🖥️ **Manage everything in one place:** add accounts, manage keys and invites,
+  check usage and change settings from a browser
+- 👥 **Organize teams and projects:** group accounts into Pools with their own
+  access rules and model choices
+- 🤝 **Connect accounts by invitation:** let account owners join a Pool through
+  a guided browser flow, without sending you credential files
+- 🚨 **Know when attention is needed:** receive alerts about low capacity,
+  account problems and reset events in the dashboard, by email or through webhooks
+- 🗜️ **Send smaller requests:** optionally shrink supported tool outputs before
+  sending them to the AI provider, and see how much was saved
+- 🧷 **Fill in missing continuity:** derive stable session identities from cache
+  keys or conversation IDs when a harness does not send them directly
+- 🧱 **Choose who can connect:** optionally allow requests only from approved
+  networks
+- 🐳 **Run it on your own infrastructure:** start with Docker Compose or deploy
+  on Kubernetes as your needs grow
 
 ## Harness Configuration
 
-Keep Pool API keys in environment variables when the harness supports secret
-expansion. The `/mcp` endpoint is an optional operator-only add-on for metadata
-inspection; Codex Pooler runtime clients do not need it. If a desktop harness
-persists remote MCP headers in its own private settings, use a dedicated
-operator-scoped MCP token. For a local instance, the URLs are:
+Start with a running Codex Pooler instance, a Pool API key, and an installed
+client. The examples include `gpt-6-luna`, `gpt-6-sol` and `gpt-6-astra`, with
+Sol selected by default. Keep the models available to your Pool.
+Replace `<pool-api-key>` with your key and run the command for your terminal
+before starting the client.
 
-```text
-Codex backend base URL:      http://localhost:4000/backend-api/codex
-OpenAI SDK base URL:         http://localhost:4000/v1
-Optional operator MCP URL:   http://localhost:4000/mcp
+**macOS / Linux / Windows WSL (bash or zsh)**
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-For a deployed instance, replace `http://localhost:4000` with your deployed host,
-for example `https://codex-pooler.example.com`.
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+These commands set the key for the current terminal. For desktop apps, follow
+the linked guide to save the key for the app.
+
+The paths below are defaults. On macOS/Linux, `~` is your home folder.
+On Windows, paste paths starting with `%USERPROFILE%`, `%APPDATA%` or
+`%LOCALAPPDATA%` into File Explorer's address bar. If you installed a client
+inside WSL, use its Linux paths and commands inside WSL. Custom configuration
+folders or profiles take precedence over these defaults.
+
+For a local instance:
+
+| Client | Base URL |
+| --- | --- |
+| Codex CLI / Desktop | `http://localhost:4000/backend-api/codex` |
+| Other harnesses and SDKs | `http://localhost:4000/v1` |
+
+For a deployed instance, replace `http://localhost:4000` with your instance's
+host, such as `https://codex-pooler.example.com`. Merge snippets into existing
+configurations. The examples use the large **828,400-token context** for GPT-6.
+Codex CLI and Desktop read the available context size automatically from your Pool.
+
+Each entry covers the basic connection. Its **full setup & extras** link covers
+installation, advanced options and troubleshooting. Operator MCP is optional
+and uses a separate token; see [Operator MCP Service](#operator-mcp-service).
 
 <details>
-<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>config.toml</code></summary>
 
-OpenCode v2 supports Codex Pooler through the native Responses provider, including
-local tool execution and same-session resume. Set
-`CODEX_POOLER_API_KEY` in the environment of the OpenCode server, then merge:
+![Codex Pooler integration for Codex CLI and Codex Desktop](.github/assets/codex-pooler-codex.png)
+
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.codex/config.toml` |
+| Windows | `%USERPROFILE%\.codex\config.toml` |
+
+Open `config.toml` at the path for your system and add the following. If you
+set `CODEX_HOME`, use the file in that folder instead. If the file already has
+a `[features]` section, add the setting to that section.
+
+```toml
+model = "gpt-6-sol"
+model_provider = "codex-pooler-ws"
+
+[model_providers.codex-pooler-ws]
+name = "OpenAI"
+base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
+env_key = "CODEX_POOLER_API_KEY"
+wire_api = "responses"
+supports_websockets = true
+requires_openai_auth = true
+
+[features]
+api_key_model_discovery = true
+```
+
+Restart Codex and choose a model available to your Pool.
+If you use Codex Desktop,
+follow the full guide to make your API key available to the app.
+
+**[Full setup & extras](https://docs.codex-pooler.com/clients/codex-cli-desktop/)** — desktop setup, account settings and existing conversations.
+
+</details>
+
+<a id="opencode-setup"></a>
+
+<details>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode logo" width="16" height="16"> OpenCode <code>opencode.jsonc</code></summary>
+
+![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
+
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.config/opencode/opencode.jsonc` |
+| Windows | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
+
+Open `opencode.jsonc` at the path for your system and add the configuration
+for your OpenCode version below.
+
+**OpenCode v2**
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "codex-pooler/gpt-6-sol",
-  "agents": { "title": { "model": "codex-pooler/gpt-6-luna" } },
-  "compaction": {
-    "auto": true,
-    "keep": { "tokens": 15000 },
-    "buffer": 41420
+  "agents": {
+    "title": {
+      "model": "codex-pooler/gpt-6-luna"
+    }
   },
   "providers": {
     "codex-pooler": {
@@ -183,20 +247,49 @@ local tool execution and same-session resume. Set
         "baseURL": "http://localhost:4000/v1",
         "apiKey": "{env:CODEX_POOLER_API_KEY}",
         "transport": "http",
-        "compaction": { "type": "summary" }
+        "compaction": {
+          "type": "summary"
+        }
       },
       "models": {
         "gpt-6-luna": {
           "modelID": "gpt-6-luna",
-          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
-          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
         },
         "gpt-6-sol": {
           "modelID": "gpt-6-sol",
-          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
-          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
+        },
+        "gpt-6-astra": {
+          "modelID": "gpt-6-astra",
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
         }
       }
     }
@@ -204,48 +297,15 @@ local tool execution and same-session resume. Set
 }
 ```
 
-Use your deployed `/v1` URL and only models assigned to your Pool. The context
-values are long-profile examples: copy each model's actual
-`/v1/models.context_length` into `limit.context` and `limit.input`. The
-[v2 guide](https://docs.codex-pooler.com/clients/opencode-v2/) includes Astra,
-context calculations, compaction choices, protocols and image limits.
+**[OpenCode v2 full setup & extras](https://docs.codex-pooler.com/clients/opencode-v2/)** — installation and advanced options.
 
-This configuration uses HTTP SSE and local summary checkpoints. Websocket
-transport and native provider checkpoints are available through provider
-settings; see the v2 guide for both compaction modes. Local tools
-and image input do not imply an enabled image-generation tool. Use
-`opencode run --standalone --model codex-pooler/gpt-6-sol` for an isolated
-client session; normal startup uses a shared background service.
-
-V2 uses `providers`, `modelID`, `settings` and `capabilities`; legacy model
-`reasoning`/`attachment` booleans and compaction `prune`/`tail_turns` are ignored
-with warnings. V1 plugins, including v1 OMO integrations, need their own v2
-migration. Keep the v1 configuration below for v1 installations.
-
-</details>
-
-<details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
-
-![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
-
-OpenCode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. Keep
-the provider id as `openai` for this setup so OpenCode continues to use its
-OpenAI provider-family behavior. The provider uses the Pool API key, and the
-optional remote MCP entry uses an operator-owned MCP token. MCP is not required
-for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only
-metadata tools. Its websocket
-support is the narrow Responses websocket route at `GET /v1/responses`, not
-OpenAI Realtime SDK compatibility.
+**OpenCode v1**
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-6-sol",
   "small_model": "openai/gpt-6-luna",
-  "compaction": {
-    "auto": true,
-    "reserved": 41420
-  },
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai",
@@ -266,20 +326,13 @@ OpenAI Realtime SDK compatibility.
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-sol": {
           "id": "gpt-6-sol",
@@ -292,20 +345,13 @@ OpenAI Realtime SDK compatibility.
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-astra": {
           "id": "gpt-6-astra",
@@ -318,289 +364,35 @@ OpenAI Realtime SDK compatibility.
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         }
       }
-    }
-  },
-  // Optional operator-only MCP metadata add-on. Omit for normal model/runtime use.
-  "mcp": {
-    "codex_pooler": {
-      "type": "remote",
-      "url": "http://localhost:4000/mcp",
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer {env:CODEX_POOLER_MCP_KEY}"
-      },
-      "enabled": true,
-      "timeout": 30000
     }
   }
 }
 ```
 
-Define only models that your assigned Pool can serve. For deployed instances,
-change `baseURL` to `https://codex-pooler.example.com/v1`; if you keep the optional
-operator MCP entry, change its `url` to `https://codex-pooler.example.com/mcp`.
-
-OpenCode uses `small_model` for background helpers such as automatic session
-titles. Without an explicit override, it may infer a nano model that Codex Pools
-do not serve. Point `small_model` at a lightweight model that is actually
-assigned to your Pool; the setting also remains effective when OMO is loaded.
-
-Request-time OpenAI options belong under each model's `options` block. Keep only
-connection settings such as `baseURL` and `apiKey` in provider-level `options`.
-The commented `serviceTier` line shows how to opt into priority processing.
-Enable it only when your Pool and upstream offer it and you intentionally accept
-the potentially higher cost; leave it commented to use the default tier.
-Do not add `store`: Codex Pooler sets `store: false` on its upstream streaming
-request.
-
-OpenCode subtracts its compaction reserve from `limit.input` before deciding a
-conversation is full. The `828400` values above are long-profile examples for
-models whose selected Pool catalog source reports an 872000-token raw ceiling.
-Provider accounts can temporarily report different ceilings for the same model;
-a selected 272000-token profile exposes `258400` through `/v1/models` instead.
-Use each model's `/v1/models.context_length` for `limit.context` and
-`limit.input`. With the long-profile example and `reserved: 41420`, OpenCode
-starts compaction at 786980 tokens.
-`limit.input` is the local pre-compaction boundary, not a simultaneous
-input-plus-output envelope. OpenCode's request layer caps output at 32k by
-default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only if you want
-OpenCode to request the full 64k cap.
-
-#### Oh My OpenAgent (OMO)
-
-If you use Oh My OpenAgent, keep the native `openai` provider configuration
-above and add agent/category overrides in
-`~/.config/opencode/oh-my-openagent.jsonc`. A balanced three-tier routing map is:
-
-| Primary tier | Agents and categories | Fallback |
-|---|---|---|
-| `gpt-6-luna` | `librarian`, `explore`, `quick`, `unspecified-low` | `gpt-6-sol` with the same reasoning variant |
-| `gpt-6-sol` | `sisyphus`, `multimodal-looker`, `atlas`, `sisyphus-junior`, `visual-engineering`, `unspecified-high`, `writing` | `gpt-6-astra` with the same reasoning variant |
-| `gpt-6-astra` | `hephaestus`, `oracle`, `prometheus`, `metis`, `momus`, `ultrabrain`, `deep`, `artistry` | `gpt-6-sol` with the same reasoning variant |
-
-Explicit `fallback_models` keep OMO retries inside the model ids served by the
-assigned Pool instead of falling through to older built-in model chains. The
-[OpenCode client guide](https://docs.codex-pooler.com/clients/opencode/#oh-my-openagent-omo-routing)
-contains the complete copyable OMO configuration and validation commands.
+**[OpenCode v1 full setup & extras](https://docs.codex-pooler.com/clients/opencode/)** — installation and OMO setup.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>CODEX_HOME/config.toml</code></summary>
-
-![Codex Pooler integration for Codex CLI and Codex Desktop](.github/assets/codex-pooler-codex.png)
-
-Codex CLI and Codex Desktop should use the backend compatibility route, not the
-`/v1` SDK route. They share the same Codex configuration layers and user-level
-`CODEX_HOME/config.toml`, so one Codex Pooler provider block can serve the
-terminal and desktop/IDE experience. Keep the provider id as `codex-pooler-ws`,
-but keep the provider `name` exactly `OpenAI`. In current Codex sources, `name`
-is not just
-a display label: exact `OpenAI` matching enables OpenAI-family behavior such as
-remote compaction, web search/image availability, and Codex backend request-body
-compression.
-
-Put provider and auth settings in the user-level config file. Codex resolves
-`CODEX_HOME` first. If `CODEX_HOME` is unset, current Codex sources default it
-to `$HOME/.codex` on every OS, so the user config file is
-`CODEX_HOME/config.toml`.
-
-| OS | Default config file |
-| --- | --- |
-| macOS | `$HOME/.codex/config.toml` |
-| Linux | `$HOME/.codex/config.toml` |
-| Windows | `$HOME\.codex\config.toml`, normally `%USERPROFILE%\.codex\config.toml` |
-
-Codex's project-local `.codex/config.toml` layers are trust-gated and do not
-override machine-local provider keys such as `model_provider` or
-`model_providers`.
-
-Use the websocket provider for normal Codex CLI and Codex Desktop backend
-behavior:
-
-```toml
-model_provider = "codex-pooler-ws"
-
-[model_providers.codex-pooler-ws]
-name = "OpenAI"
-base_url = "http://localhost:4000/backend-api/codex"
-model_catalog_url = "http://localhost:4000/backend-api/codex/models"
-env_key = "CODEX_POOLER_API_KEY"
-wire_api = "responses"
-supports_websockets = true
-requires_openai_auth = true
-
-[features]
-api_key_model_discovery = true
-```
-
-Keep an HTTP/SSE provider when you need to force non-websocket behavior for a
-client check or when a Codex runtime cannot open backend websocket streams:
-
-```toml
-model_provider = "codex-pooler-http"
-
-[model_providers.codex-pooler-http]
-name = "OpenAI"
-base_url = "http://localhost:4000/backend-api/codex"
-model_catalog_url = "http://localhost:4000/backend-api/codex/models"
-env_key = "CODEX_POOLER_API_KEY"
-wire_api = "responses"
-supports_websockets = false
-requires_openai_auth = true
-```
-
-For deployed instances, change `base_url` to
-`https://codex-pooler.example.com/backend-api/codex` and `model_catalog_url` to
-`https://codex-pooler.example.com/backend-api/codex/models`.
-
-`model_catalog_url` together with `api_key_model_discovery = true` under
-`[features]` is what makes current Codex releases read the Pool's model catalog
-(keep a single `[features]` table in the file). Point `model_catalog_url` at the
-final `https` URL, because Codex refuses redirects there. See
-[Codex CLI and Desktop](https://docs.codex-pooler.com/clients/codex-cli-desktop/)
-for which Codex releases need it and how to check that the catalog is read.
-
-Leave `requires_openai_auth = true` unless you are deliberately running Codex
-Pooler as a gateway-only provider. With `true`, Codex still shows the local
-OpenAI/ChatGPT account as signed in, which keeps Codex Desktop and app-server
-features that depend on account state available. The Pool API key in `env_key`
-still authenticates requests to Codex Pooler.
-
-If Codex repeatedly enters a broken login/account state with a Pooler provider,
-advanced users can change the provider to `requires_openai_auth = false`. That
-makes Codex treat the provider as gateway-only and use only `env_key` for
-runtime auth, but Codex will no longer appear signed in for that provider and
-account-dependent features, including mobile/app-server features, may be
-unavailable.
-
-When Codex reads the Pool's model catalog as configured above, Codex CLI and
-Codex Desktop derive their effective context window and automatic compaction
-boundary from that metadata. Leave context sizing automatic so the client follows per-model
-catalog changes without stale local overrides. Provider catalog rollout can be
-account-scoped: one upstream can still report a 272000-token maximum while
-another reports the newer 872000-token ceiling for the same model. Pooler
-selects one canonical source cohort for the Pool and exposes that cohort's raw
-window plus `effective_context_window_percent`; Codex applies the percentage
-once. A 272000-token profile therefore resolves to 258400 usable tokens, while
-a selected 872000-token long profile resolves to 828400. The narrow
-`/v1/models` surface publishes that selected effective value directly as
-`context_length` for SDK-style clients.
-
-Optional operator-only MCP metadata add-on. Omit for normal Codex runtime use:
-
-```toml
-[mcp_servers.codex_pooler]
-url = "http://localhost:4000/mcp"
-bearer_token_env_var = "CODEX_POOLER_MCP_KEY"
-```
-
-For deployed instances, change the optional MCP `url` to
-`https://codex-pooler.example.com/mcp`.
-
-Codex filters resumable conversations by `model_provider`. If you already have
-Codex CLI or Codex Desktop sessions created with the built-in `openai` provider
-and want them to appear under `codex-pooler-ws`, re-tag both the JSONL
-transcripts and the newer SQLite state database. Close Codex first; these
-commands edit local Codex state in place. If you made the HTTP provider your
-default, replace only the destination value `codex-pooler-ws` with
-`codex-pooler-http` before copying.
-
-#### macOS (zsh)
-
-Run these two zsh one-liners:
-
-```zsh
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```zsh
-for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-#### Linux (bash)
-
-Run these two bash one-liners:
-
-```bash
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```bash
-for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-#### Windows (PowerShell)
-
-Run the same migration from PowerShell. This expects `sqlite3` to be available
-on `PATH`.
-
-```powershell
-$ErrorActionPreference = "Stop"
-
-$FromProvider = "openai"
-$ToProvider = "codex-pooler-ws"
-$CodexHome = Join-Path $HOME ".codex"
-
-$FromJson = '"model_provider":"' + $FromProvider + '"'
-$ToJson = '"model_provider":"' + $ToProvider + '"'
-
-Get-ChildItem -Path (Join-Path $CodexHome "sessions") -Recurse -Filter "*.jsonl" |
-  ForEach-Object {
-    $Path = $_.FullName
-    $TempPath = "$Path.tmp"
-    $Reader = [System.IO.StreamReader]::new($Path)
-    $Writer = [System.IO.StreamWriter]::new(
-      $TempPath,
-      $false,
-      [System.Text.UTF8Encoding]::new($false)
-    )
-
-    try {
-      while (($Line = $Reader.ReadLine()) -ne $null) {
-        $Writer.WriteLine($Line.Replace($FromJson, $ToJson))
-      }
-    } finally {
-      $Reader.Dispose()
-      $Writer.Dispose()
-    }
-
-    Move-Item -Force $TempPath $Path
-  }
-
-Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
-  ForEach-Object {
-    sqlite3 $_.FullName `
-      "UPDATE threads SET model_provider = '$ToProvider' WHERE model_provider = '$FromProvider';"
-  }
-```
-
-</details>
-
-<details>
-<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>~/.openclaw/openclaw.json</code></summary>
+<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>openclaw.json</code></summary>
 
 ![Codex Pooler OpenClaw integration](.github/assets/codex-pooler-openclaw.png)
 
-OpenClaw uses `openai/*` as the canonical OpenAI route. To keep that model name
-while sending agent turns to Codex Pooler's OpenAI-compatible `/v1` surface,
-point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime id.
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.openclaw/openclaw.json` |
+| Windows | `%USERPROFILE%\.openclaw\openclaw.json` |
+
+Open `openclaw.json` at the path for your system and add this configuration:
 
 ```json5
 {
@@ -608,12 +400,7 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
     defaults: {
       model: {
         primary: "openai/gpt-6-sol",
-        list: [
-          {
-            id: "background",
-            model: "openai/gpt-6-luna",
-          },
-        ],
+        list: [{ id: "background", model: "openai/gpt-6-luna" }],
       },
       compaction: { reserveTokens: 128000 },
     },
@@ -659,65 +446,35 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
       },
     },
   },
-  // Optional operator-only MCP metadata add-on. Omit for normal model/runtime use.
-  mcp: {
-    servers: {
-      codex_pooler: {
-        url: "http://localhost:4000/mcp",
-        transport: "streamable-http",
-        headers: {
-          Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}",
-        },
-      },
-    },
-  },
 }
 ```
 
-Define only models that your assigned Pool can serve. For deployed instances,
-change `baseUrl` to `https://codex-pooler.example.com/v1`; if you keep the optional
-operator MCP add-on, change its `url` to `https://codex-pooler.example.com/mcp`.
+Restart OpenClaw and start a new conversation.
 
-OpenClaw keeps `contextWindow` as configured provider metadata and uses
-`contextTokens` as the effective runtime budget. The `828400` values above are
-long-profile examples for models whose selected Pool catalog source reports an
-872000-token raw ceiling. Provider accounts can temporarily report different
-ceilings for the same model; a selected 272000-token profile exposes `258400`
-instead. Use each model's `/v1/models.context_length` for both fields. For the
-long-profile example, the 128000-token compaction reserve starts local
-compaction at 700400 tokens. Use `gpt-6-luna` for
-background routing, keep `gpt-6-sol` as the primary model, and switch a
-session to `gpt-6-astra` only for heavy reasoning.
-
-If you prefer to keep Codex Pooler separate from OpenClaw's built-in OpenAI
-provider behavior, use a custom provider id such as `codex-pooler/gpt-6-sol`
-instead. That follows OpenClaw's generic custom-provider shape, but tools that
-look specifically for `openai/gpt-*` model refs will not see it as canonical
-OpenAI.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/openclaw/)** — background tasks, more models and advanced options.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>~/.hermes/config.yaml</code> + <code>auth.json</code></summary>
+<summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>config.yaml</code></summary>
 
 ![Codex Pooler Hermes Agent integration](.github/assets/codex-pooler-hermes.png)
 
-Hermes works best through its `openai-api` provider with the Responses transport
-forced explicitly. This is the recommended Codex Pooler setup. Keep the Pool API
-key in `~/.hermes/.env` and point the provider config at Codex Pooler's `/v1`
-surface. Include Hermes' `image_gen` block for image generation or edits and
-the `stt` block for speech-to-text through the same OpenAI-compatible path.
-The `mcp_servers` block is an optional operator-only add-on for read-only
-metadata tools; Codex Pooler works without it.
+| System | Folder for `.env` and `config.yaml` |
+| --- | --- |
+| macOS / Linux | `~/.hermes/` |
+| Windows | `%LOCALAPPDATA%\hermes\` |
 
-```bash
+Open `.env` in the folder for your system and add your Pool API key and
+Codex Pooler address. If you set `HERMES_HOME`, use that folder instead:
+
+```dotenv
 OPENAI_API_KEY=<pool-api-key>
 OPENAI_BASE_URL=http://localhost:4000/v1
-# Required for the optional speech-to-text setup below:
 STT_OPENAI_BASE_URL=http://localhost:4000/v1
-# Optional operator-only MCP metadata add-on:
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
+
+Add this to `config.yaml` in the same folder, then restart Hermes:
 
 ```yaml
 model:
@@ -749,212 +506,28 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
 ```
 
-Speech-to-text uses `POST /v1/audio/transcriptions`. Hermes' audio client needs
-`STT_OPENAI_BASE_URL`; it does not inherit `model.base_url` or `OPENAI_BASE_URL`.
-It uses `OPENAI_API_KEY` unless `VOICE_TOOLS_OPENAI_KEY` overrides it. Keep the
-explicit `gpt-4o-transcribe` model because Hermes' default `whisper-1` is not
-supported by Codex Pooler. This enables transcription only; text-to-speech and
-Realtime audio are not supported.
+This setup includes image generation and voice-to-text. To switch the chat
+model, set `model.default` to a model available to your Pool.
+Keep all three addresses pointed at your Codex Pooler instance. Your Pool must
+also offer the image and transcription models to use those features.
 
-Use an updated Hermes OpenAI image provider with GPT Image 2.5 support.
-`gpt-image-2.5-flare-medium` selects Flare with `quality: medium`; use
-`gpt-image-2.5-sunburst-medium` for Sunburst. Both offer `-low`, `-medium`,
-`-high`, `-xhigh`, and `-max` presets. These request a quality level; the Codex
-backend may return different quality or dimensions. Check provider metadata
-and the original image rather than treating Hermes' requested values as
-measured output. Older Hermes versions require an update before using these
-presets. See the [image setup guide](https://docs.codex-pooler.com/clients/hermes/)
-for details.
-
-This provider uses the OpenAI SDK environment, so `OPENAI_API_KEY` and
-`OPENAI_BASE_URL` must be visible to the running Hermes process, not only to
-the shell where you edited the config. `model.base_url` configures Hermes'
-text/model provider path; the OpenAI image provider still needs the SDK
-environment so image requests go through Codex Pooler's `/v1` surface instead
-of OpenAI directly.
-
-If text requests work but image generation fails with `invalid_api_key`, check
-the environment of the long-running Hermes process or gateway service first.
-It may not have loaded `OPENAI_BASE_URL`, so the OpenAI SDK image client may be
-using OpenAI's default endpoint instead of Codex Pooler.
-
-Current Codex Pooler releases also expose an SDK-readable `context_length` value
-on `/v1/models`, flattened from the selected native raw context window and its
-effective percentage, so Hermes' automatic probes can resolve the Pooler
-window. Treat that per-model endpoint value as authoritative because provider
-accounts can temporarily report different catalog ceilings. The `828400` value
-in this example is a long-profile fallback for a selected 872000-token source;
-a short 272000-token profile reports `258400` instead. Match any explicit
-fallback to `/v1/models`.
-
-Hermes compresses at the lower of `compression.threshold` times the context
-window and `compression.threshold_tokens`, which defaults to 256000 tokens. With
-the long-profile example, 0.95 of the window is 786980 tokens, so the
-256000-token cap applies; on a 258400-token short profile the ratio is lower and
-applies instead. Keep the default cap, since a smaller per-turn context uses
-less quota; set `compression.threshold_tokens: null` only to compress by the
-ratio alone. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout:
-900` so large retained contexts can finish instead of cycling through the older
-120-second compression budget. This is independent from the optional MCP server
-`timeout` and from an application output cap.
-
-Hermes generates session titles with a separate auxiliary call. Current Hermes
-releases send it with reasoning disabled, which overrides
-`auxiliary.title_generation.reasoning_effort`, so that key has no effect on
-titles and can be left out.
-
-Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends
-`service_tier: priority` only when the provider is `openai` on `api.openai.com`
-or `openai-codex` on `chatgpt.com`. In current Hermes releases an
-`openai-api` provider pointed at Codex Pooler never sends it, even though
-`/fast` and its tip still report fast mode as on. Codex Pooler accepts
-`service_tier: priority` (and `fast` as an alias) whenever a client sends it,
-so this is a Hermes routing rule, not a Pooler limitation. To get priority
-processing, declare a named provider under `providers:` with the same `/v1`
-base URL, `api_mode: codex_responses`, `key_env: OPENAI_API_KEY` and
-`extra_body: {service_tier: priority}`, and point `model.provider` at it; or set
-the API key's enforced service tier in Codex Pooler. Hermes adds that
-`extra_body` to main agent turns only; its auxiliary calls request no tier. See
-the [Hermes guide](https://docs.codex-pooler.com/clients/hermes/) for the
-example.
-
-When every account in a Pool is out of quota, Codex Pooler answers `429`
-`usage_limit_reached` with `resets_at` and `Retry-After`. Hermes waits for
-`Retry-After` (up to 600 seconds) before each retry and then ends the turn with
-the reset time, so `agent.api_max_retries: 2` limits a turn to one wait. A
-retryable `503` also carries `Retry-After`; `agent.auto_recovery_cycles: 1`
-keeps Hermes' recovery ladder for server errors to one extra cycle instead of
-five. If you have a second Pool API key or another Codex Pooler instance, list
-it under `fallback_providers`, using a named provider with
-`api_mode: codex_responses`; a fallback key in the same Pool does not help when
-that Pool is out of quota.
-
-Remote HTTP MCP servers require Hermes' `mcp` extra. If
-`hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
-available`, install MCP support into the Hermes environment, following the
-[Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp),
-and rerun the test.
-
-Check the one-shot model path:
-
-```bash
-hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
-```
-
-Hermes can also reach Codex Pooler through its `openai-codex` provider pointed
-at `/v1`, as an advanced option; the `openai-api` configuration above is the
-recommended setup. On this provider a few Hermes code paths use hard-coded
-`chatgpt.com` URLs and send the credential-pool key there: the context-length
-probe, the `/model` picker and the `openai-codex` image plugin. The Pool key is
-not valid there, so those requests fail, but a successful probe would also
-replace your Pool's context window
-([icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430));
-if you ran this setup without the precautions below, rotate the key as a
-precaution. Always set `model.context_length`, never use the `/model` picker or
-`image_gen.provider: openai-codex`, and keep the `OPENAI_*` variables pointed at
-`/v1` for images and speech-to-text. Web search switches to the provider's
-hosted `web_search` tool, no `service_tier` is ever sent, and an ingress that
-drops headers with underscores loses the `session_id` header. In return each
-Hermes session gets a Codex Pooler session, which the websocket bridge can use
-when owner forwarding is enabled; no prompt-cache gain over the recommended
-setup has been measured. Keep the base URL on `/v1`, not the native
-`/backend-api/codex` route. Hermes treats `openai-codex` as an OAuth provider,
-so add a Pool API key credential ahead of any device-code credential and keep
-the entry's `base_url` on `/v1`; this variant stores the key in `auth.json`
-because Hermes credential pools live there.
-
-```bash
-HERMES_CODEX_BASE_URL=http://localhost:4000/v1
-# Optional operator-only MCP metadata add-on:
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
-```
-
-```yaml
-model:
-  default: gpt-6-sol
-  provider: openai-codex
-  base_url: http://localhost:4000/v1
-  context_length: 828400
-  supports_vision: true
-
-agent:
-  image_input_mode: native
-  api_max_retries: 2
-  auto_recovery_cycles: 1
-
-compression:
-  threshold: 0.95
-
-auxiliary:
-  compression:
-    timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
-```
-
-```json
-{
-  "active_provider": "openai-codex",
-  "credential_pool": {
-    "openai-codex": [
-      {
-        "label": "codex-pooler",
-        "auth_type": "api_key",
-        "priority": -10,
-        "source": "manual",
-        "access_token": "<pool-api-key>",
-        "base_url": "http://localhost:4000/v1"
-      }
-    ]
-  }
-}
-```
-
-For deployed instances, change the model URLs to
-`https://codex-pooler.example.com/v1`; if you keep the optional operator MCP add-on,
-change the MCP `url` to `https://codex-pooler.example.com/mcp`.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/hermes/)** — images, speech-to-text, priority processing and troubleshooting.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
+<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>models.json</code></summary>
 
 ![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
 
-Pi works best through a custom provider that uses Codex Pooler's narrow
-OpenAI-compatible `/v1` Responses surface. Put custom providers and models in
-`~/.pi/agent/models.json`; put global defaults in `~/.pi/agent/settings.json`;
-use `.pi/settings.json` for project overrides; and keep saved trust decisions in
-`~/.pi/agent/trust.json`. On Windows, use the same home-relative paths under the
-user profile, for example `%USERPROFILE%\.pi\agent\models.json`.
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.pi/agent/models.json` |
+| Windows | `%USERPROFILE%\.pi\agent\models.json` |
 
-Install Pi from npm so you get the latest published CLI:
-
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-```
-
-Then add a provider to `~/.pi/agent/models.json`:
+Open `models.json` at the path for your system and add this configuration:
 
 ```json
 {
@@ -970,34 +543,28 @@ Then add a provider to `~/.pi/agent/models.json`:
           "id": "gpt-6-luna",
           "name": "GPT-6 Luna via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
           "id": "gpt-6-sol",
           "name": "GPT-6 Sol via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
           "id": "gpt-6-astra",
           "name": "GPT-6 Astra via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         }
       ]
     }
@@ -1005,75 +572,42 @@ Then add a provider to `~/.pi/agent/models.json`:
 }
 ```
 
-`authHeader: true` makes Pi send the Pool API key as
-`Authorization: Bearer ...`. Define only model ids your assigned Pool can serve.
-For deployed instances, change `baseUrl` to
-`https://codex-pooler.example.com/v1`.
-
-Current Pi source still requires the explicit `thinkingLevelMap` entry for Pi
-to expose `xhigh` in the model picker and footer. Without it, Pi treats `xhigh`
-as unsupported for a custom model and clamps `--thinking xhigh` or
-`defaultThinkingLevel: "xhigh"` to `high`.
-
-Pi accepts `contextWindow` and `maxTokens` for custom models; it has no
-`contextTokens` field. The `828400` values above are long-profile examples for
-models whose selected Pool catalog source reports an 872000-token raw ceiling.
-Provider accounts can temporarily report different ceilings for the same model;
-a selected 272000-token profile exposes `258400` instead. Use each model's
-`/v1/models.context_length` as its `contextWindow`. For the long-profile
-example, the 128000-token reserve starts compaction at 700400 tokens.
-
-Optionally set Codex Pooler as the default Pi model in
-`~/.pi/agent/settings.json`:
+Add these defaults to `settings.json` in the same folder:
 
 ```json
 {
   "defaultProvider": "codex-pooler",
   "defaultModel": "gpt-6-sol",
-  "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "codex-pooler/gpt-6-luna",
     "codex-pooler/gpt-6-sol",
     "codex-pooler/gpt-6-astra"
   ],
-  "compaction": {
-    "reserveTokens": 128000
-  }
+  "compaction": { "reserveTokens": 128000 }
 }
 ```
 
-Check the non-interactive path from a repository:
+Then start Pi:
 
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-pi --provider codex-pooler \
-  --model gpt-6-sol \
-  --no-session \
-  --no-context-files \
-  --tools bash \
-  -p 'Reply with exactly: pi ok'
+pi
 ```
 
-Pi does not ship built-in MCP support. Codex Pooler model use does not require
-MCP; if you need operator metadata, use a separate MCP-capable host with an
-operator MCP token.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/pi/)** — installation, default models and extra options.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+<summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>models.yml</code></summary>
 
 ![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
-Oh My Pi (OMP) is a Pi fork, but it should be treated as a separate Codex
-Pooler harness: it has its own package, `omp` binary, YAML config, and model
-role defaults. Install the current CLI through Bun:
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.omp/agent/models.yml` |
+| Windows | `%USERPROFILE%\.omp\agent\models.yml` |
 
-```bash
-bun install -g @oh-my-pi/pi-coding-agent
-```
-
-Then add a provider to `~/.omp/agent/models.yml`:
+Open `models.yml` at the path for your system and add this configuration:
 
 ```yaml
 providers:
@@ -1089,22 +623,18 @@ providers:
       v2StreamingEnabled: true
       v2Endpoint: http://localhost:4000/backend-api/codex/responses
     models:
-      - id: gpt-6-sol
-        name: GPT-6 Sol via Codex Pooler
+      - id: gpt-6-luna
+        name: GPT-6 Luna via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-6-luna
-        name: GPT-6 Luna via Codex Pooler
+      - id: gpt-6-sol
+        name: GPT-6 Sol via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
@@ -1112,80 +642,18 @@ providers:
       - id: gpt-6-astra
         name: GPT-6 Astra via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
 ```
 
-`apiKey: CODEX_POOLER_API_KEY` makes OMP resolve that environment variable at
-runtime. `authHeader: true` makes OMP send the Pool API key as
-`Authorization: Bearer ...`. Define only model ids your assigned Pool can
-serve. For deployed instances, change `baseUrl` to
-`https://codex-pooler.example.com/v1` and change `remoteCompaction.endpoint` to
-`https://codex-pooler.example.com/backend-api/codex/responses/compact`; change
-`remoteCompaction.v2Endpoint` to
-`https://codex-pooler.example.com/backend-api/codex/responses`.
-
-Keep `remoteCompaction` under the `codex-pooler` provider. Its `endpoint` stays
-the direct backend compact endpoint for OMP's direct compact path, while
-`v2Endpoint` is the normal backend Responses endpoint for terminal-trigger
-streaming compaction. Normal OMP model traffic stays on the narrow
-OpenAI-compatible `/v1` Responses route. Do not use
-`compaction.remoteEndpoint` for this path: OMP reserves that setting for generic
-summary services that accept `{systemPrompt, prompt}` JSON or an
-OpenAI-compatible chat-completions summary request, not provider-native
-Responses compact payloads. In this setup, `omp config get
-compaction.remoteEndpoint` should remain `(not set)`; remote capability comes
-from the provider-level `remoteCompaction` block in `models.yml`.
-
-Both V2 switches are required. Set provider-level
-`remoteCompaction.v2StreamingEnabled: true` in `models.yml` to make the model
-V2-capable, and keep global `compaction.remoteStreamingV2Enabled: true` in
-`config.yml` to allow OMP to select it. OMP sends a normal backend Responses
-request with a terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`.
-If V2 is unavailable or fails, OMP can use the configured direct compact
-endpoint before falling back to its local compaction behavior.
-
-Current OMP source derives an effort thinking surface, including `xhigh`, for
-custom `openai-responses` models that set `reasoning: true`. You only need an
-explicit `thinking` block if you want to override the inferred effort list,
-wire mapping, or per-model default level.
-
-OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept
-`contextTokens`. The `828400` values above are long-profile examples for models
-whose selected Pool catalog source reports an 872000-token raw ceiling.
-Provider accounts can temporarily report different ceilings for the same model;
-a selected 272000-token profile exposes `258400` instead. Use each model's
-`/v1/models.context_length` as its `contextWindow`, with an independent
-128000-token output budget. For the long-profile example,
-`compaction.thresholdPercent: 95` starts automatic compaction at 786980 tokens;
-`reserveTokens: 128000` configures the
-prompt-fit/recovery reserve and does not replace that percentage trigger.
-
-For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist
-handoff material to disk. Those settings reduce context-overflow risk, but they
-cannot repair an OMP client bug that skips its own mid-run compaction check. If
-an OMP plan appears to restart work after a very large turn, upgrade OMP when a
-newer release is available and restart or resume the session before treating it
-as a Codex Pooler routing issue.
-
-`compat.streamIdleTimeoutMs: 300000` keeps long OpenAI Responses reasoning turns
-from being aborted by OMP's semantic-progress idle watchdog while Codex Pooler
-and the upstream account are still working. Existing OMP sessions need to be
-restarted or resumed after this config change. As an environment-only override,
-set `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=300000` before launching `omp`.
-
-Optionally set Codex Pooler as the default OMP model roles in
-`~/.omp/agent/config.yml`:
+Add these defaults to `config.yml` in the same folder:
 
 ```yaml
 startup:
   setupWizard: false
-defaultThinkingLevel: xhigh
 enabledModels:
   - codex-pooler/gpt-6-luna
   - codex-pooler/gpt-6-sol
@@ -1193,7 +661,7 @@ enabledModels:
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-6-sol:xhigh
+  default: codex-pooler/gpt-6-sol:high
   smol: codex-pooler/gpt-6-luna:low
   tiny: codex-pooler/gpt-6-luna:minimal
   slow: codex-pooler/gpt-6-astra:xhigh
@@ -1204,27 +672,21 @@ modelRoles:
   commit: codex-pooler/gpt-6-luna:minimal
   designer: codex-pooler/gpt-6-astra:high
 compaction:
+  enabled: true
   thresholdPercent: 95
   reserveTokens: 128000
-  enabled: true
   remoteStreamingV2Enabled: true
   midTurnEnabled: true
   handoffSaveToDisk: true
 ```
 
-Check the non-interactive path from a repository:
+Then start OMP:
 
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-omp --model codex-pooler/gpt-6-sol:xhigh \
-  --no-session \
-  --tools bash \
-  -p 'Reply with exactly: omp ok'
+omp
 ```
 
-OMP ships MCP-capable tooling, but Codex Pooler model use does not require MCP.
-If you use Codex Pooler's optional operator MCP endpoint, keep the `/mcp`
-operator token separate from the Pool API key used for `/v1`.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/omp/)** — installation, model choices and long conversations.
 
 </details>
 
@@ -1233,34 +695,30 @@ operator token separate from the Pool API key used for `/v1`.
 
 ![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
 
-Connect Cursor through **OpenAI API Key** and **Override OpenAI Base URL**,
-with both switches enabled. Use your Pool API key, a public HTTPS base URL
-such as `https://codex-pooler.example.com/v1`, and an explicit model such as
-`gpt-6-luna` in a new chat.
+In **Settings → Models → API Keys**, enable **OpenAI API Key** and
+**Override OpenAI Base URL**. Enter your Pool API key and a public HTTPS URL
+such as `https://codex-pooler.example.com/v1`, then select a model available
+to your Pool.
 
-Cursor BYOK requires an active **Pro or higher** subscription. Requests pass
-through Cursor's servers, so **localhost and private LAN URLs do not work**.
-Auto mode does not prove that your Pooler endpoint is being used.
+Cursor BYOK requires **Pro or higher**. Requests pass through Cursor's
+servers, so localhost and private LAN URLs do not work. Use an explicit model
+instead of Auto mode.
 
-See the [Cursor setup guide](https://docs.codex-pooler.com/clients/cursor/)
-for prerequisites, model selection, and connection checks.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/cursor/)** — prerequisites, model selection and connection checks.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>kilo.jsonc</code></summary>
 
 ![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
-Kilo Code should use a named OpenAI-compatible provider whose base URL ends at
-Codex Pooler's `/v1` surface. Kilo Code appends `/chat/completions` itself, so do
-not put `/v1/chat/completions` in `baseURL`. Install the current CLI from npm:
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.config/kilo/kilo.jsonc` |
+| Windows | `%USERPROFILE%\.config\kilo\kilo.jsonc` |
 
-```bash
-npm install -g @kilocode/cli@latest
-```
-
-Then configure the provider in `~/.config/kilo/kilo.jsonc`:
+Open `kilo.jsonc` at the path for your system and add this configuration:
 
 ```jsonc
 {
@@ -1284,11 +742,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-sol": {
           "name": "GPT-6 Sol via Codex Pooler",
@@ -1300,11 +754,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-astra": {
           "name": "GPT-6 Astra via Codex Pooler",
@@ -1316,248 +766,99 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         }
       }
     }
-  },
-  "compaction": {
-    "reserved": 41420,
-    "threshold_percent": 95
   }
 }
 ```
 
-Kilo Code uses OpenCode-style `limit.{context,input,output}` fields, but it includes
-reasoning tokens in overflow accounting and uses `compaction.threshold_percent`
-for preflight compaction. The `828400` values above are long-profile examples
-for models whose selected Pool catalog source reports an 872000-token raw
-ceiling. Provider accounts can temporarily report different ceilings for the
-same model; a selected 272000-token profile exposes `258400` instead. Use each
-model's `/v1/models.context_length` for `limit.context` and `limit.input`. For
-the long-profile example, `compaction.reserved: 41420` and
-`threshold_percent: 95` meet at 786980 tokens.
-`limit.input` is the local pre-compaction boundary, not a simultaneous
-input-plus-output envelope. For GPT-5 OpenAI-compatible models, Kilo Code suppresses
-the outgoing max-token request field to avoid incompatible `max_tokens`, so
-`limit.output` is still important for local context math and UI even when it is
-not forwarded.
+Restart Kilo and select the Codex Pooler model.
 
-Define only model ids your assigned Pool can serve. For deployed instances,
-change `baseURL` to `https://codex-pooler.example.com/v1`. If you add Kilo Code
-permissions, use Kilo Code's object form such as `"permission": {"bash": "allow"}`;
-do not set `"permission": "ask"`, which is not a valid config shape.
-
-Check the headless tool path from an isolated directory:
-
-```bash
-validation_dir="$(mktemp -d)"
-cd "$validation_dir"
-
-export CODEX_POOLER_API_KEY=<pool-api-key>
-kilo run \
-  --model codex-pooler/gpt-6-sol \
-  --pure \
-  --auto \
-  --format json \
-  --dir "$PWD" \
-  'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
-```
-
-`--pure` keeps external plugins out of the check. `--auto` is only for trusted,
-isolated automation where Kilo Code may run approved tools without prompting. Codex
-Pooler model use does not require MCP. If you need operator metadata, use a
-separate MCP-capable host with an operator MCP token.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/kilo-code/)** — installation, model choices and extra options.
 
 </details>
 
 <details>
 <summary><img src=".github/assets/trae-favicon.png" alt="Trae logo" width="16" height="16"> Trae <code>Settings -> Models</code></summary>
 
-Trae and Trae CN are the same client family for this setup. Use Codex Pooler
-through a custom model configured for OpenAI Chat Completions. This is a
-chat-completions setup, not Codex backend compatibility and not full OpenAI API
-parity.
-
-Trae requires a Trae account session before the Models screen and agent chat
-surface are usable. Sign in to Trae first.
-
-Use a Pool API key for model requests. Do not reuse operator MCP tokens,
-browser sessions, upstream account tokens, or imported account material.
-
-```text
-Custom Request URL:
-https://codex-pooler.example.com/v1
-
-Full URL:
-off
-```
-
-Trae appends `/chat/completions` when Full URL is off. Do not end the custom
-request URL with a slash.
-
-In Trae, open Settings -> Models, add a custom model, and use these values:
+Sign in to Trae, open **Settings → Models**, and add a custom model:
 
 | Field | Value |
 | --- | --- |
 | API format | OpenAI Chat Completions |
-| Custom Request URL | `https://codex-pooler.example.com/v1` |
+| Custom Request URL | `http://localhost:4000/v1` |
 | Full URL | Off |
-| Model ID | `gpt-6-sol` or another model id served by the assigned Pool |
-| Multimodal | On when the Pool model supports image input |
-| API key | Pool API key |
+| Model ID | `gpt-6-sol` |
+| API key | Your Pool API key |
 | Model Series | Default |
-| Display Name | `GPT-6 Sol via Codex Pooler` |
-| Context Window input | `184000` |
-| Context Window output | `16000` |
-| Tool Call Rounds | `200` |
 
-In Trae CN, the same flow appears as Settings -> Models and custom
-configuration in the localized UI. Use the same URL, model id, Pool API key,
-and context values. If Full URL is enabled instead, use the full
-`https://codex-pooler.example.com/v1/chat/completions` endpoint.
+Repeat this setup with another Model ID to add more models available to your Pool.
 
-Check the Pool API key and model with a direct chat-completions request before
-saving the client model:
+Do not add a trailing slash to the URL. Save the model, turn **Auto Mode**
+off in the agent model picker, and select it under **Custom Models**.
 
-```bash
-curl -sS -X POST \
-  -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
-  -H "Content-Type: application/json" \
-  --data '{
-    "model": "gpt-6-sol",
-    "messages": [
-      { "role": "user", "content": "Reply with exactly: trae ok" }
-    ],
-    "stream": false,
-    "max_completion_tokens": 16
-  }' \
-  https://codex-pooler.example.com/v1/chat/completions
-```
-
-For local setup, use `http://localhost:4000/v1` with Full URL off. Treat the
-setup as working only when Trae's model add/check step succeeds and a real chat
-can answer `trae ok` through the configured model.
-
-After saving the custom model, open the agent model picker and turn Auto Mode
-off. The model list is hidden behind Auto Mode by default; select the Codex
-Pooler model under Custom Models.
-
-Do not point Trae at `/backend-api/codex`, `/v1/responses`, `/mcp`, or a Codex
-Pooler admin URL. Codex Pooler model use does not require MCP.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/trae/)** — Trae CN, extra settings and connection checks.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
+<summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>.aider.conf.yml</code></summary>
 
 ![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
 
-Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the
-stable route settings in `.aider.conf.yml`; Aider loads this file from your home
-directory, then the git repo root, then the current directory, with later files
-taking priority.
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.aider.conf.yml` |
+| Windows | `%USERPROFILE%\.aider.conf.yml` |
+
+Open `.aider.conf.yml` at the path for your system and add these settings:
 
 ```yaml
-# ~/.aider.conf.yml or <repo>/.aider.conf.yml
 model: openai/gpt-6-sol
 openai-api-base: http://localhost:4000/v1
 ```
 
-Aider's `.aider.conf.yml` route settings do not carry context or output limits. If your installed Aider version does not recognize `gpt-6-sol`, use Aider's separate model metadata JSON file for model behavior and limits instead of adding unsupported context fields to the main config.
+Keep the Pool API key in the environment, then start Aider from your repository:
 
-```jsonc
-// .aider.model.metadata.json
-{
-  "openai/gpt-6-luna": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-6-sol": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-6-astra": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  }
-}
-```
-
-When the Pool's `/v1/models` entry provides `context_length`, use that per-model
-effective value as the authoritative `max_tokens` value. The `828400` values
-above are long-profile examples for models whose selected Pool catalog source
-reports an 872000-token raw ceiling; the explicit 700400 input and 128000 output
-limits add up to that window. A selected 272000-token profile exposes `258400`,
-so replace all three related limits together when the endpoint differs.
-
-Keep the Pool API key out of the YAML file. Export it in the shell, or put it in
-a gitignored `.env` file that Aider can load:
+**macOS / Linux / WSL**
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+aider
 ```
 
-Check Aider from a repository with a real file edit. The command should only need
-the one-off prompt when the config file is present:
+**Windows PowerShell**
 
-```bash
-aider \
-  --message 'Create a file named aider-ok.txt containing exactly: aider ok. After the file exists, reply with exactly: aider ok' \
-  --yes-always \
-  --no-auto-commits \
-  --no-git \
-  --no-browser \
-  --no-gui \
-  --no-analytics
+```powershell
+$env:OPENAI_API_KEY = $env:CODEX_POOLER_API_KEY
+aider
 ```
 
-The check is only useful if the file exists with the expected content; a text
-reply alone does not prove Aider can edit through the configured model path.
+If Aider does not recognize the model, follow the additional setup in the
+full guide.
 
-For deployed instances, change `openai-api-base` to
-`https://codex-pooler.example.com/v1`.
+To switch models, set `model` to a model available to your Pool, keeping the
+`openai/` prefix.
+
+**[Full setup & extras](https://docs.codex-pooler.com/clients/aider/)** — additional model setup and editing files.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+<summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>config.yaml</code></summary>
 
 ![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
-Continue can use Codex Pooler as an OpenAI-compatible provider by setting
-`provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
-secret. Keep the base URL at `/v1`; the installed Continue version chooses the request endpoint.
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.continue/config.yaml` |
+| Windows | `%USERPROFILE%\.continue\config.yaml` |
 
-For local Continue configs, put the assistant in `~/.continue/config.yaml` on
-macOS/Linux or `%USERPROFILE%\.continue\config.yaml` on Windows. In the IDE
-extension, open the Continue chat sidebar, use the config selector above the chat
-input, then click the gear icon beside **Local Config**. Continue CLI resolves
-`--config` first, then its saved last-used config, then the default assistant or
-`~/.continue/config.yaml` when not logged in.
-
+Save your Pool API key in Continue as `CODEX_POOLER_API_KEY` using the
+[secret setup instructions](https://docs.codex-pooler.com/clients/continue/).
+Then open `config.yaml` at the path for your system and add this configuration:
 
 ```yaml
 name: Codex Pooler
@@ -1565,22 +866,6 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-6 Sol via Codex Pooler
-    provider: openai
-    model: gpt-6-sol
-    apiBase: http://localhost:4000/v1
-    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 828400
-    defaultCompletionOptions:
-      maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
   - name: GPT-6 Luna via Codex Pooler
     provider: openai
     model: gpt-6-luna
@@ -1589,14 +874,18 @@ models:
     contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
+  - name: GPT-6 Sol via Codex Pooler
+    provider: openai
+    model: gpt-6-sol
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
   - name: GPT-6 Astra via Codex Pooler
     provider: openai
     model: gpt-6-astra
@@ -1605,79 +894,24 @@ models:
     contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
-  - name: GPT-6 Astra via Codex Pooler
-    provider: openai
-    model: gpt-6-astra
-    apiBase: http://localhost:4000/v1
-    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 828400
-    defaultCompletionOptions:
-      maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcpServers:
-  - name: codex_pooler
-    type: streamable-http
-    url: http://localhost:4000/mcp
-    requestOptions:
-      timeout: 30000
-      headers:
-        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
 ```
 
-The configuration defines Sol, Luna, and Astra in Continue's model selector. Keep only models available to your Pool and check each model's context limit independently.
+Select this configuration and the Codex Pooler model in Continue.
 
-For deployed instances, change every model's `apiBase` to `https://codex-pooler.example.com/v1`;
-if you keep the optional operator MCP add-on, change the MCP `url` to
-`https://codex-pooler.example.com/mcp`.
-
-Continue uses `contextLength` for request pruning and
-`defaultCompletionOptions.maxTokens` for the completion budget. The `828400`
-value above is a long-profile example for a model whose selected Pool catalog
-source reports an 872000-token raw ceiling. A selected 272000-token profile
-exposes `258400` instead, so use `/v1/models.context_length` as the authoritative
-value. For the long-profile example, Continue leaves 699400 tokens for input
-after its 128000-token completion cap and fixed 1000-token counting buffer.
-
-Check the headless CLI path after saving the config:
-
-```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-npx -y @continuedev/cli@latest -p \
-  --config ~/.continue/config.yaml \
-  --silent \
-  'Reply with exactly: continue ok'
-```
-
-The Pool API key authenticates model requests. The MCP token authenticates only
-the operator metadata endpoint.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/continue/)** — saving your API key, extra settings and CLI usage.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
+<summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline</summary>
 
 ![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
 
-Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and
-stores it as `openai-compatible`. Configure it with the Pool API key, the Codex
-Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
+For Cline CLI, save the connection settings with:
+
+**macOS / Linux / WSL**
 
 ```bash
 cline auth \
@@ -1687,73 +921,32 @@ cline auth \
   --modelid gpt-6-sol
 ```
 
-Cline's model metadata names are `contextWindow`, `maxInputTokens`, and
-`maxTokens`. The `828400`/`700400`/`128000` values are a long-profile example
-for a model whose selected Pool catalog source reports an 872000-token raw
-ceiling. A selected 272000-token profile exposes `258400` instead, so use
-`/v1/models.context_length` and adjust the input budget rather than configuring
-the raw ceiling. In the long-profile example, Cline applies its fixed 90%
-compaction ratio to the
-explicit input limit, so it starts compaction at 630360 tokens. `maxTokens`
-remains a separate response cap.
+**Windows PowerShell**
 
-Check the headless CLI path after saving auth:
-
-```bash
-cline --provider openai \
-  --model gpt-6-sol \
-  --json \
-  --auto-approve false \
-  'Reply with exactly: cline ok'
+```powershell
+cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl http://localhost:4000/v1 --modelid gpt-6-sol
 ```
 
-For optional operator MCP in Cline CLI, add the remote server to
-`~/.cline/mcp.json`. Codex Pooler does not require this for model use. The VS
-Code extension opens its own MCP settings JSON from the Cline MCP Servers panel;
-use the same `mcpServers` shape there.
+Start Cline and use the saved model. In the IDE extension, choose
+**OpenAI Compatible** and enter the same address, API key and model.
 
-```json
-{
-  "mcpServers": {
-    "codex_pooler": {
-      "url": "http://localhost:4000/mcp",
-      "headers": {
-        "Authorization": "Bearer <operator-mcp-token>"
-      },
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
+Set `--modelid` to a model available to your Pool.
 
-For deployed instances, change `--baseurl` to `https://codex-pooler.example.com/v1`
-and, if you keep the optional operator MCP add-on, change the MCP `url` to
-`https://codex-pooler.example.com/mcp`.
-
-Use a Pool API key for `/v1` model requests and an operator MCP token for
-`/mcp`. Do not reuse the Pool API key for MCP.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/cline/)** — IDE setup, extra settings and connection checks.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+<summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>config.yaml</code></summary>
 
 ![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
-Configure Goose's OpenAI provider for Codex Pooler's OpenAI-compatible
-chat-completions path. Keep the Pool API key in `OPENAI_API_KEY` or Goose's
-secret storage.
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.config/goose/config.yaml` |
+| Windows | `%APPDATA%\Block\goose\config\config.yaml` |
 
-Put persistent Goose provider and extension settings in
-`~/.config/goose/config.yaml` on macOS/Linux or
-`%APPDATA%\Block\goose\config\config.yaml` on Windows. Goose also keeps
-related files in that config area: `permission.yaml` for tool permission levels,
-`secrets.yaml` when file-based secret storage is used,
-`permissions/tool_permissions.json` for runtime permission decisions, and
-`prompts/` for prompt templates. Environment variables have higher precedence
-than the config file, so `OPENAI_API_KEY` can stay outside YAML.
-
+Open `config.yaml` at the path for your system and add this configuration:
 
 ```yaml
 GOOSE_PROVIDER: openai
@@ -1762,62 +955,41 @@ OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 828400
 GOOSE_MAX_TOKENS: 128000
-GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
-Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config.
-The `828400` value above is a long-profile example for a model whose selected
-Pool catalog source reports an 872000-token raw ceiling. A selected 272000-token
-profile exposes `258400` instead, so use `/v1/models.context_length` as the
-authoritative limit. For the long-profile example, Goose's `0.95`
-auto-compaction threshold starts compaction at 786980 tokens.
+Run this in your terminal before starting Goose:
 
-Check the headless CLI path with tool access enabled:
+**macOS / Linux / WSL**
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-goose run \
-  --no-session \
-  --provider openai \
-  --model gpt-6-sol \
-  --with-builtin developer \
-  --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
 
-For optional operator MCP metadata access, add a remote Streamable HTTP
-extension. Codex Pooler model use does not require this. Goose stores remote
-extension headers in its config, so use a dedicated MCP token.
+**Windows PowerShell**
 
-```yaml
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-extensions:
-  codex_pooler:
-    enabled: true
-    type: streamable_http
-    name: codex_pooler
-    uri: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer <operator-mcp-token>"
-    timeout: 300
-    bundled: null
-    available_tools: []
+```powershell
+$env:OPENAI_API_KEY = $env:CODEX_POOLER_API_KEY
 ```
 
-For deployed instances, change `OPENAI_HOST` to `https://codex-pooler.example.com`;
-if you keep the optional operator MCP add-on, change the extension `uri` to
-`https://codex-pooler.example.com/mcp`.
+To switch models, set `GOOSE_MODEL` to a model available to your Pool.
 
-Use a Pool API key for OpenAI-compatible model requests and an operator MCP token
-for `/mcp`. Do not reuse the Pool API key for MCP.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/goose/)** — tools, extra settings and Windows setup.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>$DSH_HOME/profiles/headless/cordis.patch.yml</code></summary>
+<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>cordis.patch.yml</code></summary>
 
 ![Codex Pooler DeepSeek Harness integration](.github/assets/codex-pooler-deepseek.png)
 
-Install the current release with `npm install -g @deepseek-ai/dsh@latest` (check for a newer release when upgrading). Set `CODEX_POOLER_API_KEY` in the environment where `dsh` runs, initialize the profile with `dsh --profile headless --dump-default-config`, then add this to `$DSH_HOME/profiles/headless/cordis.patch.yml`:
+| System | Configuration file |
+| --- | --- |
+| macOS / Linux | `~/.dsh/profiles/headless/cordis.patch.yml` |
+| Windows | `%USERPROFILE%\.dsh\profiles\headless\cordis.patch.yml` |
+
+Run `dsh --profile headless --dump-default-config` once to create the
+configuration, then open `cordis.patch.yml` at the path for your system and
+add the following. If you set `DSH_HOME`, use its `profiles/headless` folder:
 
 ```yaml
 - id: llm-pi-ai
@@ -1839,14 +1011,13 @@ Install the current release with `npm install -g @deepseek-ai/dsh@latest` (check
 - id: agent-default-model
   config:
     provider: codex-pooler
-    model: gpt-6-luna
+    model: gpt-6-sol
 ```
 
-Use your deployed `/v1` URL instead of `http://localhost:4000/v1`, and only select models available to your Pool. If editing an existing patch, preserve other keys in these entries: a Cordis patch replaces an entry's complete `config`. Verify a text reply with `dsh --profile headless "Reply exactly: deepseek pooler ok"`.
+Keep any existing settings in these entries when adding the configuration.
+Start DeepSeek Harness with `dsh --profile headless`.
 
-Keep `compat.supportsStrictMode: true`: it makes ordinary tools send explicit `strict: false`, so optional arguments remain optional. When you know the upstream's output limit, you can set a per-model `maxTokens` value.
-
-Codex Pooler defaults each Pool-model pair to **Auto**: it uses Lite when routable catalog evidence reports support, otherwise Full. Full preserves ordinary Responses behavior such as parallel tool calls; select Full for this Pool-model pair when the agent needs it. This client configuration does not choose the server-side mode.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/deepseek-harness/)** — installation, tools and extra settings.
 
 </details>
 
@@ -1855,36 +1026,25 @@ Codex Pooler defaults each Pool-model pair to **Auto**: it uses Lite when routab
 
 ![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
 
-Windmill AI can use Codex Pooler through Windmill's `customai` provider. Point
-the resource at Codex Pooler's OpenAI-compatible `/v1` surface, store the Pool
-API key as a Windmill secret variable, and make the workspace AI settings use
-that resource for chat and metadata generation.
-
-Use a dedicated Pool API key for Windmill:
-
-```bash
-wmill variable add '<pool-api-key>' \
-  u/<owner>/codex_pooler_windmill_codegen \
-  --workspace <workspace>
-```
-
-Create a matching `customai` resource:
+Store a dedicated Pool API key as a Windmill secret variable, then create a
+`customai` resource that references it:
 
 ```yaml
 description: Codex Pooler API credentials for Windmill AI
 value:
-  api_key: '$var:u/<owner>/codex_pooler_windmill_codegen'
+  api_key: '$var:u/<owner>/codex_pooler'
   base_url: http://localhost:4000/v1
   headers: {}
 resource_type: customai
 ```
 
-Then set the Windmill workspace AI config to use the resource:
+In workspace AI settings, use the resource you just created and add all three
+models. The matching configuration is:
 
 ```yaml
 providers:
   customai:
-    resource_path: u/<owner>/codex_pooler_windmill_codegen
+    resource_path: u/<owner>/codex_pooler
     models:
       - gpt-6-luna
       - gpt-6-sol
@@ -1894,68 +1054,45 @@ default_model:
   model: gpt-6-sol
 metadata_model:
   provider: customai
-  model: gpt-6-sol
+  model: gpt-6-luna
 ```
 
-Windmill's agent request field is `max_completion_tokens`; provider adapters map
-that to OpenAI Responses `max_output_tokens` or chat `max_completion_tokens` as
-needed. Do not use `max_tokens` for GPT-5/O-series Windmill AI requests.
+Use a URL reachable from the Windmill server; private addresses require
+`ALLOW_PRIVATE_AI_BASE_URLS=true` on that server.
 
-For deployed Codex Pooler instances, change `base_url` to
-`https://codex-pooler.example.com/v1`. If Windmill is self-hosted and that URL
-resolves to a private or internal address from the Windmill app pod or server,
-set `ALLOW_PRIVATE_AI_BASE_URLS=true` on the Windmill app/server environment.
-
-Leave Windmill's code completion model unset unless you have separately
-configured a provider with fill-in-the-middle autocomplete support. Codex
-Pooler's `customai` setup is for Windmill chat, script/flow/app generation,
-fixes, summaries, metadata generation, and form-filling features that use chat
-completion style requests.
+**[Full setup & extras](https://docs.codex-pooler.com/clients/windmill/)** — resource creation, workspace configuration and supported features.
 
 </details>
 
 <details>
-<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands</summary>
 
 ![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
-OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1`
-surface. Keep the Pool API key in the environment, set the OpenHands base URL to
-`/v1`, and use the OpenAI model prefix that OpenHands expects. The command below
-uses `--override-with-envs`, so it does not persist Pool settings to OpenHands'
-local state.
-
-OpenHands CLI stores local state under `~/.openhands/`, created on first run.
-Current OpenHands CLI docs list `agent_settings.json` for LLM configuration and
-agent settings, `cli_config.json` for CLI preferences, `mcp.json` for MCP server
-configuration, and `conversations/` for conversation history. On Windows,
-OpenHands CLI runs through WSL in the upstream install docs, so those paths live
-in the WSL user's home directory.
+Run these commands on macOS or Linux, or inside WSL on Windows:
 
 ```bash
-export LLM_API_KEY=<pool-api-key>
+export LLM_API_KEY="$CODEX_POOLER_API_KEY"
 export LLM_BASE_URL=http://localhost:4000/v1
 export LLM_MODEL=openai/gpt-6-sol
 
-uvx --python 3.12 --from openhands openhands \
-  --headless \
-  --override-with-envs \
-  -t 'Check the repository and summarize what you can do.'
+openhands --override-with-envs
 ```
 
-For deployed instances, change `LLM_BASE_URL` to
-`https://codex-pooler.example.com/v1`. The model name should stay
-`openai/gpt-6-sol` so OpenHands selects its OpenAI-compatible provider path while
-Codex Pooler routes the request through the assigned Pool.
+These settings apply to this run. The full guide explains how to save them.
+
+To switch models, set `LLM_MODEL` to a model available to your Pool, keeping the
+`openai/` prefix.
+
+**[Full setup & extras](https://docs.codex-pooler.com/clients/openhands/)** — installation, persistent settings and model options.
 
 </details>
 
 <details>
 <summary><img src=".github/assets/python-favicon.png" alt="Python logo" width="16" height="16"> OpenAI Python SDK</summary>
 
-OpenAI Python SDK clients can use the OpenAI-compatible `/v1` surface by setting
-`base_url` to the Codex Pooler `/v1` URL and using the Pool API key as the API
-key.
+With OpenAI Python SDK installed and `CODEX_POOLER_API_KEY` set, point the
+client at Codex Pooler's `/v1` endpoint:
 
 ```python
 import os
@@ -1975,16 +1112,17 @@ response = client.responses.create(
 print(response.output_text)
 ```
 
-For deployed instances, change `base_url` to `https://codex-pooler.example.com/v1`.
+Use a model available to your Pool.
+
+**[Full setup & extras](https://docs.codex-pooler.com/clients/openai-compatible/)** — streaming, tools, media and API compatibility.
 
 </details>
 
 <details>
 <summary><img src=".github/assets/nodejs-favicon.png" alt="Node.js logo" width="16" height="16"> OpenAI Node SDK</summary>
 
-OpenAI Node SDK clients use the same OpenAI-compatible `/v1` surface. Configure
-`baseURL` with the Codex Pooler `/v1` URL and pass the Pool API key as the API
-key.
+With OpenAI Node SDK installed and `CODEX_POOLER_API_KEY` set, point the
+client at Codex Pooler's `/v1` endpoint:
 
 ```js
 import OpenAI from "openai";
@@ -2002,17 +1140,17 @@ const response = await client.responses.create({
 console.log(response.output_text);
 ```
 
-For deployed instances, change `baseURL` to `https://codex-pooler.example.com/v1`.
+Use a model available to your Pool.
+
+**[Full setup & extras](https://docs.codex-pooler.com/clients/openai-compatible/)** — streaming, tools, media and API compatibility.
 
 </details>
-
 
 <details>
 <summary><img src=".github/assets/vercel-favicon.png" alt="Vercel logo" width="16" height="16"> Vercel AI SDK</summary>
 
-Vercel AI SDK can point its OpenAI provider at Codex Pooler by creating a custom
-provider with `createOpenAI`. The provider calls the OpenAI-compatible `/v1`
-surface with the Pool API key.
+With Vercel AI SDK installed and `CODEX_POOLER_API_KEY` set, point the
+client at Codex Pooler's `/v1` endpoint:
 
 ```ts
 import { createOpenAI } from "@ai-sdk/openai";
@@ -2031,26 +1169,10 @@ const { text } = await generateText({
 console.log(text);
 ```
 
-For deployed instances, change `baseURL` to `https://codex-pooler.example.com/v1`.
+Use a model available to your Pool.
 
+**[Full setup & extras](https://docs.codex-pooler.com/clients/openai-compatible/)** — streaming, tools, media and API compatibility.
 
-`GET /v1/models` exposes `context_length` when available; treat that effective
-value as authoritative for advertised client context settings. The official OpenAI SDK request
-APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context
-controls. Use their output-budget fields only when your application needs one:
-`max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat
-Completions, and `maxOutputTokens` at the Vercel AI SDK layer.
-
-Vercel AI SDK can request explicit compaction on the normal `/v1/responses`
-route with `providerOptions.openai.store: false` and
-`providerOptions.openai.compactionTrigger: true` on a current `@ai-sdk/openai`
-release. Codex Pooler accepts exactly one final
-`compaction_trigger` after visible input and returns the compact item through
-Responses JSON, SSE, or the narrow Responses websocket surface. Replay the
-returned opaque `type: "compaction"` item at the start of a new request without
-`previous_response_id`, followed by new user input. Direct
-`POST /v1/responses/compact` remains unsupported, and `/v1/responses` rejects
-`context_management`.
 </details>
 
 <details>

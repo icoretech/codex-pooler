@@ -5,22 +5,17 @@ sidebar:
 description: Configure Trae or Trae CN with Codex Pooler's narrow OpenAI-compatible /v1 chat-completions surface and a Pool API key.
 ---
 
-Trae and Trae CN are the same client family for this setup. Use one Codex
-Pooler custom model entry through the OpenAI Chat Completions API format. This
-is a chat-completions setup, not Codex backend compatibility and not full
-OpenAI API parity.
+Trae combines an AI code editor with agent chat to help you understand and change a project. Add Codex Pooler as a custom model connection to use models available to your Pool. This guide covers the model settings for both Trae and Trae CN.
 
 ## Before you start
 
-- Trae or Trae CN installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
-
-Sign in to Trae before opening the Models screen or agent chat.
+- Install [Trae](https://www.trae.ai/download) or your regional Trae CN edition and sign in.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 ## Configure the connection
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
 
 ### Runtime shape
 
@@ -107,6 +102,8 @@ custom Codex Pooler model under **Custom Models**.
 
 First check the Pool API key and model with a direct chat-completions request:
 
+**macOS / Linux / WSL**
+
 ```bash
 curl -sS -X POST \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
@@ -120,6 +117,19 @@ curl -sS -X POST \
     "max_completion_tokens": 16
   }' \
   https://codex-pooler.example.com/v1/chat/completions
+```
+
+**Windows PowerShell**
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:CODEX_POOLER_API_KEY" }
+$body = @{
+  model = "gpt-6-sol"
+  messages = @(@{ role = "user"; content = "Reply with exactly: trae ok" })
+  stream = $false
+  max_completion_tokens = 16
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method Post -Uri "https://codex-pooler.example.com/v1/chat/completions" -Headers $headers -ContentType "application/json" -Body $body
 ```
 
 For local setup, change the URL to

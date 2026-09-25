@@ -5,27 +5,53 @@ sidebar:
 description: Connect OpenCode v2 through the native Responses provider, with explicit models, context budgets, tools and session settings.
 ---
 
-OpenCode v2 connects to Codex Pooler's narrow OpenAI-compatible `/v1` surface with a Pool API key. It supports text generation, local tools, image input, session resume, summary compaction and native provider checkpoints. Use the native Responses package below; [OpenCode v1 and OMO configuration](/clients/opencode/) remains a separate setup.
+OpenCode v2 is an open-source coding agent for working on projects from the terminal. Connect it to Codex Pooler to use your Pool's models while OpenCode reads files, runs tools and maintains your coding sessions. This guide covers v2; use the [OpenCode v1 guide](/clients/opencode/) for the earlier configuration format and OMO integration.
+
+![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
 
 ## Before you start
 
 - Install [OpenCode v2](https://opencode.ai/v2/docs/) and check `opencode --version`.
-- Create a [Pool API key](/getting-started/quick-start/) and choose models available to that Pool.
-- Make the Pooler URL and key available to the OpenCode server process. V2 normally runs a shared background service; restarting a terminal alone may not refresh its environment.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
+
+Make the Pooler URL and key available to the OpenCode server process. V2 normally runs a shared background service; restarting a terminal alone may not refresh its environment.
 
 V1 and v2 use the same executable name and configuration locations. Back up your existing configuration before replacing it. V1 plugins and server-API integrations require a separate migration.
 
 ## Configure the connection
 
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.config/opencode/opencode.jsonc` |
+| Linux | `~/.config/opencode/opencode.jsonc` |
+| Windows | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
+
+If you set `XDG_CONFIG_HOME` or a client-specific config override, use that location instead.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
 Set the key in the environment used to start OpenCode:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-Merge this native v2 configuration into `~/.config/opencode/opencode.jsonc`. The custom provider name keeps this connection separate from personal OpenAI credentials.
+**Windows PowerShell**
 
-```jsonc title="~/.config/opencode/opencode.jsonc" frame="code"
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+Merge this native v2 configuration into `opencode.jsonc` at the path for your system. The custom provider name keeps this connection separate from personal OpenAI credentials.
+
+```jsonc title="opencode.jsonc" frame="code"
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "codex-pooler/gpt-6-sol",
@@ -80,9 +106,17 @@ For a local instance, use `http://localhost:4000/v1`. Define only models your Po
 
 Read the authenticated catalog before copying a context budget:
 
+**macOS / Linux / WSL**
+
 ```bash
 curl -fsS https://codex-pooler.example.com/v1/models \
   -H "Authorization: Bearer $CODEX_POOLER_API_KEY"
+```
+
+**Windows PowerShell**
+
+```powershell
+Invoke-RestMethod -Uri "https://codex-pooler.example.com/v1/models" -Headers @{ Authorization = "Bearer $env:CODEX_POOLER_API_KEY" }
 ```
 
 Luna, Sol and Astra are example model IDs, not an availability guarantee. Use the exact `data[].id` served by your Pool and its `context_length` for both `limit.context` and `limit.input`. A long account profile can expose **828,400** tokens; a smaller profile can expose **258,400** for the same model. V2 does not automatically replace a manually configured model limit with Pooler's catalog value.

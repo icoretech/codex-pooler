@@ -9,9 +9,7 @@ head:
       {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact returns a deterministic unsupported_endpoint error. Explicit compaction is supported on normal /v1/responses requests when a client appends exactly one final compaction_trigger after visible input."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
 ---
 
-Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. It translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path used by Codex backend clients.
-
-It doesn't provide full OpenAI API parity.
+Use Codex Pooler in your own applications with the OpenAI Python and Node SDKs or the Vercel AI SDK. This guide covers the supported ways to generate text, use tools, work with images and transcribe audio with a Pool API key, along with examples you can adapt to your application.
 
 ![Codex Pooler OpenAI-compatible SDK integrations](/codex-pooler-sdks.png)
 
@@ -34,6 +32,22 @@ Bearer <pool-api-key>
 ```
 
 For local setup, use `http://localhost:4000/v1`.
+
+Set the key in the terminal used to run the SDK examples:
+
+**macOS / Linux / WSL**
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+These commands apply to the current terminal. If the application runs as a service, configure the same variable in that service's environment. The Python, JavaScript and TypeScript examples below use the same code on all supported operating systems.
 
 ## Service tier compatibility
 

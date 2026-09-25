@@ -5,21 +5,25 @@ sidebar:
 description: Configure Cline with Codex Pooler's narrow OpenAI-compatible /v1 surface and optional operator MCP metadata access.
 ---
 
-Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and stores it as `openai-compatible`. Configure it with the Pool API key, the Codex Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
+Cline is an open-source coding agent that can inspect a project, edit files and run commands as part of a task. This guide connects Cline CLI to Codex Pooler, so you can use your Pool's models for interactive coding or automated runs.
 
 ![Codex Pooler Cline integration](/codex-pooler-cline.png)
 
 ## Before you start
 
-- Cline CLI installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [Cline CLI](https://docs.cline.bot/getting-started/installing-cline) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 ## Configure the connection
 
+Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and stores it as `openai-compatible`.
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
 Run the following command in a shell with `CODEX_POOLER_API_KEY` set to your Pool API key:
+
+**macOS / Linux / WSL**
 
 ```bash
 cline auth \
@@ -27,6 +31,12 @@ cline auth \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl https://codex-pooler.example.com/v1 \
   --modelid gpt-6-sol
+```
+
+**Windows PowerShell**
+
+```powershell
+cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl https://codex-pooler.example.com/v1 --modelid gpt-6-sol
 ```
 
 For local setup, change `--baseurl` to `http://localhost:4000/v1`.
@@ -41,6 +51,8 @@ Cline's user-facing model metadata names are `contextWindow`, `maxInputTokens`, 
 
 Check the headless CLI path after saving auth:
 
+**macOS / Linux / WSL**
+
 ```bash
 cline --provider openai \
   --model gpt-6-sol \
@@ -49,13 +61,29 @@ cline --provider openai \
   'Reply with exactly: cline ok'
 ```
 
+**Windows PowerShell**
+
+```powershell
+cline --provider openai --model gpt-6-sol --json --auto-approve false 'Reply with exactly: cline ok'
+```
+
 In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.
 
 ## Operator MCP (optional)
 
-For optional operator MCP in Cline CLI, add the remote server to `~/.cline/mcp.json`. Codex Pooler does not require this for model use. The VS Code extension opens its own MCP settings JSON from the Cline MCP Servers panel; use the same `mcpServers` shape there.
+For optional operator MCP in Cline CLI, add the remote server to `mcp.json` at the path for your system:
 
-```json title="~/.cline/mcp.json" frame="code"
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.cline/mcp.json` |
+| Linux | `~/.cline/mcp.json` |
+| Windows | `%USERPROFILE%\.cline\mcp.json` |
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
+Codex Pooler does not require this for model use. The VS Code extension opens its own MCP settings JSON from the Cline MCP Servers panel; use the same `mcpServers` shape there.
+
+```json title="mcp.json" frame="code"
 {
   "mcpServers": {
     "codex_pooler": {

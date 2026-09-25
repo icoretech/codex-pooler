@@ -5,55 +5,79 @@ sidebar:
 description: Configure Pi coding agent with Codex Pooler's narrow OpenAI-compatible /v1 Responses surface, Pi models/settings file locations, and a Pool API key.
 ---
 
-Pi should use Codex Pooler through a custom provider in `~/.pi/agent/models.json`. Point that provider at the narrow OpenAI-compatible `/v1` surface, keep the Pool API key in the environment, and choose `openai-responses` so Pi sends agent turns through the Responses route.
+Pi is an extensible coding agent that works in your terminal. Use it to explore a project, edit files and run commands, with extensions and settings to adapt the workflow. Connect it to Codex Pooler to make your Pool's models available in Pi's model picker and coding sessions.
 
 ![Codex Pooler Pi integration](/codex-pooler-pi.png)
 
 ## Before you start
 
-- Pi installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
+- Install [Pi](https://pi.dev/docs/latest/quickstart) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
-
-### Install
-
-Use the current npm package:
-
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-```
-
-`--ignore-scripts` matches Pi's published install guidance and keeps dependency lifecycle scripts disabled during install.
+<a id="install"></a>
 
 ## Configure the connection
 
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
 Set the Pool API key in the shell that starts the client:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
 ### Config file path
 
-Pi docs use home-relative paths for global config and project-local `.pi` paths for overrides:
+**Global providers and models**
 
-| Path | Scope |
+| OS | Default config file |
 | --- | --- |
-| `~/.pi/agent/models.json` | Global custom providers and models |
-| `~/.pi/agent/settings.json` | Global defaults, UI behavior, resource paths, and project trust fallback |
-| `~/.pi/agent/trust.json` | Saved project trust decisions |
-| `~/.pi/agent/sessions/` | Saved sessions |
-| `.pi/settings.json` | Project settings that override and merge with global settings |
+| macOS | `~/.pi/agent/models.json` |
+| Linux | `~/.pi/agent/models.json` |
+| Windows | `%USERPROFILE%\.pi\agent\models.json` |
 
-On Windows, use the same home-relative paths under the user profile, for example `%USERPROFILE%\.pi\agent\models.json` and `%USERPROFILE%\.pi\agent\settings.json`.
+**Global defaults and preferences**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.pi/agent/settings.json` |
+| Linux | `~/.pi/agent/settings.json` |
+| Windows | `%USERPROFILE%\.pi\agent\settings.json` |
+
+**Saved project trust decisions**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.pi/agent/trust.json` |
+| Linux | `~/.pi/agent/trust.json` |
+| Windows | `%USERPROFILE%\.pi\agent\trust.json` |
+
+**Saved sessions**
+
+| OS | Default config folder |
+| --- | --- |
+| macOS | `~/.pi/agent/sessions/` |
+| Linux | `~/.pi/agent/sessions/` |
+| Windows | `%USERPROFILE%\.pi\agent\sessions\` |
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
+Project overrides belong in `.pi/settings.json` inside the project on every platform. If you set `PI_CODING_AGENT_DIR`, use that folder for the global files instead.
 
 ### Provider shape
 
 For a deployed instance, add:
 
-```json title="~/.pi/agent/models.json" frame="code"
+```json title="models.json" frame="code"
 {
   "providers": {
     "codex-pooler": {
@@ -114,9 +138,9 @@ Pi accepts `contextWindow` and `maxTokens` for custom models; it has no `context
 
 ### Default model
 
-If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults to `~/.pi/agent/settings.json`:
+If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults to `settings.json` in the same folder as `models.json`:
 
-```json title="~/.pi/agent/settings.json" frame="code"
+```json title="settings.json" frame="code"
 {
   "defaultProvider": "codex-pooler",
   "defaultModel": "gpt-6-sol",
@@ -138,6 +162,8 @@ If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults
 
 Run a one-shot prompt from the repository you want Pi to inspect:
 
+**macOS / Linux / WSL**
+
 ```bash
 pi --provider codex-pooler \
   --model gpt-6-sol \
@@ -145,6 +171,12 @@ pi --provider codex-pooler \
   --no-context-files \
   --tools bash \
   -p 'Reply with exactly: pi ok'
+```
+
+**Windows PowerShell**
+
+```powershell
+pi --provider codex-pooler --model gpt-6-sol --no-session --no-context-files --tools bash -p 'Reply with exactly: pi ok'
 ```
 
 `--no-session` keeps the check ephemeral. `--no-context-files` keeps it independent from local project instructions. For normal interactive use, omit those flags if you want Pi to load `AGENTS.md`, skills, sessions, and project settings.

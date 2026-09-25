@@ -19,9 +19,9 @@ Dedicated client guides use this section order, with sentence-case headings:
 
 Use `Client on Codex Pooler` for the page title and a short `sidebar.label` containing only the client name. Use `Kilo Code` as the product name while preserving the `kilo` executable, config paths, and package identifiers. The Codex guide uses `Codex CLI / Desktop on Codex Pooler` at `/clients/codex-cli-desktop/`; retain the old `/clients/codex-cli/` route as a redirect and update internal links and discovery indexes to the canonical route.
 
-1. A short introduction identifying the client and connection type
+1. A short introduction explaining what the client does, how people use it and what connecting it to Codex Pooler enables
 2. An optional integration banner, after the introduction and before prerequisites
-3. `Before you start`: installed client, reachable endpoint, Pool API key, and client-specific prerequisites
+3. `Before you start`: link to the client's official installation/getting-started guide, reachable endpoint, Pool API key, and client-specific prerequisites
 4. `Configure the connection`: config file or settings screen, credential setup, and the recommended configuration
 5. `Choose a model`: selection, prefixes, roles, and client-specific context/output limits
 6. `Verify the connection`: a client-side check, expected result, and matching Pooler request metadata
@@ -31,6 +31,14 @@ Use `Client on Codex Pooler` for the page title and a short `sidebar.label` cont
 10. `Compatibility notes`: client-specific limits and links to shared reference material
 
 Keep installation instructions under prerequisites and file paths beside their configuration examples. Keep optional MCP blocks outside the primary model configuration; explain how to merge them into the same file. Do not add empty sections or imply MCP support merely to fill the outline.
+
+Lead client introductions with the product and its workflow in two or three concrete sentences. Put provider ids, endpoint paths, config filenames, transport details and auth boundaries in the configuration or compatibility sections. Preserve client-specific limitations when moving them, and keep the introduction's claims within the capabilities documented and verified by the guide.
+
+Keep `Before you start` concise and consistent: point to the official installation guide for OS-specific installers and runtime requirements instead of maintaining local `npm install`, `bun install`, or equivalent instructions. Then list the reachable Pooler URL and Pool API key/model prerequisites, adding only requirements specific to that client. Preserve existing installation anchors when removing standalone install subsections. The shared SDK reference keeps its separate cross-client structure.
+
+Keep configuration paths aligned with the approved README examples: show macOS/Linux and native Windows defaults, distinguish WSL and installer-specific locations, and preserve custom home/profile overrides. Use portable filenames in code-block titles when the adjacent table supplies the full paths. Pair shell-specific setup and verification commands with PowerShell equivalents where native Windows is supported; label WSL-only procedures explicitly. Do not infer Windows paths by replacing `~` with `%USERPROFILE%`.
+
+Use two-column OS/path tables with one operating system per row, following the Codex and Continue guides. For multiple files, group separate tables by purpose instead of placing long Unix and Windows paths side by side. Keep generic model-selection prose tied to models the reader's Pool serves; explicit model lists belong in copyable configuration examples.
 
 Every configuration-file code block uses Expressive Code's explicit `title="path/to/file" frame="code"` metadata, including repeated optional snippets for the same file. Environment-file contents also use the editor frame; commands executed in a shell retain the terminal frame. Do not rely on inferred filename comments or invent filenames for UI settings, API responses, or SDK fragments. Use the same filename for snippets merged into one file and explain the merge in adjacent prose. The editor filename header is not an interactive tab; use Starlight Tabs only when readers must select between genuine alternatives.
 

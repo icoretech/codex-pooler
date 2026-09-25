@@ -5,29 +5,53 @@ sidebar:
 description: Configure DeepSeek Harness (dsh) developer preview with a custom OpenAI Responses provider pointed at Codex Pooler's narrow /v1 surface, a Pool API key, and a headless verification run.
 ---
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) is an open-source agent harness from DeepSeek AI, currently in developer preview. This guide connects its `dsh-llm-pi-ai` custom OpenAI Responses provider to Codex Pooler's narrow OpenAI-compatible `/v1` surface. The harness's built-in DeepSeek adapter is a separate direct-provider path; it is not the Codex Pooler connection described here.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) is an open-source agent platform from DeepSeek AI, built around plugins and available through a terminal or web interface. Connect it to Codex Pooler to use your Pool's models for agent tasks and local tools. This guide covers both the provider settings in the Web UI and the headless configuration.
 
 ![Codex Pooler DeepSeek Harness integration](/codex-pooler-deepseek.png)
 
 ## Before you start
 
-- Node.js installed.
-- A Codex Pooler deployment reachable from the machine running `dsh`.
-- A Pool API key and a model available to the Pool.
+- Install [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) using the official getting-started instructions.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-Install the current npm release of `dsh` globally:
+DeepSeek Harness is a developer preview. Review the upstream [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md) before running it.
 
-```bash
-npm install -g @deepseek-ai/dsh@latest
-```
-
-Check npm for a newer release when updating this setup; DeepSeek Harness is a rapidly changing developer preview and its profile and config contracts may change between releases. The upstream project documents `npx @deepseek-ai/dsh web` for starting its Web UI. For this setup, use the official [provider guide](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f4/docs/user/guide/providers.md) and [CLI reference](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f4/apps/cli/reference/README.md).
-
-Use a [Pool API key](/getting-started/quick-start/) for requests to Codex Pooler. A direct DeepSeek API key is optional only if you also want the built-in DeepSeek provider; it does not authenticate requests to Codex Pooler and is not needed for this custom provider.
-
-Before running the developer preview, review the upstream [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md). It has not been security-audited and can execute model-generated commands; use it only in a disposable or trusted workspace, do not expose untrusted data, and grant the least privilege practical for the task.
+A direct DeepSeek API key is not needed for this Codex Pooler setup. For provider and profile options, see the official [provider guide](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f4/docs/user/guide/providers.md) and [CLI reference](https://github.com/deepseek-ai/deepseek-harness/blob/477b4f4/apps/cli/reference/README.md).
 
 ## Configure the connection
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+**Settings saved by the Web UI**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.dsh/settings.yaml` |
+| Linux | `~/.dsh/settings.yaml` |
+| Windows | `%USERPROFILE%\.dsh\settings.yaml` |
+
+**Headless profile**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.dsh/profiles/headless/cordis.patch.yml` |
+| Linux | `~/.dsh/profiles/headless/cordis.patch.yml` |
+| Windows | `%USERPROFILE%\.dsh\profiles\headless\cordis.patch.yml` |
+
+**Web profile**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.dsh/profiles/web/cordis.patch.yml` |
+| Linux | `~/.dsh/profiles/web/cordis.patch.yml` |
+| Windows | `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` |
+
+`DSH_HOME` means the client data folder: `~/.dsh` on macOS/Linux or `%USERPROFILE%\.dsh` on Windows unless you changed it. The paths below use those defaults.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
 
 In the Web UI, open **Settings → Models** and choose **Add a custom provider**—separate from **Add provider**, which is for built-in catalog providers. The Models overview below shows a configured custom provider in the localhost demo.
 
@@ -39,15 +63,23 @@ Choose provider ID `codex-pooler`, optionally enter a display name, set the Base
 
 When you save, dsh stores the API key in its credentials file and settings retain only a credential reference; the UI does not show the key again.
 
-The Web UI persists provider settings to `$DSH_HOME/settings.yaml`, shared by profiles; it does not write the profile `cordis.patch.yml` shown below. Saved settings override overlapping profile fields. Keep the provider ID and model selection consistent in both places; a profile patch does not override a saved choice.
+The Web UI persists provider settings to `settings.yaml` in the data folder, shared by profiles; it does not write the profile `cordis.patch.yml` shown below. Saved settings override overlapping profile fields. Keep the provider ID and model selection consistent in both places; a profile patch does not override a saved choice.
 
 For direct configuration, set the Pool API key in the environment inherited by the `dsh` process:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-The profile patch path is `$DSH_HOME/profiles/<profile>/cordis.patch.yml`. The shipped headless profile is selected with `--profile headless`, so its file is `$DSH_HOME/profiles/headless/cordis.patch.yml`. If the profile has not yet been initialized, run the following command to create its files without making a model request; then edit the profile patch:
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+The profile patch is `profiles/<profile>/cordis.patch.yml` inside the data folder shown above. Select the shipped headless profile with `--profile headless` and edit its `cordis.patch.yml`. If the profile has not yet been initialized, run the following command to create its files without making a model request; then edit the profile patch:
 
 ```bash
 dsh --profile headless --dump-default-config
@@ -55,7 +87,7 @@ dsh --profile headless --dump-default-config
 
 For a deployed Pooler, use:
 
-```yaml title="$DSH_HOME/profiles/headless/cordis.patch.yml" frame="code"
+```yaml title="profiles/headless/cordis.patch.yml" frame="code"
 - id: llm-pi-ai
   config:
     providers:
@@ -82,11 +114,11 @@ The `apiKeyEnv` field is an environment-variable reference; do not put the key v
 
 For local setup, change `baseURL` to `http://localhost:4000/v1`. The machine running `dsh` must be able to reach the configured endpoint.
 
-Cordis patch layers replace the entire `config` for a targeted row, not just individual keys. If you already override either row, merge these fields into its existing config rather than replacing other settings. The official CLI reference documents the home-level `$DSH_HOME/cordis.patch.yml` as a later, higher-precedence layer shared across profiles; ensure it does not override the provider or selected model unexpectedly.
+Cordis patch layers replace the entire `config` for a targeted row, not just individual keys. If you already override either row, merge these fields into its existing config rather than replacing other settings. The official CLI reference documents the home-level `cordis.patch.yml` in the data folder as a later, higher-precedence layer shared across profiles; ensure it does not override the provider or selected model unexpectedly.
 
 Keep `compat.supportsStrictMode: true` for this Responses provider. In the verified client release, this allows the adapter to send explicit `strict: false` for ordinary tools. Without it, the adapter omits the flag and the provider can require optional fields, including filesystem escalation arguments, preventing an otherwise permitted workspace write. It does not grant additional filesystem permissions.
 
-For the Web profile, merge the same provider configuration into `$DSH_HOME/profiles/web/cordis.patch.yml` using the same `codex-pooler` provider ID. The provider wizard does not expose this compatibility switch. Saved settings merge over the profile configuration: an omitted compatibility field inherits the patch, while an explicitly saved value takes precedence.
+For the Web profile, merge the same provider configuration into `profiles/web/cordis.patch.yml` in the data folder using the same `codex-pooler` provider ID. The provider wizard does not expose this compatibility switch. Saved settings merge over the profile configuration: an omitted compatibility field inherits the patch, while an explicitly saved value takes precedence.
 
 ## Choose a model
 

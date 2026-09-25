@@ -3,9 +3,8 @@
 <p align="center">
   <strong>面向团队、Agent 和个人的完整自托管 Codex 网关。支持：</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
+  <a href="#opencode-setup" title="OpenCode"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/pi/" title="Pi"><img src=".github/assets/pi-favicon.png" alt="Pi" width="24" height="24"></a>
@@ -89,81 +88,147 @@ Bearer 令牌或原始 Codex 密钥。实例所有者保留全局管理界面，
 
 ## 亮点
 
-- 🔑 **稳定的 Pool API 密钥：** 给客户端一个 Pool 凭据；无论这个 Pool 当前
-  只有一个上游账号还是多个账号，都不需要分发原始 Codex 账号材料
-- 🎯 **感知资格的路由：** 将每个请求路由到拥有兼容模型支持、可用额度证据、
-  匹配健康状态、会话状态和 Pool 策略的账号
-- 🧩 **Codex 后端兼容性：** 让兼容 Codex 的客户端指向 Codex Pooler，
-  并通过分配的账号保持响应、压缩、用量、文件、音频、图片和后端 websocket
-  流正常工作
-- 🔌 **OpenAI 兼容 SDK 接口：** 让只支持 `/v1` 的应用和 Agent 工具
-  通过同一个 Pool 边界使用 Codex 容量，翻译、路由受支持的请求以帮助控制
-  API 支出
-- 🚀 **释放 Responses 的全部潜力：** 通过 Full 为 Agent 提供并行工具调用，
-  减少 API 限制，同时由 Pooler 在后台处理 Lite 兼容性。
-  [了解更多](https://docs.codex-pooler.com/reference/responses-lite-vs-full/)
-- 🔁 **感知会话的 websockets：** 保持可恢复 Codex 会话和 websocket 重连绑定到
-  正确的上游账号，而不是通过 HTTP 兼容层翻译后端 websocket 流量
-- ⚡ **Prompt-cache locality：** 使用临时 `prompt_cache_key` 优先为重复的无
-  状态请求选择同一个合格上游账号，在本地不存储提示词或响应的前提下改善
-  provider 侧缓存命中
-- 🗜️ **按 Pool 的请求压缩：** 可选地在受支持请求路由上派发前压缩发往上游
-  的 Responses 工具输出。该选项默认关闭，只作用于请求侧，并记录安全的
-  聚合节省数据，不存储原始输出
-- 🏦 **已保存 reset 管理：** 展示上游账号报告的 saved reset 容量，在可用时
-  显示信息性过期时间，并允许运营者排队账号级恢复或选择受保护的自动兑换策略
-- 🚨 **运营告警：** 为容量、上游健康、saved reset 事件和投递失败定义感知
-  Pool 的规则，并通过管理界面的告警事件、邮件或 webhook 通知运营者，同时不暴露
-  原始请求内容
-- 🖥️ **运营者仪表盘：** 管理 Pool 范围内的账号、API 密钥、邀请、已保存 resets、
-  用量、请求日志、审计日志和 MCP 访问，以及仅 owner 可见的任务、运营者和系统设置
-- 🔭 **按密钥的 Observatory：** 为任意 Pool API 密钥开启只读 Observatory 访问，
-  其持有者即可获得仅针对该密钥的实时自助仪表盘——用量、模型、延迟、缓存与花费，
-  适合放在副屏上常驻，且看不到任何运营者控制或其他密钥
-- 🛡️ **重视隐私的可观测性：** 存储请求、路由和审计元数据，而不存储提示词、
-  文件内容、音频、图片、Bearer 令牌、cookies、原始 Codex 账号令牌或原始 API 密钥
-- 🧱 **运行时入口防火墙：** 可选地将运行时流量限制为获准的客户端网络，为部署增加
-  一道安全边界
-- ⚙️ **无需改代码即可配置：** 从管理界面调整 Pool 策略、网关默认值、诊断设置、
-  模型支持、限制和运营设置
-- 🐳 **为自托管而构建：** 运行在 Elixir/Erlang 的容错运行时上，可用 Docker
-  Compose 本地启动，也可用 Helm chart 部署 web、worker、scheduler 和 migration
-  等独立角色，适合 Kubernetes 友好的多节点增长
+- 🧩 **继续使用熟悉的工具：** 连接 Codex、OpenCode 和其他受支持的编程 Agent，
+  以及使用 OpenAI 兼容 SDK 构建的应用
+- 🔑 **一个密钥连接你的应用：** 使用稳定的 Pool API 密钥连接工具，添加或更换
+  Codex 账号时无需更改密钥，也不用分享账号凭据
+- ⚡ **跨协议的高缓存复用率：** 在已观测的 HTTP/SSE 和 WebSocket 工作负载中，
+  超过 95% 的输入来自缓存，由优先复用缓存的路由和连接复用提供支持
+- 🎯 **自动选择账号：** 将请求发送给能够提供所选模型的账号，同时考虑可用额度
+  和账号状态
+- 📏 **控制每个密钥的用量：** 设置请求限制以及每日或每周的 AI 使用额度
+- 🚀 **让 Agent 发挥更多能力：** Full 模式支持同时使用多个工具，并在需要时
+  提供 Lite 兼容性
+- 🖼️ **不止文字聊天：** 在受支持的应用中使用同一个 Pool API 密钥生成或编辑图片，
+  以及将音频转录为文字
+- 🛡️ **保护对话内容：** 记录用量和排查请求问题，无需保存提示词、回复、
+  上传的文件、图片或音频
+- 🔁 **保持会话连续：** 客户端重新连接时，让受支持的会话保持关联到正确的账号
+- 🔭 **让用户查看自己的用量：** 为每个密钥开启专属 Observatory 仪表盘，
+  查看活动、响应时间和估算费用
+- 🏦 **用好已保存的重置机会：** 查看可用的额度重置次数，手动使用，
+  或启用自动使用来恢复账号额度
+- 🖥️ **在一个地方完成管理：** 通过浏览器添加账号、管理密钥和邀请、查看用量，
+  并调整设置
+- 👥 **按团队和项目管理：** 将账号分组到不同的 Pool，为每个 Pool 设置访问规则
+  和可用模型
+- 🤝 **通过邀请连接账号：** 账号持有者可以在浏览器中按步骤加入 Pool，
+  无需向你发送凭据文件
+- 🚨 **及时发现需要处理的问题：** 在仪表盘、邮件或 webhook 中接收容量不足、
+  账号异常和额度重置事件的告警
+- 🗜️ **发送更精简的请求：** 可选择在向 AI 服务商发送请求前缩减受支持的工具输出，
+  并查看节省了多少内容
+- 🧷 **补齐缺失的会话标识：** 客户端未直接发送所需标识时，根据其缓存键
+  或对话 ID 自动生成稳定的会话标识
+- 🧱 **决定谁能连接：** 可选择仅允许来自获准网络的请求
+- 🐳 **运行在自己的基础设施上：** 从 Docker Compose 起步，随需求增长
+  部署到 Kubernetes
 
 <a id="harness-configuration"></a>
 
 ## 客户端配置
 
-当客户端支持密钥展开时，把 Pool API 密钥放在环境变量中。`/mcp`
-端点是可选的、仅运营者使用的元数据检查附加能力；Codex Pooler 运行时
-客户端不需要它。如果桌面客户端会在自己的私有设置中保存远程 MCP 请求头，
-请使用专用的运营者范围 MCP 令牌。对于本地实例，URL 是：
+准备好运行中的 Codex Pooler 实例、Pool API 密钥和已安装的客户端。
+示例包含 `gpt-6-luna`、`gpt-6-sol` 和 `gpt-6-astra`，默认选择 Sol。
+请保留你的 Pool 提供的模型。
+将 `<pool-api-key>` 替换为你的密钥，在启动客户端前运行对应终端的命令。
 
-```text
-Codex backend base URL:      http://localhost:4000/backend-api/codex
-OpenAI SDK base URL:         http://localhost:4000/v1
-Optional operator MCP URL:   http://localhost:4000/mcp
+**macOS / Linux / Windows WSL（bash 或 zsh）**
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-对于已部署实例，把 `http://localhost:4000` 替换为你的部署主机，例如
-`https://codex-pooler.example.com`。
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+以上命令仅为当前终端设置密钥。桌面应用请按对应指南保存 API 密钥。
+
+下方列出默认路径。在 macOS/Linux 上，`~` 表示用户主目录。
+在 Windows 上，将以 `%USERPROFILE%`、`%APPDATA%` 或 `%LOCALAPPDATA%`
+开头的路径粘贴到文件资源管理器地址栏。如果客户端安装在 WSL 中，
+请在 WSL 内使用 Linux 路径和命令。自定义配置目录或配置档优先于这些默认路径。
+
+本地实例使用以下地址：
+
+| 客户端 | 基础 URL |
+| --- | --- |
+| Codex CLI / Desktop | `http://localhost:4000/backend-api/codex` |
+| 其他客户端和 SDK | `http://localhost:4000/v1` |
+
+对于已部署实例，将 `http://localhost:4000` 替换为实例主机，
+例如 `https://codex-pooler.example.com`。将示例合并到现有配置。
+GPT-6 示例使用 **828,400 token 的大上下文**。
+Codex CLI 和 Desktop 会自动读取 Pool 提供的上下文大小。
+
+每节只说明基本连接配置。**完整配置与扩展选项**链接提供安装、进阶选项和故障排查说明。
+运营者 MCP 为可选功能，使用独立令牌；参见[运营者 MCP 服务](#运营者-mcp-服务)。
 
 <details>
-<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>config.toml</code></summary>
 
-OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本地工具执行
-和同一会话恢复。在 OpenCode 服务进程的环境中设置
-`CODEX_POOLER_API_KEY`，然后合并以下配置：
+![Codex Pooler integration for Codex CLI and Codex Desktop](.github/assets/codex-pooler-codex.png)
+
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.codex/config.toml` |
+| Windows | `%USERPROFILE%\.codex\config.toml` |
+
+打开对应系统路径下的 `config.toml`，添加以下配置。如果设置了 `CODEX_HOME`，
+请使用该文件夹中的文件。如果已有 `[features]` 节，请将设置添加到现有节中。
+
+```toml
+model = "gpt-6-sol"
+model_provider = "codex-pooler-ws"
+
+[model_providers.codex-pooler-ws]
+name = "OpenAI"
+base_url = "http://localhost:4000/backend-api/codex"
+model_catalog_url = "http://localhost:4000/backend-api/codex/models"
+env_key = "CODEX_POOLER_API_KEY"
+wire_api = "responses"
+supports_websockets = true
+requires_openai_auth = true
+
+[features]
+api_key_model_discovery = true
+```
+
+重启 Codex，选择你的 Pool 提供的模型。
+使用 Codex Desktop 时，
+请按完整指南设置 API 密钥，使应用能够读取它。
+
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/codex-cli-desktop/)** — 桌面应用配置、账户设置和现有会话。
+
+</details>
+
+<a id="opencode-setup"></a>
+
+<details>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode logo" width="16" height="16"> OpenCode <code>opencode.jsonc</code></summary>
+
+![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
+
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.config/opencode/opencode.jsonc` |
+| Windows | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
+
+打开对应系统路径下的 `opencode.jsonc`，添加下方对应 OpenCode 版本的配置。
+
+**OpenCode v2**
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "codex-pooler/gpt-6-sol",
-  "agents": { "title": { "model": "codex-pooler/gpt-6-luna" } },
-  "compaction": {
-    "auto": true,
-    "keep": { "tokens": 15000 },
-    "buffer": 41420
+  "agents": {
+    "title": {
+      "model": "codex-pooler/gpt-6-luna"
+    }
   },
   "providers": {
     "codex-pooler": {
@@ -172,20 +237,49 @@ OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本�
         "baseURL": "http://localhost:4000/v1",
         "apiKey": "{env:CODEX_POOLER_API_KEY}",
         "transport": "http",
-        "compaction": { "type": "summary" }
+        "compaction": {
+          "type": "summary"
+        }
       },
       "models": {
         "gpt-6-luna": {
           "modelID": "gpt-6-luna",
-          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
-          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
         },
         "gpt-6-sol": {
           "modelID": "gpt-6-sol",
-          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": { "context": 828400, "input": 828400, "output": 32000 },
-          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
+        },
+        "gpt-6-astra": {
+          "modelID": "gpt-6-astra",
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": {
+            "reasoningEffort": "high",
+            "reasoningSummary": "auto"
+          }
         }
       }
     }
@@ -193,43 +287,15 @@ OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本�
 }
 ```
 
-使用你的部署 `/v1` 地址，并只配置 Pool 可用的模型。以上上下文数值是长上下文
-profile 的示例：将每个模型实际的 `/v1/models.context_length` 填入
-`limit.context` 和 `limit.input`。[v2 指南](https://docs.codex-pooler.com/clients/opencode-v2/)
-包含 Astra、上下文计算、压缩方式、协议和图片限制。
+**[OpenCode v2 完整配置与扩展选项](https://docs.codex-pooler.com/clients/opencode-v2/)** — 安装和进阶选项。
 
-此配置使用 HTTP SSE 和本地摘要 checkpoint。可通过 provider settings 选择
-Websocket 传输和原生 provider checkpoint；两种压缩模式的配置见 v2 指南。本地工具及图片输入不代表
-已启用图片生成工具。使用
-`opencode run --standalone --model codex-pooler/gpt-6-sol` 启动独立客户端
-会话；普通启动会使用共享后台服务。
-
-V2 使用 `providers`、`modelID`、`settings` 和 `capabilities`；旧版模型的
-`reasoning`/`attachment` 布尔字段以及压缩的 `prune`/`tail_turns` 会被忽略并
-产生警告。V1 插件（包括 v1 OMO 集成）需要单独迁移。V1 安装请继续使用下方配置。
-
-</details>
-
-<details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
-
-![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
-
-OpenCode 通过 OpenAI 兼容的 `/v1` 接口与 Codex Pooler 通信。在这个设置中保留
-provider id 为 `openai`，这样 OpenCode 会继续使用 OpenAI provider family 的
-行为。provider 使用 Pool API 密钥，可选的远程 MCP 条目使用运营者拥有的 MCP
-令牌。OpenCode 使用 Codex Pooler 不需要 MCP；MCP 只给运营者的 MCP host 提供
-只读元数据工具。它的 websocket 支持是 `GET /v1/responses` 这个窄 Responses
-websocket 路由，不是 OpenAI Realtime SDK 兼容性。
+**OpenCode v1**
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-6-sol",
   "small_model": "openai/gpt-6-luna",
-  "compaction": {
-    "auto": true,
-    "reserved": 41420
-  },
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai",
@@ -250,20 +316,13 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // 可选：priority processing 的费用可能高于默认层级。
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-sol": {
           "id": "gpt-6-sol",
@@ -276,20 +335,13 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // 可选：priority processing 的费用可能高于默认层级。
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-astra": {
           "id": "gpt-6-astra",
@@ -302,256 +354,35 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // 可选：priority processing 的费用可能高于默认层级。
-            // "serviceTier": "priority"
+            "include": ["reasoning.encrypted_content"]
           },
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         }
       }
-    }
-  },
-  // Optional operator-only MCP metadata add-on. Omit for normal model/runtime use.
-  "mcp": {
-    "codex_pooler": {
-      "type": "remote",
-      "url": "http://localhost:4000/mcp",
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer {env:CODEX_POOLER_MCP_KEY}"
-      },
-      "enabled": true,
-      "timeout": 30000
     }
   }
 }
 ```
 
-只定义你分配到的 Pool 能服务的模型。对于已部署实例，把 `baseURL` 改为
-`https://codex-pooler.example.com/v1`；如果保留可选的运营者 MCP 条目，把它的
-`url` 改为 `https://codex-pooler.example.com/mcp`。
-
-OpenCode 会把 `small_model` 用于自动生成会话标题等后台辅助任务。如果没有显式
-覆盖，它可能会推断出 Codex Pool 不提供的 nano 模型。请把 `small_model` 指向实际
-分配给你的 Pool 的轻量模型；加载 OMO 后，这个设置仍然有效。
-
-请求级 OpenAI 选项应放在每个模型的 `options` 配置块中。provider 级 `options`
-只保留 `baseURL` 和 `apiKey` 等连接设置。注释中的 `serviceTier` 展示了如何选择
-priority processing。仅当 Pool 和上游都支持该能力，并且你愿意承担可能更高的费用时
-才启用它；保持注释则使用默认层级。
-无需添加 `store`：Codex Pooler 会在上游流式请求中设置 `store: false`。
-
-OpenCode 会先从 `limit.input` 减去自己的压缩预留，再判断对话是否已满。上面的
-`828400` 是 long-profile 示例，适用于 Pool 选中的模型目录源报告 872000-token 原始
-上限的情况。同一模型的不同 provider account 可能暂时报告不同上限；如果选中的是
-272000-token profile，`/v1/models` 会公布 `258400`。请按每个模型的
-`/v1/models.context_length` 设置 `limit.context` 和 `limit.input`。在 long-profile
-示例中，`reserved: 41420` 会让 OpenCode 在 786980 tokens 时开始压缩。
-`limit.input` 是本地预压缩边界，不是输入和输出同时可用的
-总预算。OpenCode 的请求层默认把输出限制在 32k；只有当你希望 OpenCode 请求完整
-64k 上限时，才设置 `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000`。
-
-#### Oh My OpenAgent (OMO)
-
-如果你使用 Oh My OpenAgent，请保留上面的原生 `openai` provider 配置，并在
-`~/.config/opencode/oh-my-openagent.jsonc` 中添加 agent/category 覆盖。推荐的
-三层路由如下：
-
-| 主模型层级 | Agent 和 category | Fallback |
-|---|---|---|
-| `gpt-6-luna` | `librarian`、`explore`、`quick`、`unspecified-low` | 使用相同 reasoning variant 的 `gpt-6-sol` |
-| `gpt-6-sol` | `sisyphus`、`multimodal-looker`、`atlas`、`sisyphus-junior`、`visual-engineering`、`unspecified-high`、`writing` | 使用相同 reasoning variant 的 `gpt-6-astra` |
-| `gpt-6-astra` | `hephaestus`、`oracle`、`prometheus`、`metis`、`momus`、`ultrabrain`、`deep`、`artistry` | 使用相同 reasoning variant 的 `gpt-6-sol` |
-
-显式设置 `fallback_models` 可以让 OMO 重试始终使用分配给 Pool 的模型 id，
-而不是退回较旧的内置模型链。[OpenCode 客户端指南](https://docs.codex-pooler.com/clients/opencode/#oh-my-openagent-omo-routing)
-提供了可直接复制的完整 OMO 配置和验证命令。
+**[OpenCode v1 完整配置与扩展选项](https://docs.codex-pooler.com/clients/opencode/)** — 安装和 OMO 配置。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>CODEX_HOME/config.toml</code></summary>
-
-![Codex Pooler integration for Codex CLI and Codex Desktop](.github/assets/codex-pooler-codex.png)
-
-Codex CLI 和 Codex Desktop 应使用后端兼容路由，而不是 `/v1` SDK 路由。它们共享
-相同的 Codex 配置层和用户级 `CODEX_HOME/config.toml`，因此一个 Codex Pooler
-provider 配置块可以同时服务终端和桌面/IDE 体验。保留 provider id 为
-`codex-pooler-ws`，但 provider `name` 必须精确保持为 `OpenAI`。
-在当前 Codex 源码中，`name` 不只是显示标签：精确匹配 `OpenAI` 会启用 OpenAI
-family 行为，例如远程压缩、网页搜索/图片可用性，以及 Codex 后端请求体压缩。
-
-把 provider 和认证设置放在用户级配置文件中。Codex 会先解析 `CODEX_HOME`。
-如果未设置 `CODEX_HOME`，当前 Codex 源码在所有 OS 上都默认使用 `$HOME/.codex`，
-所以用户配置文件是 `CODEX_HOME/config.toml`。
-
-| OS | 默认配置文件 |
-| --- | --- |
-| macOS | `$HOME/.codex/config.toml` |
-| Linux | `$HOME/.codex/config.toml` |
-| Windows | `$HOME\.codex\config.toml`，通常是 `%USERPROFILE%\.codex\config.toml` |
-
-Codex 的项目本地 `.codex/config.toml` 配置层受信任 gate 控制，不会覆盖机器本地
-provider key，例如 `model_provider` 或 `model_providers`。
-
-普通 Codex CLI 和 Codex Desktop 后端行为使用 websocket provider：
-
-```toml
-model_provider = "codex-pooler-ws"
-
-[model_providers.codex-pooler-ws]
-name = "OpenAI"
-base_url = "http://localhost:4000/backend-api/codex"
-model_catalog_url = "http://localhost:4000/backend-api/codex/models"
-env_key = "CODEX_POOLER_API_KEY"
-wire_api = "responses"
-supports_websockets = true
-requires_openai_auth = true
-
-[features]
-api_key_model_discovery = true
-```
-
-当你需要为客户端检查强制非 websocket 行为，或某个 Codex 运行时无法打开后端
-websocket 流时，保留 HTTP/SSE provider：
-
-```toml
-model_provider = "codex-pooler-http"
-
-[model_providers.codex-pooler-http]
-name = "OpenAI"
-base_url = "http://localhost:4000/backend-api/codex"
-model_catalog_url = "http://localhost:4000/backend-api/codex/models"
-env_key = "CODEX_POOLER_API_KEY"
-wire_api = "responses"
-supports_websockets = false
-requires_openai_auth = true
-```
-
-对于已部署实例，把 `base_url` 改为
-`https://codex-pooler.example.com/backend-api/codex`，并把 `model_catalog_url` 改为
-`https://codex-pooler.example.com/backend-api/codex/models`。
-
-当前的 Codex 版本需要同时配置 `model_catalog_url` 和 `[features]` 下的
-`api_key_model_discovery = true` 才会读取 Pool 的模型目录（配置文件中只保留一个
-`[features]` 表）。`model_catalog_url` 请指向最终的 `https` URL，因为 Codex 在该请求上
-拒绝重定向。哪些 Codex 版本需要这项配置、以及如何确认目录已被读取，请参阅
-[Codex CLI 与 Desktop](https://docs.codex-pooler.com/clients/codex-cli-desktop/)。
-
-当 Codex 按上述配置读取 Pool 的模型目录时，Codex CLI 和 Codex Desktop 会从这些元数据
-派生有效上下文窗口和自动压缩边界。保持上下文大小自动配置，让客户端跟随每个模型的
-目录变化，避免本地覆盖过期。Provider 目录 rollout 可能按 account 分批：同一模型的
-一个 upstream 仍可能报告 272000-token maximum，而另一个已经报告 872000-token ceiling。
-Pooler 为 Pool 选择一个 canonical source cohort，并公布该 cohort 的 raw window 和
-`effective_context_window_percent`；Codex 只应用一次 percentage。因此 272000-token
-profile 的可用值是 258400，选中的 872000-token long profile 的可用值是 828400。
-较窄的 `/v1/models` surface 会把选中的有效值直接公布为 `context_length`。
-
-可选的仅运营者 MCP 元数据附加能力。普通 Codex 运行时使用时请省略：
-
-```toml
-[mcp_servers.codex_pooler]
-url = "http://localhost:4000/mcp"
-bearer_token_env_var = "CODEX_POOLER_MCP_KEY"
-```
-
-对于已部署实例，把可选 MCP `url` 改为
-`https://codex-pooler.example.com/mcp`。
-
-Codex 会按 `model_provider` 过滤可恢复对话。如果你已有使用内置 `openai`
-provider 创建的 Codex CLI 或 Codex Desktop 会话，并希望它们出现在
-`codex-pooler-ws` 下，需要同时重新标记 JSONL transcripts 和较新的 SQLite
-状态数据库。先关闭 Codex；这些命令会原地编辑本地 Codex 状态。如果你把
-HTTP provider 设为默认值，复制前只需要把目标值 `codex-pooler-ws` 替换为
-`codex-pooler-http`。
-
-#### macOS (zsh)
-
-运行这两个 zsh one-liners：
-
-```zsh
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```zsh
-for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-#### Linux (bash)
-
-运行这两个 bash one-liners：
-
-```bash
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```bash
-for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-#### Windows (PowerShell)
-
-从 PowerShell 运行相同迁移。这里要求 `sqlite3` 已在 `PATH` 中。
-
-```powershell
-$ErrorActionPreference = "Stop"
-
-$FromProvider = "openai"
-$ToProvider = "codex-pooler-ws"
-$CodexHome = Join-Path $HOME ".codex"
-
-$FromJson = '"model_provider":"' + $FromProvider + '"'
-$ToJson = '"model_provider":"' + $ToProvider + '"'
-
-Get-ChildItem -Path (Join-Path $CodexHome "sessions") -Recurse -Filter "*.jsonl" |
-  ForEach-Object {
-    $Path = $_.FullName
-    $TempPath = "$Path.tmp"
-    $Reader = [System.IO.StreamReader]::new($Path)
-    $Writer = [System.IO.StreamWriter]::new(
-      $TempPath,
-      $false,
-      [System.Text.UTF8Encoding]::new($false)
-    )
-
-    try {
-      while (($Line = $Reader.ReadLine()) -ne $null) {
-        $Writer.WriteLine($Line.Replace($FromJson, $ToJson))
-      }
-    } finally {
-      $Reader.Dispose()
-      $Writer.Dispose()
-    }
-
-    Move-Item -Force $TempPath $Path
-  }
-
-Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
-  ForEach-Object {
-    sqlite3 $_.FullName `
-      "UPDATE threads SET model_provider = '$ToProvider' WHERE model_provider = '$FromProvider';"
-  }
-```
-
-</details>
-
-<details>
-<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>~/.openclaw/openclaw.json</code></summary>
+<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>openclaw.json</code></summary>
 
 ![Codex Pooler OpenClaw integration](.github/assets/codex-pooler-openclaw.png)
 
-OpenClaw 使用 `openai/*` 作为规范 OpenAI 路由。为了保留该模型名，同时把 agent
-turn 发送到 Codex Pooler 的 OpenAI 兼容 `/v1` 接口，请把 OpenAI provider 指向
-Codex Pooler，并使用当前 OpenClaw 运行时 id。
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.openclaw/openclaw.json` |
+| Windows | `%USERPROFILE%\.openclaw\openclaw.json` |
+
+打开对应系统路径下的 `openclaw.json`，添加以下配置：
 
 ```json5
 {
@@ -559,12 +390,7 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
     defaults: {
       model: {
         primary: "openai/gpt-6-sol",
-        list: [
-          {
-            id: "background",
-            model: "openai/gpt-6-luna",
-          },
-        ],
+        list: [{ id: "background", model: "openai/gpt-6-luna" }],
       },
       compaction: { reserveTokens: 128000 },
     },
@@ -610,61 +436,35 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
       },
     },
   },
-  // Optional operator-only MCP metadata add-on. Omit for normal model/runtime use.
-  mcp: {
-    servers: {
-      codex_pooler: {
-        url: "http://localhost:4000/mcp",
-        transport: "streamable-http",
-        headers: {
-          Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}",
-        },
-      },
-    },
-  },
 }
 ```
 
-只定义你分配到的 Pool 能服务的模型。对于已部署实例，把 `baseUrl` 改为
-`https://codex-pooler.example.com/v1`；如果保留可选的运营者 MCP 附加项，把它的
-`url` 改为 `https://codex-pooler.example.com/mcp`。
+重启 OpenClaw，开始新会话。
 
-OpenClaw 把 `contextWindow` 作为配置的 provider metadata，把 `contextTokens` 作为
-有效运行时预算。上面的 `828400` 是 long-profile 示例；同一模型的不同 provider
-account 可能暂时报告不同上限，选中的 272000-token profile 会公布 `258400`。两个字段
-都应使用各模型的 `/v1/models.context_length`。在 long-profile 示例中，
-128000-token compaction reserve 会明确保留输出预算，并在 700400 tokens 时开始本地
-压缩。用 `gpt-6-luna` 跑后台路由，`gpt-6-sol` 作为主模型，只在重推理会话中
-切到 `gpt-6-astra`。
-
-如果你更希望把 Codex Pooler 与 OpenClaw 内置 OpenAI provider 行为分开，可以
-改用自定义 provider id，例如 `codex-pooler/gpt-6-sol`。这会遵循 OpenClaw 的
-通用自定义 provider 结构，但专门查找 `openai/gpt-*` model refs 的工具不会
-把它识别为规范 OpenAI。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/openclaw/)** — 后台任务、更多模型和进阶选项。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>~/.hermes/config.yaml</code> + <code>auth.json</code></summary>
+<summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>config.yaml</code></summary>
 
 ![Codex Pooler Hermes Agent integration](.github/assets/codex-pooler-hermes.png)
 
-Hermes 通过 `openai-api` provider 并显式强制 Responses 传输时效果最好。这是
-推荐的 Codex Pooler 设置。把 Pool API 密钥放在 `~/.hermes/.env` 中，并把
-provider 配置指向 Codex Pooler 的 `/v1` 接口。当你希望通过同一个 OpenAI 兼容
-路径进行图片生成或编辑时，包含 Hermes 的 `image_gen` 配置块；需要语音转文字时，
-添加 `stt` 配置块。`mcp_servers`
-配置块是可选的、仅运营者使用的只读元数据工具附加能力；没有它 Codex Pooler
-也能工作。
+| 系统 | `.env` 和 `config.yaml` 所在文件夹 |
+| --- | --- |
+| macOS / Linux | `~/.hermes/` |
+| Windows | `%LOCALAPPDATA%\hermes\` |
 
-```bash
+打开对应系统文件夹中的 `.env`，添加 Pool API 密钥和 Codex Pooler 地址。
+如果设置了 `HERMES_HOME`，请使用该文件夹：
+
+```dotenv
 OPENAI_API_KEY=<pool-api-key>
 OPENAI_BASE_URL=http://localhost:4000/v1
-# Required for the optional speech-to-text setup below:
 STT_OPENAI_BASE_URL=http://localhost:4000/v1
-# Optional operator-only MCP metadata add-on:
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
+
+将以下内容添加到同一文件夹中的 `config.yaml`，然后重启 Hermes：
 
 ```yaml
 model:
@@ -696,164 +496,27 @@ compression:
 auxiliary:
   compression:
     timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
 ```
 
-语音转文字使用 `POST /v1/audio/transcriptions`。Hermes 的音频客户端需要
-`STT_OPENAI_BASE_URL`，不会继承 `model.base_url` 或 `OPENAI_BASE_URL`。
-它使用 `OPENAI_API_KEY`，但 `VOICE_TOOLS_OPENAI_KEY` 会覆盖该密钥。请显式设置
-`gpt-4o-transcribe`，因为 Codex Pooler 不支持 Hermes 默认的 `whisper-1`。
-此配置仅启用语音转文字，不支持文字转语音或 Realtime 音频。
+此配置包含图像生成和语音转文字。要切换聊天模型，
+将 `model.default` 设置为你的 Pool 提供的模型。
+三个地址都应指向你的 Codex Pooler 实例。图像和转录功能还需要 Pool 提供对应模型。
 
-请使用支持 GPT Image 2.5 的新版 Hermes OpenAI 图片 provider。
-`gpt-image-2.5-flare-medium` 会选择 Flare 并发送 `quality: medium`；
-如需 Sunburst，请使用 `gpt-image-2.5-sunburst-medium`。两者都提供 `-low`、
-`-medium`、`-high`、`-xhigh` 和 `-max` 预设。这些值表示请求的质量等级；
-Codex 后端可能返回不同的质量或尺寸。请检查 provider 返回的元数据和原始图片，
-不要把 Hermes 请求的值当作实际输出。旧版 Hermes 需要先更新才能使用这些预设。
-详见[图片设置指南](https://docs.codex-pooler.com/clients/hermes/)。
-
-图片 provider 使用 OpenAI SDK 环境，因此 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`
-必须对正在运行的 Hermes 进程可见。`model.base_url` 只配置文本模型路径；图片请求
-仍需要 SDK 环境变量才能通过 Codex Pooler 的 `/v1`，而不是直接访问 OpenAI。
-如果文本请求正常但图片生成返回 `invalid_api_key`，请先检查网关服务的环境变量。
-
-当前 Codex Pooler release 会在 `/v1/models` 上暴露 SDK 可读取的 `context_length`，
-该值由选中的原生 raw context window 及其 effective percentage 展平而来。因为不同
-provider account 可能暂时报告不同目录上限，请把这个 per-model endpoint 值作为权威。
-示例中的 `828400` 是选中 872000-token source 时的 long-profile fallback；短的
-272000-token profile 会报告 `258400`。任何显式 fallback 都应与 `/v1/models` 匹配。
-Hermes 会在两个上限中较低的那个到达时压缩对话：`compression.threshold` 乘以上下文窗口，
-以及默认为 256000 tokens 的 `compression.threshold_tokens`。在 long-profile 示例中，
-0.95 倍窗口是 786980 tokens，因此生效的是 256000-token 上限；在 258400-token 的短 profile
-中，比例值更低，因此比例生效。请保留默认上限，因为更小的单轮上下文消耗更少配额；只有想完全按比例
-压缩时才设置 `compression.threshold_tokens: null`。Hermes 上下文
-压缩使用自己的辅助请求超时。保持 `auxiliary.compression.timeout: 900`，这样较大的
-保留上下文可以完成，而不会反复触发旧的 120 秒压缩预算。这与可选 MCP server
-`timeout` 和应用输出上限无关。
-
-Hermes 会用单独的辅助调用生成会话标题。当前的 Hermes 版本在该调用中关闭 reasoning，这会覆盖 `auxiliary.title_generation.reasoning_effort`，因此该键对标题没有作用，可以省略。
-
-Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。在当前的 Hermes 版本中，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。如需 priority 处理，可以在 `providers:` 下声明一个具名 provider，使用相同的 `/v1` base URL、`api_mode: codex_responses`、`key_env: OPENAI_API_KEY` 和 `extra_body: {service_tier: priority}`，再把 `model.provider` 指向它；或者在 Codex Pooler 中设置该 API 密钥的强制 service tier。Hermes 只会把这个 `extra_body` 加到主 agent 轮次上，辅助调用不会请求任何 tier。示例见 [Hermes 指南](https://docs.codex-pooler.com/clients/hermes/)。
-
-当 Pool 中所有账号的配额都已用尽时，Codex Pooler 会返回 `429` `usage_limit_reached`，并带上 `resets_at` 和 `Retry-After`。Hermes 每次重试前都会等待 `Retry-After`（最多 600 秒），然后以重置时间结束该轮，因此 `agent.api_max_retries: 2` 会把一轮限制为只等待一次。可重试的 `503` 也带有 `Retry-After`；`agent.auto_recovery_cycles: 1` 会把 Hermes 针对服务器错误的恢复阶梯从五个周期减少为一个额外周期。如果你有第二个 Pool API 密钥或另一个 Codex Pooler 实例，可以用一个 `api_mode: codex_responses` 的具名 provider 把它列在 `fallback_providers` 下；同一个 Pool 中的备用密钥在该 Pool 配额用尽时没有帮助。
-
-远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
-`hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
-请按照 [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp)
-在 Hermes 环境中安装 MCP 支持，然后重新运行测试。
-
-检查一次性模型路径：
-
-```bash
-hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
-```
-
-Hermes 也可以把它的 `openai-codex` provider 指向 `/v1` 来连接 Codex Pooler，这只是一个
-高级选项；上面的 `openai-api` 配置才是推荐方案。在这个 provider 上，Hermes 有几条代码路径使用
-写死的 `chatgpt.com` URL，并把凭据池中的密钥发送到那里：上下文长度探测、`/model` 选择器和
-`openai-codex` 图片插件。Pool 密钥在那里无效，所以这些请求会失败；但如果探测成功，还会用对方的
-上下文窗口替换你的 Pool 窗口
-（[icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430)）。
-如果你曾在没有下列预防措施的情况下运行这种设置，请作为预防措施轮换该密钥。务必设置
-`model.context_length`，不要使用 `/model` 选择器或 `image_gen.provider: openai-codex`，
-并让图片和语音转文字所用的 `OPENAI_*` 变量继续指向 `/v1`。网页搜索会切换为 provider 托管的
-`web_search` 工具，永远不会发送 `service_tier`，而丢弃带下划线请求头的入口代理会丢失
-`session_id` 请求头。作为回报，每个 Hermes 会话都会得到一个 Codex Pooler 会话，在启用 owner
-forwarding 时可被 websocket bridge 使用；目前没有测到相对推荐方案的 prompt cache 收益。请把
-base URL 保持在 `/v1`，不要使用原生 `/backend-api/codex` 路由。Hermes 默认把 `openai-codex`
-当作 OAuth provider，因此需要在任何 device-code 凭据之前添加 Pool API 密钥凭据，并把该条目的
-`base_url` 保持在 `/v1`；这个变体把密钥存在 `auth.json`，因为 Hermes 凭据池位于那里。
-
-```bash
-HERMES_CODEX_BASE_URL=http://localhost:4000/v1
-# Optional operator-only MCP metadata add-on:
-CODEX_POOLER_MCP_KEY=<operator-mcp-token>
-```
-
-```yaml
-model:
-  default: gpt-6-sol
-  provider: openai-codex
-  base_url: http://localhost:4000/v1
-  context_length: 828400
-  supports_vision: true
-
-agent:
-  image_input_mode: native
-  api_max_retries: 2
-  auto_recovery_cycles: 1
-
-compression:
-  threshold: 0.95
-
-auxiliary:
-  compression:
-    timeout: 900
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcp_servers:
-  codex_pooler:
-    url: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
-    enabled: true
-    timeout: 120
-    connect_timeout: 15
-```
-
-```json
-{
-  "active_provider": "openai-codex",
-  "credential_pool": {
-    "openai-codex": [
-      {
-        "label": "codex-pooler",
-        "auth_type": "api_key",
-        "priority": -10,
-        "source": "manual",
-        "access_token": "<pool-api-key>",
-        "base_url": "http://localhost:4000/v1"
-      }
-    ]
-  }
-}
-```
-
-对于已部署实例，把模型 URL 改为 `https://codex-pooler.example.com/v1`；如果
-保留可选的运营者 MCP 附加项，把 MCP `url` 改为
-`https://codex-pooler.example.com/mcp`。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/hermes/)** — 图像、语音转文字、优先处理和故障排查。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
+<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>models.json</code></summary>
 
 ![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
 
-Pi 通过一个使用 Codex Pooler 窄 OpenAI 兼容 `/v1` Responses 接口的自定义
-provider 工作得最好。把自定义 providers 和 models 放在
-`~/.pi/agent/models.json`；把全局默认值放在 `~/.pi/agent/settings.json`；用
-`.pi/settings.json` 做项目覆盖；把已保存的信任决策放在
-`~/.pi/agent/trust.json`。在 Windows 上，在用户 profile 下使用同样的 home
-相对路径，例如 `%USERPROFILE%\.pi\agent\models.json`。
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.pi/agent/models.json` |
+| Windows | `%USERPROFILE%\.pi\agent\models.json` |
 
-从 npm 安装 Pi，以获得最新发布的 CLI：
-
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-```
-
-然后在 `~/.pi/agent/models.json` 中添加 provider：
+打开对应系统路径下的 `models.json`，添加以下配置：
 
 ```json
 {
@@ -869,34 +532,28 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
           "id": "gpt-6-luna",
           "name": "GPT-6 Luna via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
           "id": "gpt-6-sol",
           "name": "GPT-6 Sol via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
           "id": "gpt-6-astra",
           "name": "GPT-6 Astra via Codex Pooler",
           "reasoning": true,
-          "thinkingLevelMap": {
-            "xhigh": "xhigh"
-          },
           "input": ["text", "image"],
           "contextWindow": 828400,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "thinkingLevelMap": { "xhigh": "xhigh" }
         }
       ]
     }
@@ -904,69 +561,42 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 }
 ```
 
-`authHeader: true` 会让 Pi 以 `Authorization: Bearer ...` 发送 Pool API 密钥。
-只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseUrl` 改为
-`https://codex-pooler.example.com/v1`。
-
-当前 Pi 源码仍然要求显式 `thinkingLevelMap` 条目，Pi 才会在模型选择器和页脚中
-暴露 `xhigh`。没有它，Pi 会把 `xhigh` 视为自定义模型不支持的选项，并把
-`--thinking xhigh` 或 `defaultThinkingLevel: "xhigh"` 降到 `high`。
-
-Pi 接受自定义模型的 `contextWindow` 和 `maxTokens`；它没有 `contextTokens` 字段。
-上面的 `828400` 是 long-profile 示例；同一模型的不同 provider account 可能暂时报告
-不同上限，选中的 272000-token profile 会公布 `258400`。请把每个模型的
-`/v1/models.context_length` 用作 `contextWindow`。在 long-profile 示例中，
-128000-token reserve 会在 700400 tokens 时开始压缩。
-
-可选地在 `~/.pi/agent/settings.json` 中把 Codex Pooler 设为默认 Pi 模型：
+将以下默认设置添加到同一文件夹中的 `settings.json`：
 
 ```json
 {
   "defaultProvider": "codex-pooler",
   "defaultModel": "gpt-6-sol",
-  "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "codex-pooler/gpt-6-luna",
     "codex-pooler/gpt-6-sol",
     "codex-pooler/gpt-6-astra"
   ],
-  "compaction": {
-    "reserveTokens": 128000
-  }
+  "compaction": { "reserveTokens": 128000 }
 }
 ```
 
-从一个仓库检查非交互路径：
+然后启动 Pi：
 
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-pi --provider codex-pooler \
-  --model gpt-6-sol \
-  --no-session \
-  --no-context-files \
-  --tools bash \
-  -p 'Reply with exactly: pi ok'
+pi
 ```
 
-Pi 不带内置 MCP 支持。Codex Pooler 模型使用不需要 MCP；如果需要运营者元数据，
-请用支持 MCP 的独立 host 和运营者 MCP 令牌。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/pi/)** — 安装、默认模型和扩展选项。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+<summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>models.yml</code></summary>
 
 ![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
-Oh My Pi (OMP) 是 Pi fork，但应作为独立的 Codex Pooler 客户端处理：它有自己
-的 package、`omp` 二进制文件、YAML 配置和模型角色默认值。通过 Bun 安装
-当前 CLI：
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.omp/agent/models.yml` |
+| Windows | `%USERPROFILE%\.omp\agent\models.yml` |
 
-```bash
-bun install -g @oh-my-pi/pi-coding-agent
-```
-
-然后在 `~/.omp/agent/models.yml` 中添加 provider：
+打开对应系统路径下的 `models.yml`，添加以下配置：
 
 ```yaml
 providers:
@@ -982,22 +612,18 @@ providers:
       v2StreamingEnabled: true
       v2Endpoint: http://localhost:4000/backend-api/codex/responses
     models:
-      - id: gpt-6-sol
-        name: GPT-6 Sol via Codex Pooler
+      - id: gpt-6-luna
+        name: GPT-6 Luna via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-6-luna
-        name: GPT-6 Luna via Codex Pooler
+      - id: gpt-6-sol
+        name: GPT-6 Sol via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
@@ -1005,69 +631,18 @@ providers:
       - id: gpt-6-astra
         name: GPT-6 Astra via Codex Pooler
         reasoning: true
-        input:
-          - text
-          - image
+        input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
 ```
 
-`apiKey: CODEX_POOLER_API_KEY` 会让 OMP 在运行时解析该环境变量。
-`authHeader: true` 会让 OMP 以 `Authorization: Bearer ...` 发送 Pool API 密钥。
-只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseUrl` 改为
-`https://codex-pooler.example.com/v1`，把 `remoteCompaction.endpoint` 改为
-`https://codex-pooler.example.com/backend-api/codex/responses/compact`，并把
-`remoteCompaction.v2Endpoint` 改为
-`https://codex-pooler.example.com/backend-api/codex/responses`。
-
-将 `remoteCompaction` 保留在 `codex-pooler` provider 下。它的 `endpoint` 继续是
-OMP 直接 compact 路径使用的后端 compact endpoint，而 `v2Endpoint` 是终端触发器
-流式 compaction 使用的普通后端 Responses endpoint。普通 OMP 模型流量仍走窄范围
-OpenAI 兼容的 `/v1` Responses 路径。不要把 `compaction.remoteEndpoint` 用于这里：
-OMP 会把该设置保留给接受 `{systemPrompt, prompt}` JSON 或 OpenAI 兼容
-chat-completions 摘要请求的通用摘要服务，而不是 provider 原生的 Responses compact
-payload。在这个配置中，`omp config get
-compaction.remoteEndpoint` 应保持为 `(not set)`；远程能力来自 `models.yml` 内
-provider 级别的 `remoteCompaction` 块。
-
-两个 V2 开关都必须启用。在 `models.yml` 中设置 provider 级别的
-`remoteCompaction.v2StreamingEnabled: true`，让模型具备 V2 能力；同时在
-`config.yml` 中保留全局 `compaction.remoteStreamingV2Enabled: true`，允许 OMP
-选择该能力。OMP 会把带有终端 `compaction_trigger` 的普通后端 Responses 请求发送到
-`remoteCompaction.v2Endpoint`。如果 V2 不可用或失败，OMP 可以先使用已配置的直接
-compact endpoint，再回退到本地 compaction 行为。
-
-当前 OMP 源码会为设置了 `reasoning: true` 的自定义 `openai-responses` 模型推导
-包含 `xhigh` 的 effort thinking 能力。只有在你要覆盖推导出的 effort 列表、wire
-映射或每个模型的默认级别时，才需要显式 `thinking` 块。
-
-OMP 在 `models.yml` 中接受 `contextWindow` 和 `maxTokens`；它不接受
-`contextTokens`。上面的 `828400` 是 long-profile 示例；同一模型的不同 provider
-account 可能暂时报告不同上限，选中的 272000-token profile 会公布 `258400`。请把
-每个模型的 `/v1/models.context_length` 用作 `contextWindow`，并保留独立的
-128000-token 输出预算。在 long-profile 示例中，`compaction.thresholdPercent: 95`
-会在 786980 tokens 时开始自动压缩；
-`reserveTokens: 128000` 配置 prompt-fit/recovery reserve，不会替代这个百分比触发器。
-
-对于大量使用工具的长 OMP 会话，保持 mid-turn compaction 开启并把 handoff
-材料持久化到磁盘。这些设置可以降低上下文溢出风险，但无法修复 OMP 客户端跳过
-自身 mid-run compaction 检查的 bug。如果 OMP plan 在非常大的 turn 后看起来
-重新开始工作，请在有新版 release 时升级 OMP，并在把它当成 Codex Pooler 路由
-问题之前重启或恢复会话。
-
-`compat.streamIdleTimeoutMs: 300000` 会防止长 OpenAI Responses 推理 turn
-在 Codex Pooler 和上游账号仍在工作时被 OMP 的语义进度空闲 watchdog 中止。
-已有 OMP 会话需要在该配置变更后重启或恢复。作为仅环境变量的覆盖，可在启动
-`omp` 前设置 `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=300000`。
-
-可选地在 `~/.omp/agent/config.yml` 中把 Codex Pooler 设为默认 OMP 模型角色：
+将以下默认设置添加到同一文件夹中的 `config.yml`：
 
 ```yaml
 startup:
   setupWizard: false
-defaultThinkingLevel: xhigh
 enabledModels:
   - codex-pooler/gpt-6-luna
   - codex-pooler/gpt-6-sol
@@ -1075,7 +650,7 @@ enabledModels:
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-6-sol:xhigh
+  default: codex-pooler/gpt-6-sol:high
   smol: codex-pooler/gpt-6-luna:low
   tiny: codex-pooler/gpt-6-luna:minimal
   slow: codex-pooler/gpt-6-astra:xhigh
@@ -1086,27 +661,21 @@ modelRoles:
   commit: codex-pooler/gpt-6-luna:minimal
   designer: codex-pooler/gpt-6-astra:high
 compaction:
+  enabled: true
   thresholdPercent: 95
   reserveTokens: 128000
-  enabled: true
   remoteStreamingV2Enabled: true
   midTurnEnabled: true
   handoffSaveToDisk: true
 ```
 
-从一个仓库检查非交互路径：
+然后启动 OMP：
 
 ```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-omp --model codex-pooler/gpt-6-sol:xhigh \
-  --no-session \
-  --tools bash \
-  -p 'Reply with exactly: omp ok'
+omp
 ```
 
-OMP 带有支持 MCP 的工具，但 Codex Pooler 模型使用不需要 MCP。如果使用 Codex
-Pooler 可选的运营者 MCP 端点，请把 `/mcp` 运营者令牌与用于 `/v1` 的 Pool API
-密钥分开。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/omp/)** — 安装、模型选择和长会话。
 
 </details>
 
@@ -1115,33 +684,28 @@ Pooler 可选的运营者 MCP 端点，请把 `/mcp` 运营者令牌与用于 `/
 
 ![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
 
-在 Cursor 中启用 **OpenAI API Key** 和 **Override OpenAI Base URL** 两个开关。
-使用 Pool API key、公开可访问的 HTTPS base URL（例如
-`https://codex-pooler.example.com/v1`），并在新聊天中明确选择
-`gpt-6-luna` 等模型。
+在 **Settings → Models → API Keys** 中启用 **OpenAI API Key** 和
+**Override OpenAI Base URL**。输入 Pool API 密钥和公开 HTTPS URL，
+例如 `https://codex-pooler.example.com/v1`，然后在新聊天中选择你的 Pool 提供的模型。
 
-Cursor BYOK 需要有效的 **Pro 或更高订阅**。请求会经过 Cursor 的服务器，
-因此 **localhost 和私有局域网地址不可用**。Auto 模式不能证明请求使用了 Pooler。
+Cursor BYOK 需要 **Pro 或更高订阅**。请求经过 Cursor 服务器，
+因此 localhost 和私有局域网 URL 无法使用。请选择具体模型，不要使用 Auto 模式。
 
-前置条件、模型选择和连接检查请参阅
-[Cursor 配置指南](https://docs.codex-pooler.com/clients/cursor/)。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/cursor/)** — 前置条件、模型选择和连接检查。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>kilo.jsonc</code></summary>
 
 ![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
-Kilo Code 应使用一个具名 OpenAI 兼容 provider，其 base URL 结束于 Codex Pooler
-的 `/v1` 接口。Kilo Code 会自己追加 `/chat/completions`，所以不要在
-`baseURL` 中写 `/v1/chat/completions`。从 npm 安装当前 CLI：
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.config/kilo/kilo.jsonc` |
+| Windows | `%USERPROFILE%\.config\kilo\kilo.jsonc` |
 
-```bash
-npm install -g @kilocode/cli@latest
-```
-
-然后在 `~/.config/kilo/kilo.jsonc` 中配置 provider：
+打开对应系统路径下的 `kilo.jsonc`，添加以下配置：
 
 ```jsonc
 {
@@ -1165,11 +729,7 @@ npm install -g @kilocode/cli@latest
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-sol": {
           "name": "GPT-6 Sol via Codex Pooler",
@@ -1181,11 +741,7 @@ npm install -g @kilocode/cli@latest
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
         "gpt-6-astra": {
           "name": "GPT-6 Astra via Codex Pooler",
@@ -1197,233 +753,97 @@ npm install -g @kilocode/cli@latest
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "limit": {
-            "context": 828400,
-            "input": 828400,
-            "output": 64000
-          }
+          "limit": { "context": 828400, "input": 828400, "output": 64000 }
         }
       }
     }
-  },
-  "compaction": {
-    "reserved": 41420,
-    "threshold_percent": 95
   }
 }
 ```
 
-Kilo Code 使用 OpenCode 风格的 `limit.{context,input,output}` 字段，但它会把推理
-tokens 纳入溢出计算，并使用 `compaction.threshold_percent` 进行预检压缩。上面的
-`828400` 是 long-profile 示例；选中的 272000-token profile 会公布 `258400`。请按
-每个模型的 `/v1/models.context_length` 设置 `limit.context` 和 `limit.input`。
-在 long-profile 示例中，`compaction.reserved: 41420` 和
-`threshold_percent: 95` 会在 786980 tokens 时触发。`limit.input`
-是本地预压缩边界，不是输入和输出同时可用的总预算。对 GPT-5 OpenAI 兼容模型，Kilo Code
-会抑制发出的 max-token 请求字段，以避免不兼容的 `max_tokens`，因此即使
-`limit.output` 不会被转发，它仍对本地上下文计算和 UI 很重要。
+重启 Kilo，选择 Codex Pooler 模型。
 
-只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseURL` 改为
-`https://codex-pooler.example.com/v1`。如果添加 Kilo Code 权限，请使用 Kilo Code 的对象
-形式，例如 `"permission": {"bash": "allow"}`；不要设置 `"permission": "ask"`，
-那不是有效配置结构。
-
-从隔离目录检查无头工具路径：
-
-```bash
-mkdir -p /tmp/codex-pooler-kilo-check
-cd /tmp/codex-pooler-kilo-check
-
-export CODEX_POOLER_API_KEY=<pool-api-key>
-kilo run \
-  --model codex-pooler/gpt-6-sol \
-  --pure \
-  --auto \
-  --format json \
-  --dir "$PWD" \
-  'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
-```
-
-`--pure` 会把外部插件排除在检查外。`--auto` 只用于可信、隔离的自动化场景，
-其中 Kilo Code 可以不提示就运行已批准的工具。Codex Pooler 模型使用不需要 MCP。
-如果需要运营者元数据，请用支持 MCP 的独立 host 和运营者 MCP 令牌。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/kilo-code/)** — 安装、模型选择和扩展选项。
 
 </details>
 
 <details>
 <summary><img src=".github/assets/trae-favicon.png" alt="Trae logo" width="16" height="16"> Trae <code>Settings -> Models</code></summary>
 
-Trae 和 Trae CN 在这个设置中属于同一客户端家族。通过配置为 OpenAI Chat
-Completions 的自定义模型使用 Codex Pooler。这是 chat-completions 设置，不是
-Codex 后端兼容，也不是完整 OpenAI API 等价实现。
-
-Trae 需要先有 Trae 账号会话，Models 界面和 agent chat 界面才可用。
-请先登录 Trae。
-
-模型请求使用 Pool API 密钥。不要复用运营者 MCP 令牌、浏览器会话、上游账号令牌
-或导入的账号材料。
-
-```text
-Custom Request URL:
-https://codex-pooler.example.com/v1
-
-Full URL:
-off
-```
-
-Full URL 关闭时，Trae 会追加 `/chat/completions`。不要让自定义请求 URL 以
-斜杠结尾。
-
-在 Trae 中打开 Settings -> Models，添加自定义模型，并使用这些值：
+登录 Trae，打开 **Settings → Models**，添加自定义模型：
 
 | 字段 | 值 |
 | --- | --- |
 | API format | OpenAI Chat Completions |
-| Custom Request URL | `https://codex-pooler.example.com/v1` |
+| Custom Request URL | `http://localhost:4000/v1` |
 | Full URL | Off |
-| Model ID | `gpt-6-sol` 或分配到的 Pool 可服务的另一个模型 id |
-| Multimodal | 当 Pool 模型支持图片输入时开启 |
-| API key | Pool API 密钥 |
+| Model ID | `gpt-6-sol` |
+| API key | 你的 Pool API 密钥 |
 | Model Series | Default |
-| Display Name | `GPT-6 Sol via Codex Pooler` |
-| Context Window input | `184000` |
-| Context Window output | `16000` |
-| Tool Call Rounds | `200` |
 
-在 Trae CN 中，同一流程显示为 Settings -> Models 和本地化 UI 中的自定义配置。
-使用相同的 URL、模型 id、Pool API 密钥和上下文值。如果改为启用 Full URL，请使用
-完整的 `https://codex-pooler.example.com/v1/chat/completions` 端点。
+要添加更多模型，重复以上步骤，将 Model ID 改为你的 Pool 提供的其他模型。
 
-保存客户端模型前，用直接 chat-completions 请求检查 Pool API 密钥和模型：
+URL 末尾不要加斜杠。保存模型后，在 agent 模型选择器中关闭 **Auto Mode**，
+然后在 **Custom Models** 中选择该模型。
 
-```bash
-curl -sS -X POST \
-  -H "Authorization: Bearer $CODEX_POOLER_API_KEY" \
-  -H "Content-Type: application/json" \
-  --data '{
-    "model": "gpt-6-sol",
-    "messages": [
-      { "role": "user", "content": "Reply with exactly: trae ok" }
-    ],
-    "stream": false,
-    "max_completion_tokens": 16
-  }' \
-  https://codex-pooler.example.com/v1/chat/completions
-```
-
-本地设置使用 `http://localhost:4000/v1`，并关闭 Full URL。只有当 Trae 的模型
-添加/检查步骤成功，且真实 chat 能通过配置模型回答 `trae ok`，才应认为设置有效。
-
-保存自定义模型后，打开 agent 模型选择器并关闭 Auto Mode。模型列表默认被 Auto
-Mode 隐藏；在 Custom Models 下选择 Codex Pooler 模型。
-
-不要把 Trae 指向 `/backend-api/codex`、`/v1/responses`、`/mcp` 或 Codex Pooler
-管理 URL。Codex Pooler 模型使用不需要 MCP。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/trae/)** — Trae CN、额外设置和连接检查。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
+<summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>.aider.conf.yml</code></summary>
 
 ![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
 
-Aider 使用带 `openai/` 模型前缀的 OpenAI 兼容路由。把稳定路由设置放在
-`.aider.conf.yml`；Aider 会从你的 home directory、git repo root、
-当前目录依次加载该文件，后加载的文件优先。
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.aider.conf.yml` |
+| Windows | `%USERPROFILE%\.aider.conf.yml` |
+
+打开对应系统路径下的 `.aider.conf.yml`，添加以下设置：
 
 ```yaml
-# ~/.aider.conf.yml or <repo>/.aider.conf.yml
 model: openai/gpt-6-sol
 openai-api-base: http://localhost:4000/v1
 ```
 
-`.aider.conf.yml` 只保存 Aider 路由设置，不保存上下文或输出限制。如果当前
-Aider 版本不识别 `gpt-6-sol`，请用 Aider 独立的模型 metadata JSON 文件定义
-模型行为和限制，不要把不支持的上下文字段加到主配置中。
+将 Pool API 密钥保存在环境变量中，然后从项目目录启动 Aider：
 
-```jsonc
-// .aider.model.metadata.json
-{
-  "openai/gpt-6-luna": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-6-sol": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-6-astra": {
-    "max_tokens": 828400,
-    "max_input_tokens": 700400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  }
-}
-```
-
-当 Pool 的 `/v1/models` 条目提供 `context_length` 时，使用这个 per-model 有效值作为
-权威 `max_tokens` 值。上面的 `828400` 是 selected source 报告 872000-token raw
-ceiling 时的 long-profile 示例，700400 输入和 128000 输出限制相加就是这个窗口。
-选中的 272000-token profile 会公布 `258400`；endpoint 不同时应一起调整三个限制。
-
-不要把 Pool API 密钥放进 YAML 文件。请在 shell 中 export，或放进 Aider 可加载的
-已被 git 忽略的 `.env` 文件：
+**macOS / Linux / WSL**
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+aider
 ```
 
-从仓库中用真实文件编辑检查 Aider。配置文件存在时，命令应只需要一次性提示词：
+**Windows PowerShell**
 
-```bash
-aider \
-  --message 'Create a file named aider-ok.txt containing exactly: aider ok. After the file exists, reply with exactly: aider ok' \
-  --yes-always \
-  --no-auto-commits \
-  --no-git \
-  --no-browser \
-  --no-gui \
-  --no-analytics
+```powershell
+$env:OPENAI_API_KEY = $env:CODEX_POOLER_API_KEY
+aider
 ```
 
-只有当文件确实存在并且内容符合预期时，这个检查才有意义；单纯文本回复不能证明
-Aider 能通过配置好的模型路径进行编辑。
+如果 Aider 无法识别模型，请按完整指南完成额外配置。
 
-对于已部署实例，把 `openai-api-base` 改为
-`https://codex-pooler.example.com/v1`。
+更换模型时，将 `model` 设置为你的 Pool 提供的模型，并保留 `openai/` 前缀。
+
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/aider/)** — 额外模型配置和文件编辑。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+<summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>config.yaml</code></summary>
 
 ![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
-Continue 可以通过设置 `provider: openai`、把 `apiBase` 指向 `/v1`、并把 Pool
-API 密钥作为 Continue secret，来把 Codex Pooler 用作 OpenAI 兼容 provider。
-基础 URL 保持为 `/v1`；请求端点由安装的 Continue 版本选择。
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.continue/config.yaml` |
+| Windows | `%USERPROFILE%\.continue\config.yaml` |
 
-本地 Continue 配置放在 macOS/Linux 的 `~/.continue/config.yaml`，或 Windows
-的 `%USERPROFILE%\.continue\config.yaml`。在 IDE extension 中，打开 Continue
-chat 侧边栏，使用 chat 输入框上方的配置选择器，然后点击 **Local Config**
-旁边的齿轮图标。Continue CLI 会先解析 `--config`，再解析保存的上次使用配置，
-最后在未登录时使用默认 assistant 或 `~/.continue/config.yaml`。
+按[密钥设置说明](https://docs.codex-pooler.com/clients/continue/)，
+在 Continue 中将 Pool API 密钥保存为 `CODEX_POOLER_API_KEY`。
+然后打开对应系统路径下的 `config.yaml`，添加以下配置：
 
 ```yaml
 name: Codex Pooler
@@ -1431,22 +851,6 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-6 Sol via Codex Pooler
-    provider: openai
-    model: gpt-6-sol
-    apiBase: http://localhost:4000/v1
-    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 828400
-    defaultCompletionOptions:
-      maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
   - name: GPT-6 Luna via Codex Pooler
     provider: openai
     model: gpt-6-luna
@@ -1455,14 +859,18 @@ models:
     contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
+  - name: GPT-6 Sol via Codex Pooler
+    provider: openai
+    model: gpt-6-sol
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    contextLength: 828400
+    defaultCompletionOptions:
+      maxTokens: 128000
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
   - name: GPT-6 Astra via Codex Pooler
     provider: openai
     model: gpt-6-astra
@@ -1471,77 +879,24 @@ models:
     contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
-  - name: GPT-6 Astra via Codex Pooler
-    provider: openai
-    model: gpt-6-astra
-    apiBase: http://localhost:4000/v1
-    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 828400
-    defaultCompletionOptions:
-      maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcpServers:
-  - name: codex_pooler
-    type: streamable-http
-    url: http://localhost:4000/mcp
-    requestOptions:
-      timeout: 30000
-      headers:
-        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
 ```
 
-此配置在 Continue 的模型选择器中定义 Sol、Luna 和 Astra。只保留 Pool 可用的模型，并分别确认每个模型的上下文限制。
+在 Continue 中选择此配置和 Codex Pooler 模型。
 
-对于已部署实例，把每个模型的 `apiBase` 改为 `https://codex-pooler.example.com/v1`；如果
-保留可选的运营者 MCP 附加项，把 MCP `url` 改为
-`https://codex-pooler.example.com/mcp`。
-
-Continue 使用 `contextLength` 做请求裁剪，并使用
-`defaultCompletionOptions.maxTokens` 作为 completion 预算。上面的 `828400` 是
-long-profile 示例；选中的 272000-token profile 会公布 `258400`，所以请使用
-`/v1/models.context_length` 作为权威值。在 long-profile 示例中，
-128000-token completion cap 和固定 1000-token counting buffer 后，Continue 留下
-699400 tokens 作为输入。
-
-保存配置后检查无头 CLI 路径：
-
-```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-npx -y @continuedev/cli@latest -p \
-  --config ~/.continue/config.yaml \
-  --silent \
-  'Reply with exactly: continue ok'
-```
-
-Pool API 密钥用于认证模型请求。MCP 令牌只认证运营者元数据端点。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/continue/)** — API 密钥保存、额外设置和 CLI 用法。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
+<summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline</summary>
 
 ![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
 
-Cline CLI 接受 `openai` 作为 OpenAI 兼容 provider 的简写，并把它保存为
-`openai-compatible`。用 Pool API 密钥、Codex Pooler `/v1` base URL，以及你分配到
-的 Pool 能服务的模型 id 配置它。
+使用以下命令保存 Cline CLI 的连接设置：
+
+**macOS / Linux / WSL**
 
 ```bash
 cline auth \
@@ -1551,66 +906,32 @@ cline auth \
   --modelid gpt-6-sol
 ```
 
-Cline 的模型元数据名是 `contextWindow`、`maxInputTokens` 和 `maxTokens`。这里的
-`828400`/`700400`/`128000` 是 long-profile 示例；选中的 272000-token profile 会
-公布 `258400`。请使用 `/v1/models.context_length` 并相应调整输入预算，而不是配置
-raw ceiling。在 long-profile 示例中，Cline 会把固定的 90% 压缩比例应用于显式输入
-限制，因此会在 630360 tokens 时开始压缩。`maxTokens` 仍是独立的响应上限。
+**Windows PowerShell**
 
-保存认证后检查无头 CLI 路径：
-
-```bash
-cline --provider openai \
-  --model gpt-6-sol \
-  --json \
-  --auto-approve false \
-  'Reply with exactly: cline ok'
+```powershell
+cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl http://localhost:4000/v1 --modelid gpt-6-sol
 ```
 
-对于 Cline CLI 中可选的运营者 MCP，把远程 server 加到
-`~/.cline/mcp.json`。Codex Pooler 模型使用不需要它。VS Code extension 会从
-Cline MCP Servers 面板打开自己的 MCP 设置 JSON；在那里使用同样的 `mcpServers`
-结构。
+启动 Cline 并使用保存的模型。在 IDE 扩展中选择 **OpenAI Compatible**，
+输入相同的地址、API 密钥和模型。
 
-```json
-{
-  "mcpServers": {
-    "codex_pooler": {
-      "url": "http://localhost:4000/mcp",
-      "headers": {
-        "Authorization": "Bearer <operator-mcp-token>"
-      },
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
+将 `--modelid` 设置为你的 Pool 提供的模型。
 
-对于已部署实例，把 `--baseurl` 改为 `https://codex-pooler.example.com/v1`；如果
-保留可选的运营者 MCP 附加项，把 MCP `url` 改为
-`https://codex-pooler.example.com/mcp`。
-
-`/v1` 模型请求使用 Pool API 密钥，`/mcp` 使用运营者 MCP 令牌。不要把 Pool API
-密钥复用给 MCP。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/cline/)** — IDE 配置、额外设置和连接检查。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+<summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>config.yaml</code></summary>
 
 ![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
-为 Codex Pooler 的 OpenAI 兼容 chat-completions 路径配置 Goose 的 OpenAI
-provider。把 Pool API 密钥放在 `OPENAI_API_KEY` 或 Goose 的密钥存储中。
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.config/goose/config.yaml` |
+| Windows | `%APPDATA%\Block\goose\config\config.yaml` |
 
-在 macOS/Linux 上，把持久 Goose provider 和扩展设置放在
-`~/.config/goose/config.yaml`；在 Windows 上放在
-`%APPDATA%\Block\goose\config\config.yaml`。Goose 还会在该配置区域保留相关
-文件：`permission.yaml` 用于工具权限级别，`secrets.yaml` 用于基于文件的密钥
-存储，`permissions/tool_permissions.json` 用于运行时权限决策，`prompts/`
-用于提示词模板。环境变量优先级高于
-配置文件，因此 `OPENAI_API_KEY` 可以留在 YAML 外部。
+打开对应系统路径下的 `config.yaml`，添加以下配置：
 
 ```yaml
 GOOSE_PROVIDER: openai
@@ -1619,61 +940,41 @@ OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 828400
 GOOSE_MAX_TOKENS: 128000
-GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
-Goose 会把 `GOOSE_CONTEXT_LIMIT` 和 `GOOSE_MAX_TOKENS` 读入模型配置。上面的
-`828400` 是 long-profile 示例；选中的 272000-token profile 会公布 `258400`，所以
-请用 `/v1/models.context_length` 作为权威限制。在 long-profile 示例中，
-它的自动压缩阈值是上下文限制的比例，不是输出预留，因此 `0.95` 会在
-786980 tokens 时开始压缩。
+启动 Goose 前，在终端运行：
 
-开启工具访问后检查无头 CLI 路径：
+**macOS / Linux / WSL**
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-goose run \
-  --no-session \
-  --provider openai \
-  --model gpt-6-sol \
-  --with-builtin developer \
-  --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
 
-对于可选的运营者 MCP 元数据访问，添加远程 Streamable HTTP 扩展。Codex Pooler
-模型使用不需要它。Goose 会把远程扩展请求头存到自己的配置中，所以请使用专用
-MCP 令牌。
+**Windows PowerShell**
 
-```yaml
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-extensions:
-  codex_pooler:
-    enabled: true
-    type: streamable_http
-    name: codex_pooler
-    uri: http://localhost:4000/mcp
-    headers:
-      Authorization: "Bearer <operator-mcp-token>"
-    timeout: 300
-    bundled: null
-    available_tools: []
+```powershell
+$env:OPENAI_API_KEY = $env:CODEX_POOLER_API_KEY
 ```
 
-对于已部署实例，把 `OPENAI_HOST` 改为 `https://codex-pooler.example.com`；如果
-保留可选的运营者 MCP 附加项，把扩展 `uri` 改为
-`https://codex-pooler.example.com/mcp`。
+更换模型时，将 `GOOSE_MODEL` 设置为你的 Pool 提供的模型。
 
-OpenAI 兼容模型请求使用 Pool API 密钥，`/mcp` 使用运营者 MCP 令牌。不要把 Pool
-API 密钥复用给 MCP。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/goose/)** — 工具、额外设置和 Windows 配置。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>$DSH_HOME/profiles/headless/cordis.patch.yml</code></summary>
+<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>cordis.patch.yml</code></summary>
 
 ![Codex Pooler DeepSeek Harness integration](.github/assets/codex-pooler-deepseek.png)
 
-通过 `npm install -g @deepseek-ai/dsh@latest` 安装当前版本（升级时请检查是否有更新版本）。在运行 `dsh` 的环境中设置 `CODEX_POOLER_API_KEY`，运行 `dsh --profile headless --dump-default-config` 初始化 profile，然后将以下配置加入 `$DSH_HOME/profiles/headless/cordis.patch.yml`：
+| 系统 | 配置文件 |
+| --- | --- |
+| macOS / Linux | `~/.dsh/profiles/headless/cordis.patch.yml` |
+| Windows | `%USERPROFILE%\.dsh\profiles\headless\cordis.patch.yml` |
+
+先运行一次 `dsh --profile headless --dump-default-config` 创建配置，
+然后打开对应系统路径下的 `cordis.patch.yml`，添加以下内容。
+如果设置了 `DSH_HOME`，请使用其 `profiles/headless` 文件夹：
 
 ```yaml
 - id: llm-pi-ai
@@ -1695,14 +996,13 @@ API 密钥复用给 MCP。
 - id: agent-default-model
   config:
     provider: codex-pooler
-    model: gpt-6-luna
+    model: gpt-6-sol
 ```
 
-部署后请将 `http://localhost:4000/v1` 替换为你的 `/v1` 地址，并且只选择 Pool 可用的模型。若编辑已有补丁，请保留这些条目中的其他键：Cordis 补丁会替换条目的整个 `config`。运行 `dsh --profile headless "Reply exactly: deepseek pooler ok"` 检查文本回复。
+添加配置时，请保留这些条目中的现有设置。
+使用 `dsh --profile headless` 启动 DeepSeek Harness。
 
-保留 `compat.supportsStrictMode: true`：它会让普通工具显式发送 `strict: false`，使可选参数保持可选。已知上游输出限制时，可以为每个模型设置 `maxTokens`。
-
-Codex Pooler 默认对每个 Pool-model 组合使用 **Auto**：当可路由的模型目录证据表明支持 Lite 时使用 Lite，否则使用 Full。Full 会保留普通 Responses 行为，例如并行工具调用；Agent 需要此行为时，请为该 Pool-model 组合选择 Full。此客户端配置不会选择服务端模式。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/deepseek-harness/)** — 安装、工具和额外设置。
 
 </details>
 
@@ -1711,35 +1011,24 @@ Codex Pooler 默认对每个 Pool-model 组合使用 **Auto**：当可路由的�
 
 ![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
 
-Windmill AI 可以通过 Windmill 的 `customai` provider 使用 Codex Pooler。把
-resource 指向 Codex Pooler 的 OpenAI 兼容 `/v1` 接口，把 Pool API 密钥保存为
-Windmill 密钥变量，并让工作区 AI 设置使用该 resource 进行 chat 和元数据生成。
-
-为 Windmill 使用专用 Pool API 密钥：
-
-```bash
-wmill variable add '<pool-api-key>' \
-  u/<owner>/codex_pooler_windmill_codegen \
-  --workspace <workspace>
-```
-
-创建匹配的 `customai` resource：
+将专用 Pool API 密钥保存为 Windmill secret variable，
+然后创建引用该密钥的 `customai` 资源：
 
 ```yaml
 description: Codex Pooler API credentials for Windmill AI
 value:
-  api_key: '$var:u/<owner>/codex_pooler_windmill_codegen'
+  api_key: '$var:u/<owner>/codex_pooler'
   base_url: http://localhost:4000/v1
   headers: {}
 resource_type: customai
 ```
 
-然后把 Windmill 工作区 AI 配置设为使用该 resource：
+在工作区 AI 设置中选择刚创建的资源，并添加三个模型。对应配置如下：
 
 ```yaml
 providers:
   customai:
-    resource_path: u/<owner>/codex_pooler_windmill_codegen
+    resource_path: u/<owner>/codex_pooler
     models:
       - gpt-6-luna
       - gpt-6-sol
@@ -1749,64 +1038,44 @@ default_model:
   model: gpt-6-sol
 metadata_model:
   provider: customai
-  model: gpt-6-sol
+  model: gpt-6-luna
 ```
 
-Windmill 的 agent 请求字段是 `max_completion_tokens`；provider adapter 会按
-需要把它映射到 OpenAI Responses `max_output_tokens` 或 chat
-`max_completion_tokens`。不要对 GPT-5/O-series Windmill AI 请求使用
-`max_tokens`。
+使用 Windmill 服务器可访问的 URL；私有地址需要在该服务器上设置
+`ALLOW_PRIVATE_AI_BASE_URLS=true`。
 
-对于已部署 Codex Pooler 实例，把 `base_url` 改为
-`https://codex-pooler.example.com/v1`。如果 Windmill 是自托管的，并且该 URL 从
-Windmill app pod 或 server 解析为私有或内部地址，请在 Windmill app/server
-环境中设置 `ALLOW_PRIVATE_AI_BASE_URLS=true`。
-
-除非你已经单独配置了支持 fill-in-the-middle 自动补全的 provider，否则让 Windmill
-的代码补全模型保持未设置。Codex Pooler 的 `customai` 设置用于 Windmill chat、
-script/flow/app 生成、修复、摘要、元数据生成，以及使用 chat completion 风格请求
-的表单填充功能。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/windmill/)** — 资源创建、工作区配置和支持的功能。
 
 </details>
 
 <details>
-<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands</summary>
 
 ![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
-OpenHands CLI 可以通过窄 OpenAI 兼容 `/v1` 接口使用 Codex Pooler。把 Pool API
-密钥放在环境变量中，把 OpenHands base URL 设为 `/v1`，并使用 OpenHands 期望的
-OpenAI 模型前缀。下面命令使用 `--override-with-envs`，因此
-不会把 Pool 设置持久化到 OpenHands 本地状态。
-
-OpenHands CLI 把本地状态存在 `~/.openhands/`，首次运行时创建。当前 OpenHands CLI
-文档列出 `agent_settings.json` 用于 LLM 配置和 agent 设置，`cli_config.json`
-用于 CLI 偏好，`mcp.json` 用于 MCP server 配置，`conversations/` 用于对话历史。
-在 Windows 上，OpenHands CLI 按上游安装文档通过 WSL 运行，因此这些路径位于 WSL
-用户的 home directory。
+在 macOS、Linux 或 Windows 的 WSL 终端中运行以下命令：
 
 ```bash
-export LLM_API_KEY=<pool-api-key>
+export LLM_API_KEY="$CODEX_POOLER_API_KEY"
 export LLM_BASE_URL=http://localhost:4000/v1
 export LLM_MODEL=openai/gpt-6-sol
 
-uvx --python 3.12 --from openhands openhands \
-  --headless \
-  --override-with-envs \
-  -t 'Check the repository and summarize what you can do.'
+openhands --override-with-envs
 ```
 
-对于已部署实例，把 `LLM_BASE_URL` 改为 `https://codex-pooler.example.com/v1`。
-模型名应保持为 `openai/gpt-6-sol`，这样 OpenHands 会选择它的 OpenAI 兼容
-provider 路径，而 Codex Pooler 会通过分配到的 Pool 路由请求。
+这些设置仅用于本次运行。完整指南说明如何保存设置。
+
+更换模型时，将 `LLM_MODEL` 设置为你的 Pool 提供的模型，并保留 `openai/` 前缀。
+
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/openhands/)** — 安装、持久设置和模型选项。
 
 </details>
 
 <details>
 <summary><img src=".github/assets/python-favicon.png" alt="Python logo" width="16" height="16"> OpenAI Python SDK</summary>
 
-OpenAI Python SDK 客户端可以通过把 `base_url` 设为 Codex Pooler `/v1` URL，并
-使用 Pool API 密钥作为 API key，来使用 OpenAI 兼容 `/v1` 接口。
+安装 OpenAI Python SDK 并设置 `CODEX_POOLER_API_KEY` 后，
+将客户端指向 Codex Pooler 的 `/v1` 端点：
 
 ```python
 import os
@@ -1826,15 +1095,17 @@ response = client.responses.create(
 print(response.output_text)
 ```
 
-对于已部署实例，把 `base_url` 改为 `https://codex-pooler.example.com/v1`。
+请选择你的 Pool 提供的模型。
+
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/openai-compatible/)** — 流式响应、工具、媒体和 API 兼容性。
 
 </details>
 
 <details>
 <summary><img src=".github/assets/nodejs-favicon.png" alt="Node.js logo" width="16" height="16"> OpenAI Node SDK</summary>
 
-OpenAI Node SDK 客户端使用同一个 OpenAI 兼容 `/v1` 接口。用 Codex Pooler `/v1`
-URL 配置 `baseURL`，并把 Pool API 密钥作为 API key 传入。
+安装 OpenAI Node SDK 并设置 `CODEX_POOLER_API_KEY` 后，
+将客户端指向 Codex Pooler 的 `/v1` 端点：
 
 ```js
 import OpenAI from "openai";
@@ -1852,16 +1123,17 @@ const response = await client.responses.create({
 console.log(response.output_text);
 ```
 
-对于已部署实例，把 `baseURL` 改为 `https://codex-pooler.example.com/v1`。
+请选择你的 Pool 提供的模型。
+
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/openai-compatible/)** — 流式响应、工具、媒体和 API 兼容性。
 
 </details>
 
 <details>
 <summary><img src=".github/assets/vercel-favicon.png" alt="Vercel logo" width="16" height="16"> Vercel AI SDK</summary>
 
-Vercel AI SDK 可以通过使用 `createOpenAI` 创建自定义 provider，让它的 OpenAI
-provider 指向 Codex Pooler。该 provider 使用 Pool API 密钥调用 OpenAI 兼容
-`/v1` 接口。
+安装 Vercel AI SDK 并设置 `CODEX_POOLER_API_KEY` 后，
+将客户端指向 Codex Pooler 的 `/v1` 端点：
 
 ```ts
 import { createOpenAI } from "@ai-sdk/openai";
@@ -1880,23 +1152,9 @@ const { text } = await generateText({
 console.log(text);
 ```
 
-对于已部署实例，把 `baseURL` 改为 `https://codex-pooler.example.com/v1`。
+请选择你的 Pool 提供的模型。
 
-`GET /v1/models` 在可用时会提供 `context_length`；对外公布的客户端上下文设置应以
-这个有效值为准。官方 OpenAI SDK 请求 API 和 Vercel AI SDK 生成 API
-不暴露 Codex 模型 catalog 的上下文控制。只有当应用需要时才使用它们的输出预算
-字段：OpenAI Responses 中的 `max_output_tokens`，Chat Completions 中的
-`max_completion_tokens`，以及 Vercel AI SDK 层的 `maxOutputTokens`。
-
-使用当前版本的 `@ai-sdk/openai` 时，Vercel AI SDK 可以通过
-`providerOptions.openai.store: false` 和
-`providerOptions.openai.compactionTrigger: true` 在普通 `/v1/responses` 路由请求
-显式 compaction。Codex Pooler 接受位于可见输入之后、且恰好只有一个的最终
-`compaction_trigger`，并通过 Responses JSON、SSE 或窄范围 Responses websocket
-接口返回 compact item。下一次请求应开启新链：省略 `previous_response_id`，把返回的
-不透明 `type: "compaction"` item 放在最前面，再追加新的用户输入。直接
-`POST /v1/responses/compact` 仍不受支持，`/v1/responses` 也仍会拒绝
-`context_management`。
+**[完整配置与扩展选项](https://docs.codex-pooler.com/clients/openai-compatible/)** — 流式响应、工具、媒体和 API 兼容性。
 
 </details>
 
@@ -1906,8 +1164,6 @@ console.log(text);
 ![Claude Code on Codex Pooler](.github/assets/codex-pooler-claude.png)
 
 </details>
-
-<a id="quick-start-with-docker-compose"></a>
 
 ## 使用 Docker Compose 快速开始
 

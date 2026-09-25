@@ -11,31 +11,33 @@ head:
       {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Does Codex Pooler work with Codex CLI and Codex Desktop?","acceptedAnswer":{"@type":"Answer","text":"Yes. Codex CLI and Codex Desktop share Codex configuration layers. Put the Codex Pooler provider in CODEX_HOME/config.toml, set model_provider to codex-pooler-ws, and point base_url at https://codex-pooler.example.com/backend-api/codex. On Codex 0.156.0 and later, also set model_catalog_url to https://codex-pooler.example.com/backend-api/codex/models and enable the api_key_model_discovery feature so Codex reads the Pool model catalog."}},{"@type":"Question","name":"Should Codex CLI or Codex Desktop use /v1 with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients, not Codex CLI or Codex Desktop backend traffic."}},{"@type":"Question","name":"Where should Codex Pooler provider settings live for Codex?","acceptedAnswer":{"@type":"Answer","text":"Use the user-level CODEX_HOME/config.toml file for provider and auth settings. Project-local .codex/config.toml files are trust-gated and cannot override machine-local provider keys such as model_provider and model_providers."}}]}
 ---
 
-Codex Pooler supports both Codex CLI and Codex Desktop through the Codex backend compatibility route. Both Codex surfaces share the same configuration layers and user-level `CODEX_HOME/config.toml`, so one provider block can serve the terminal and desktop/IDE experience.
-
-Use `/backend-api/codex`, not the OpenAI-compatible `/v1` SDK surface. Put provider and auth settings in the user-level config file; Codex's project-local `.codex/config.toml` layers are trust-gated and do not override machine-local provider keys such as `model_provider` or `model_providers`.
+Codex is OpenAI's coding agent for exploring a codebase, making changes and running checks. Use it from the terminal or the desktop app, with Codex Pooler providing access to your Pool's models through one API key. The configuration below is shared by both clients.
 
 ![Codex Pooler integration for Codex CLI and Codex Desktop](/codex-pooler-codex.png)
 
 ## Before you start
 
-- Codex CLI or Codex Desktop installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [Codex CLI](https://developers.openai.com/codex/cli/) or [Codex Desktop](https://developers.openai.com/codex/app/) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 ## Configure the connection
 
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
 ### Config file path
+
+Use `/backend-api/codex` for Codex CLI and Desktop. Put provider and auth settings in the user-level config file; project-local `.codex/config.toml` layers are trust-gated and do not override machine-local provider keys such as `model_provider` or `model_providers`.
 
 Codex resolves `CODEX_HOME` first. If `CODEX_HOME` is unset, current Codex sources default it to `$HOME/.codex` on every OS, so the user config file is `CODEX_HOME/config.toml`.
 
 | OS | Default config file |
 | --- | --- |
-| macOS | `$HOME/.codex/config.toml` |
-| Linux | `$HOME/.codex/config.toml` |
-| Windows | `$HOME\.codex\config.toml`, normally `%USERPROFILE%\.codex\config.toml` |
+| macOS | `~/.codex/config.toml` |
+| Linux | `~/.codex/config.toml` |
+| Windows | `%USERPROFILE%\.codex\config.toml` |
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
 
 Codex Desktop and the IDE extension open the same file from **Codex Settings > Open config.toml**.
 
@@ -53,8 +55,16 @@ http://localhost:4000/backend-api/codex
 
 Keep your Pool API key in the environment that starts Codex. Don't paste raw keys into `CODEX_HOME/config.toml`.
 
+**macOS / Linux / WSL**
+
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
 ```
 
 For Codex Desktop, make the same variable available to the app process; setting it in an unrelated terminal does not update an already-running app.
@@ -154,11 +164,11 @@ Close Codex first; these commands edit local Codex state in place. If you made t
 Run these two zsh one-liners:
 
 ```zsh
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
+if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ]; then find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
 ```
 
 ```zsh
-for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
+for db in "${CODEX_HOME:-$HOME/.codex}"/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
 #### Linux (bash)
@@ -166,11 +176,11 @@ for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET
 Run these two bash one-liners:
 
 ```bash
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
+if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ]; then find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
 ```
 
 ```bash
-for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
+for db in "${CODEX_HOME:-$HOME/.codex}"/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
 #### Windows (PowerShell)
@@ -182,7 +192,7 @@ $ErrorActionPreference = "Stop"
 
 $FromProvider = "openai"
 $ToProvider = "codex-pooler-ws"
-$CodexHome = Join-Path $HOME ".codex"
+$CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
 
 $FromJson = '"model_provider":"' + $FromProvider + '"'
 $ToJson = '"model_provider":"' + $ToProvider + '"'
@@ -231,8 +241,16 @@ bearer_token_env_var = "CODEX_POOLER_MCP_KEY"
 
 Set the token separately:
 
+**macOS / Linux / WSL**
+
 ```bash
 export CODEX_POOLER_MCP_KEY="<operator-mcp-token>"
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_MCP_KEY = "<operator-mcp-token>"
 ```
 
 Use `http://localhost:4000/mcp` only for local setup.

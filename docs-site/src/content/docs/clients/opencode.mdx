@@ -5,33 +5,61 @@ sidebar:
 description: Configure OpenCode and optional OMO model routing with Codex Pooler's narrow OpenAI-compatible /v1 surface.
 ---
 
-This page covers OpenCode v1 and its optional OMO integration. For the native v2 provider format, use the [OpenCode v2 guide](/clients/opencode-v2/).
-
-OpenCode v1 should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
-
-OpenCode websocket support is the narrow Responses websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
+OpenCode is an open-source coding agent that brings project-aware assistance to your terminal. Connect it to Codex Pooler to use your Pool's models for code changes, questions and tool-driven tasks. This guide covers v1 and its optional OMO integration; the [OpenCode v2 guide](/clients/opencode-v2/) covers the newer configuration.
 
 ![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
 
 ## Before you start
 
-- OpenCode installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [OpenCode v1](https://opencode.ai/docs/) and check `opencode --version`.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 <a id="provider-example"></a>
 
 ## Configure the connection
 
-Merge the provider settings into `~/.config/opencode/opencode.json`. Store the Pool API key outside the config and read it through environment expansion:
+Keep the provider id as `openai` for this setup so OpenCode retains its OpenAI provider-family behavior.
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+**Provider settings**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.config/opencode/opencode.jsonc` |
+| Linux | `~/.config/opencode/opencode.jsonc` |
+| Windows | `%USERPROFILE%\.config\opencode\opencode.jsonc` |
+
+**OMO settings (optional)**
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.config/opencode/oh-my-openagent.jsonc` |
+| Linux | `~/.config/opencode/oh-my-openagent.jsonc` |
+| Windows | `%USERPROFILE%\.config\opencode\oh-my-openagent.jsonc` |
+
+If you set `XDG_CONFIG_HOME` or a client-specific config override, use that location instead.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
+Merge the provider settings into `opencode.jsonc` at the path for your system. If you already use `opencode.json`, edit that file instead. Store the Pool API key outside the config and read it through environment expansion:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-```jsonc title="~/.config/opencode/opencode.json" frame="code"
+**Windows PowerShell**
+
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+```jsonc title="opencode.jsonc" frame="code"
 {
   "$schema": "https://opencode.ai/config.json",
   "small_model": "openai/gpt-6-luna",
@@ -155,11 +183,11 @@ If you automate OpenCode from scripts, use OpenCode's own documented headless co
 
 ### Oh My OpenAgent (OMO) routing
 
-If you use Oh My OpenAgent, keep the native `openai` provider configuration above and add model overrides in `~/.config/opencode/oh-my-openagent.jsonc`. Keep the `openai/` prefix on every OMO model so delegated agents continue to use the same Codex Pooler provider.
+If you use Oh My OpenAgent, keep the native `openai` provider configuration above and add model overrides in `oh-my-openagent.jsonc` in the same config folder. Keep the `openai/` prefix on every OMO model so delegated agents continue to use the same Codex Pooler provider.
 
 This example assigns Luna to lightweight and background work, Sol to daily agent work, and Astra to planning and deep-reasoning roles. Each explicit fallback stays inside the model ids assigned to the Pool and preserves the primary reasoning variant.
 
-```jsonc title="~/.config/opencode/oh-my-openagent.jsonc" frame="code"
+```jsonc title="oh-my-openagent.jsonc" frame="code"
 {
   "agents": {
     "sisyphus": {
@@ -279,7 +307,7 @@ The doctor validates plugin loading, schema, and model resolution, but it does n
 
 Add Codex Pooler as a remote MCP server only when the OpenCode host should inspect metadata that the operator can already see in the admin UI.
 
-```jsonc title="~/.config/opencode/opencode.json" frame="code"
+```jsonc title="opencode.jsonc" frame="code"
 {
   "mcp": {
     "codex_pooler": {

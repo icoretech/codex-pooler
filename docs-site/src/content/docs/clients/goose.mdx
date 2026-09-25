@@ -5,19 +5,19 @@ sidebar:
 description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 Responses path, config.yaml file locations, and optional operator MCP metadata access.
 ---
 
-Configure Goose's OpenAI provider with `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
+Goose is an open-source AI agent for coding and other tasks on your computer. Its desktop app and CLI can work with files and tools to carry out multi-step workflows. Connect Goose to Codex Pooler to use your Pool's models in those sessions.
 
 ![Codex Pooler Goose integration](/codex-pooler-goose.png)
 
 ## Before you start
 
-- Goose installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
-
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+- Install [Goose](https://goose-docs.ai/docs/getting-started/installation/) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
 ## Configure the connection
+
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
 
 ### Config file path
 
@@ -29,14 +29,26 @@ Put persistent Goose provider and extension settings in `config.yaml`:
 | Linux | `~/.config/goose/config.yaml` |
 | Windows | `%APPDATA%\Block\goose\config\config.yaml` |
 
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
+If you set `GOOSE_PATH_ROOT`, the configuration folder is its `config` subfolder.
+
 Goose also keeps related files in the same config area: `permission.yaml` for tool permission levels, `secrets.yaml` when file-based secret storage is used, `permissions/tool_permissions.json` for runtime permission decisions, and `prompts/` for prompt templates. Direct edits usually require restarting existing Goose sessions; `goose info -v` shows the active settings.
 
 You can also manage settings from Goose Desktop **Settings** or by running `goose configure` in Goose CLI. Environment variables have higher precedence than the config file, so `OPENAI_API_KEY` can stay outside YAML.
 
 Set `CODEX_POOLER_API_KEY` to your Pool API key, then export `OPENAI_API_KEY` in the shell that starts Goose, or use Goose's secret storage:
 
+**macOS / Linux / WSL**
+
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:OPENAI_API_KEY = "$env:CODEX_POOLER_API_KEY"
 ```
 
 Add the provider settings to `config.yaml`:
@@ -63,6 +75,8 @@ Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. 
 
 Check the headless CLI path with tool access enabled:
 
+**macOS / Linux / WSL**
+
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
 goose run \
@@ -71,6 +85,13 @@ goose run \
   --model gpt-6-sol \
   --with-builtin developer \
   --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:OPENAI_API_KEY = "$env:CODEX_POOLER_API_KEY"
+goose run --no-session --provider openai --model gpt-6-sol --with-builtin developer --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
 
 Confirm that `goose-ok.txt` contains the expected text. In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.

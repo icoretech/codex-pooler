@@ -5,41 +5,53 @@ sidebar:
 description: Configure Kilo Code CLI with Codex Pooler's narrow OpenAI-compatible /v1 chat-completions surface and a Pool API key.
 ---
 
-Kilo Code should use a named OpenAI-compatible provider that points at Codex Pooler's `/v1` base URL. Kilo Code appends `/chat/completions` itself, so do not set `baseURL` to a full `/v1/chat/completions` endpoint.
+Kilo Code is an open-source coding agent for exploring projects, writing code and completing development tasks. This guide connects its CLI to Codex Pooler, giving your terminal sessions access to your Pool's models while Kilo handles the work in your project.
 
 ![Codex Pooler Kilo Code integration](/codex-pooler-kilo.png)
 
 ## Before you start
 
-- Kilo Code CLI installed and ready to use.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
+- Install [Kilo Code CLI](https://kilo.ai/docs/code-with-ai/platforms/cli) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
-
-### Install
-
-Use the current npm package:
-
-```bash
-npm install -g @kilocode/cli@latest
-```
-
-For one-off use without a global install, run `npx -y @kilocode/cli@latest`.
+<a id="install"></a>
 
 <a id="provider-shape"></a>
 
 ## Configure the connection
 
+Use the commands for the terminal that starts the client. Environment-variable assignments below apply to that terminal; desktop apps and services need the variables in their own launch environment.
+
+### Config file paths
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `~/.config/kilo/kilo.jsonc` |
+| Linux | `~/.config/kilo/kilo.jsonc` |
+| Windows | `%USERPROFILE%\.config\kilo\kilo.jsonc` |
+
+If you set `XDG_CONFIG_HOME` or a client-specific config override, use that location instead.
+
+These are the default locations. On Windows, paste the `%USERPROFILE%`, `%APPDATA%` or `%LOCALAPPDATA%` path into File Explorer's address bar. For a client installed inside WSL, use the Linux paths and commands inside WSL. Keep any custom configuration folder or profile you already use.
+
 Set the Pool API key in the shell that starts the client:
+
+**macOS / Linux / WSL**
 
 ```bash
 export CODEX_POOLER_API_KEY="<pool-api-key>"
 ```
 
-For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
+**Windows PowerShell**
 
-```jsonc title="~/.config/kilo/kilo.jsonc" frame="code"
+```powershell
+$env:CODEX_POOLER_API_KEY = "<pool-api-key>"
+```
+
+For a deployed instance, add these settings to `kilo.jsonc` at the path for your system:
+
+```jsonc title="kilo.jsonc" frame="code"
 {
   "$schema": "https://app.kilo.ai/config.json",
   "model": "codex-pooler/gpt-6-sol",
@@ -127,6 +139,8 @@ For GPT-5 OpenAI-compatible models, Kilo Code suppresses the outgoing max-token 
 
 Run a tool-using prompt from an isolated directory:
 
+**macOS / Linux / WSL**
+
 ```bash
 validation_dir="$(mktemp -d)"
 cd "$validation_dir"
@@ -138,6 +152,16 @@ kilo run \
   --format json \
   --dir "$PWD" \
   'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
+```
+
+**Windows PowerShell**
+
+```powershell
+$validationDir = Join-Path ([System.IO.Path]::GetTempPath()) ("kilo-check-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $validationDir | Out-Null
+Set-Location $validationDir
+
+kilo run --model codex-pooler/gpt-6-sol --pure --auto --format json --dir "$validationDir" 'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
 ```
 
 `--pure` keeps external plugins out of the check. `--auto` is only for trusted isolated automation, because it lets Kilo Code approve tool permissions automatically.

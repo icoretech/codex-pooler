@@ -5,23 +5,23 @@ sidebar:
 description: Configure OpenHands CLI with Codex Pooler's narrow OpenAI-compatible /v1 surface, OpenHands CLI config directory, a Pool API key, and env override mode.
 ---
 
-OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the Pool API key in the environment, point OpenHands at the `/v1` base URL, and pass `--override-with-envs` so the environment values win for the run without persisting Pool settings.
+OpenHands CLI is a terminal coding agent that can work through tasks by editing files and running commands. Connect it to Codex Pooler to use your Pool's models for interactive sessions or headless automation. This guide covers the CLI's connection settings and a first test run.
 
 ![Codex Pooler OpenHands integration](/codex-pooler-openhands.png)
 
 ## Before you start
 
-- OpenHands CLI installed, or `uv` available for the one-shot command below.
-- A Codex Pooler URL reachable from the client.
-- A Pool API key and a model available to that Pool.
+- Install [OpenHands CLI](https://docs.openhands.dev/openhands/usage/cli/installation) using the official instructions for your operating system.
+- Have a Codex Pooler URL reachable from the client.
+- Create a [Pool API key](/getting-started/quick-start/) and choose a model available to that Pool.
 
-Use a [Pool API key](/getting-started/quick-start/) for model requests. Operator MCP access is optional and uses a separate token.
+This guide covers OpenHands CLI, which upstream marks as [no longer actively maintained](https://github.com/OpenHands/OpenHands-CLI#project-status). The Windows procedure below uses WSL.
 
 ## Configure the connection
 
 ### Config/state directory
 
-OpenHands CLI stores local state under `~/.openhands/`, created on first run. Current OpenHands CLI docs list these files:
+OpenHands CLI stores local state under `~/.openhands/` on macOS, Linux and Windows WSL, created on first run. Current OpenHands CLI docs list these files:
 
 | Path | Purpose |
 | --- | --- |
@@ -30,7 +30,7 @@ OpenHands CLI stores local state under `~/.openhands/`, created on first run. Cu
 | `~/.openhands/mcp.json` | MCP server configuration |
 | `~/.openhands/conversations/` | Conversation history |
 
-On Windows, OpenHands CLI runs through WSL in the upstream install docs, so those paths live in the WSL user's home directory. This Codex Pooler example uses environment overrides instead of saved config because it is explicit, easy to test, and does not mutate the user's OpenHands state.
+The Windows procedure in this guide uses WSL: run the commands inside WSL and use its Linux home directory, not a Windows `%USERPROFILE%` path. This Codex Pooler example uses environment overrides instead of saved config because it is explicit, easy to test, and does not mutate the user's OpenHands state.
 
 <a id="run-with-environment-overrides"></a>
 <a id="deployed-instances"></a>
@@ -38,6 +38,8 @@ On Windows, OpenHands CLI runs through WSL in the upstream install docs, so thos
 ### Environment overrides
 
 Set `CODEX_POOLER_API_KEY` to your Pool API key, then configure the shell that will start OpenHands:
+
+**macOS / Linux / Windows WSL**
 
 ```bash
 export LLM_API_KEY="$CODEX_POOLER_API_KEY"
@@ -58,6 +60,8 @@ Define only models that your Pool can serve. If your Pool exposes a different mo
 ## Verify the connection
 
 Run the published OpenHands CLI with the environment values above. The `uvx` command is a one-shot setup; it does not replace the upstream installation guide.
+
+**macOS / Linux / Windows WSL**
 
 ```bash
 uvx --python 3.12 --from openhands openhands \
