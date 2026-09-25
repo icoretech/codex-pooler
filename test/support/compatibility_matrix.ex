@@ -3359,6 +3359,19 @@ defmodule CodexPooler.CompatibilityMatrix do
       privacy: "schema_shape_only"
     },
     v1_supported_surface: %{
+      file_upload_retry: %{
+        scope: "presigned_blob_put_only",
+        attempts: 5,
+        total_timeout_ms: 300_000,
+        retryable_statuses: [503],
+        retryable_transport_reasons: [:timeout, :closed, :econnrefused, :econnreset, :econnaborted, :epipe],
+        body: "reopen_validated_tempfile_per_attempt",
+        identity: "same_file_record_and_upload_url",
+        delay_headers: ["x-ms-retry-after-ms", "retry-after"],
+        redirect: false,
+        create_replayed: false,
+        finalize_replayed_by_upload: false
+      },
       auth: "required_bearer_api_key",
       default_enabled: true,
       provider_event_headers: %{

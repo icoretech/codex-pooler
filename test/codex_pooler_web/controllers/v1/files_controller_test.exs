@@ -28,7 +28,8 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
     Application.put_env(:codex_pooler, FileBridge,
       finalize_retry_timeout_ms: 1_000,
-      finalize_retry_interval_ms: 0
+      finalize_retry_interval_ms: 0,
+      upload_retry_interval_ms: 0
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, Files, old_files_config) end)
@@ -139,6 +140,32 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     refute inspect(requests) =~ file_contents
     refute inspect(requests) =~ setup.raw_key
     refute inspect(requests) =~ upload_url
+  end
+
+  test "transient upload recovery retains one file record and one create/finalize pair", %{conn: conn} do
+    setup = active_api_key_fixture()
+    file_id = "file_retry_#{System.unique_integer([:positive])}"
+    contents = "synthetic retry upload"
+    upload_url = stub_upload_put(file_id, statuses: [503, 201])
+    upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id, upload_url: upload_url))
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "synthetic-upload-token"
+    })
+
+    response = conn |> auth(setup) |> post("/v1/files", %{"purpose" => "user_data", "file" => upload_fixture("retry.txt", "text/plain", contents)})
+    assert %{"id" => ^file_id, "status" => "uploaded"} = json_response(response, 200)
+    assert [file] = Repo.all(from file in FileRecord, where: file.pool_id == ^setup.pool.id)
+    assert file.status == "uploaded"
+    assert file.finalize_status == "succeeded"
+    assert [create, finalize] = FakeUpstream.requests(upstream)
+    assert create.path == "/backend-api/files"
+    assert finalize.path == "/backend-api/files/#{file_id}/uploaded"
+    for _attempt <- 1..2, do: assert_upload_put(file_id, "/upload/#{file_id}", contents, "text/plain")
+    refute_received {:upload_put, ^file_id, _, _, _, _}
+    refute inspect(file) =~ upload_url
+    refute inspect(file) =~ contents
   end
 
   @tag :unauthorized_file
@@ -455,6 +482,8 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     response_body = Keyword.get(opts, :response_body, "")
     stub_name = {__MODULE__, :upload_put, file_id}
     test_pid = self()
+    {:ok, statuses} = Agent.start_link(fn -> Keyword.get(opts, :statuses, [response_status]) end)
+    on_exit(fn -> if Process.alive?(statuses), do: Agent.stop(statuses) end)
 
     Req.Test.stub(stub_name, fn conn ->
       send(test_pid, {
@@ -466,8 +495,14 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
         conn.req_headers
       })
 
+      status =
+        Agent.get_and_update(statuses, fn
+          [status | rest] -> {status, rest}
+          [] -> {response_status, []}
+        end)
+
       conn
-      |> Plug.Conn.put_status(response_status)
+      |> Plug.Conn.put_status(status)
       |> Req.Test.text(response_body)
     end)
 

@@ -23,6 +23,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   @finalize_retry_interval_ms 250
   @upload_req_option_allowlist [:adapter, :plug]
   @upload_request_step_denylist [:put_user_agent]
+  @upload_timeout_ms :timer.minutes(5)
+  @upload_max_attempts 5
 
   @type auth :: CodexPooler.Access.auth_context()
   @type payload :: map()
@@ -66,26 +68,102 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   def upload_file(upload_url, %{"path" => path, "content_type" => content_type}, opts)
       when is_binary(upload_url) do
-    with {:ok, body, byte_size} <- readable_file_stream(path) do
-      upload_url
-      |> upload_request()
-      |> OutboundHTTP.put(upload_req_options(upload_url, body, content_type, byte_size))
-      |> normalize_upload_response(opts)
+    timeout = config() |> Keyword.get(:upload_timeout_ms, @upload_timeout_ms) |> max(0) |> min(@upload_timeout_ms)
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    # Finch's response timeout starts after sending the body. This linked task
+    # bounds file reads, sending, receiving and backoff together, and cannot
+    # outlive an abnormally terminated request process.
+    task = Task.async(fn -> upload_attempt(upload_url, path, content_type, deadline, 1) end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> normalize_upload_response(result, opts)
+      _expired -> normalize_upload_response({:error, :upload_timeout}, opts)
     end
-  rescue
-    exception in [
-      Req.TransportError,
-      Req.HTTPError,
-      Finch.TransportError,
-      Finch.HTTPError,
-      Mint.TransportError,
-      Mint.HTTPError
-    ] ->
-      normalize_upload_response({:error, exception}, opts)
   end
 
   def upload_file(_upload_url, _file, _opts) do
     {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}
+  end
+
+  defp upload_attempt(url, path, content_type, deadline, attempt) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, :upload_timeout}
+    else
+      result = upload_once(url, path, content_type, remaining)
+      delay = upload_retry_delay(result, attempt)
+
+      if attempt < @upload_max_attempts and retryable_upload?(result) and
+           delay < deadline - System.monotonic_time(:millisecond) do
+        Process.sleep(delay)
+        upload_attempt(url, path, content_type, deadline, attempt + 1)
+      else
+        result
+      end
+    end
+  end
+
+  defp upload_once(url, path, content_type, remaining) do
+    with {:ok, body, byte_size} <- readable_file_stream(path) do
+      options =
+        upload_req_options(url, body, content_type, byte_size)
+        |> Keyword.update!(:finch, &Keyword.merge(&1, pool_timeout: min(15_000, remaining), receive_timeout: min(30_000, remaining), request_timeout: remaining))
+
+      url |> upload_request() |> OutboundHTTP.put(options)
+    end
+  rescue
+    exception in [Req.TransportError, Req.HTTPError, Finch.TransportError, Finch.HTTPError, Mint.TransportError, Mint.HTTPError] ->
+      {:error, exception}
+
+    _exception in [File.Error] ->
+      {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}
+  end
+
+  defp retryable_upload?({:ok, %Req.Response{status: 503}}), do: true
+
+  defp retryable_upload?({:error, %{__struct__: module, reason: reason}})
+       when module in [Req.TransportError, Finch.TransportError, Mint.TransportError] and
+              reason in [:timeout, :closed, :econnrefused, :econnreset, :econnaborted, :epipe],
+       do: true
+
+  defp retryable_upload?({:error, %Req.HTTPError{protocol: :http1, reason: :closed}}), do: true
+  defp retryable_upload?(_result), do: false
+
+  defp upload_retry_delay({:ok, %Req.Response{} = response}, attempt) do
+    upload_delay_header(response, "x-ms-retry-after-ms", 1) ||
+      upload_delay_header(response, "retry-after", 1_000) || upload_backoff(attempt)
+  end
+
+  defp upload_retry_delay(_result, attempt), do: upload_backoff(attempt)
+
+  defp upload_backoff(attempt) do
+    base = config() |> Keyword.get(:upload_retry_interval_ms, 250) |> max(0) |> min(1_000)
+    base * Integer.pow(2, attempt - 1)
+  end
+
+  defp upload_delay_header(response, name, multiplier) do
+    case Req.Response.get_header(response, name) do
+      [value] when byte_size(value) <= 128 -> parse_upload_delay(value, name, multiplier)
+      [_oversized] -> @upload_timeout_ms
+      _invalid -> nil
+    end
+  end
+
+  defp parse_upload_delay(value, name, multiplier) do
+    case Integer.parse(value) do
+      {delay, ""} when delay >= 0 -> delay * multiplier
+      _invalid when name == "retry-after" -> upload_http_date_delay(value)
+      _invalid -> nil
+    end
+  end
+
+  defp upload_http_date_delay(value) do
+    case Req.Utils.parse_http_date(value) do
+      {:ok, date} -> max(DateTime.diff(date, DateTime.utc_now(), :millisecond), 0)
+      {:error, _reason} -> nil
+    end
   end
 
   defp create_file_with_selection(payload, opts, %RoutingSelection{} = selection) do
@@ -278,6 +356,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       ],
       redirect: false,
       retry: false,
+      raw: true,
       finch: OperationalSettings.upstream_http_pool_options(upload_url, [])
     )
   end
@@ -346,6 +425,9 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
       {:error, exception} when transport_exception?(exception) ->
         upload_transport_error(exception, opts)
+
+      {:error, %{code: "invalid_request"} = error} ->
+        {:error, error}
 
       {:error, _reason} ->
         {:error, Error.reason(502, "upstream_file_upload_failed", "upstream file upload failed")}

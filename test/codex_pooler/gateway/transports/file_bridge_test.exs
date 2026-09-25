@@ -10,6 +10,174 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
   @request_detection_timeout_ms 15_000
 
+  setup do
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
+    Application.put_env(:codex_pooler, FileBridge, upload_retry_interval_ms: 0)
+    :ok
+  end
+
+  test "presigned upload replays the complete body at the same URL after a storage 503" do
+    contents = String.duplicate("synthetic upload chunk", 8_000)
+    path = upload_tempfile!(contents)
+    %{url: url, served_ref: ref} = start_upload_capture_server!([503, 201])
+
+    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+
+    for _attempt <- 1..2 do
+      assert_receive {^ref, request}, @request_detection_timeout_ms
+      {head, body} = split_raw_http_request!(request)
+      assert String.starts_with?(head, "PUT /upload HTTP/1.1\r\n")
+      assert :crypto.hash(:sha256, decode_request_body!(head, body)) == :crypto.hash(:sha256, contents)
+      assert raw_header_values(head, "authorization") == []
+    end
+  end
+
+  test "an interrupted body is reopened and replayed from the beginning" do
+    contents = String.duplicate("synthetic upload chunk", 200_000)
+    path = upload_tempfile!(contents)
+    %{url: url, served_ref: ref} = start_upload_capture_server!([:interrupt, 201])
+
+    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert_receive {^ref, :interrupted}, @request_detection_timeout_ms
+    assert_receive {^ref, request}, @request_detection_timeout_ms
+    {head, body} = split_raw_http_request!(request)
+    assert :crypto.hash(:sha256, decode_request_body!(head, body)) == :crypto.hash(:sha256, contents)
+  end
+
+  test "storage response decoding cannot mask a retryable status" do
+    path = upload_tempfile!("synthetic upload")
+
+    %{url: url, served_ref: ref} =
+      start_upload_capture_server!([
+        {503, [{"content-type", "application/json"}, {"content-encoding", "gzip"}], "invalid compressed json"},
+        201
+      ])
+
+    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    for _attempt <- 1..2, do: assert_receive({^ref, _request}, @request_detection_timeout_ms)
+  end
+
+  test "five unsuccessful PUTs exhaust the attempt limit without leaking the signed URL" do
+    path = upload_tempfile!("private synthetic upload")
+    %{url: url, served_ref: ref} = start_upload_capture_server!(List.duplicate(503, 6))
+
+    log =
+      capture_log(fn ->
+        assert {:error, error} = FileBridge.upload_file(url <> "?sig=synthetic-secret", %{"path" => path, "content_type" => "text/plain"})
+        assert error.code == "upstream_file_upload_failed"
+        refute inspect(error) =~ "synthetic-secret"
+        refute inspect(error) =~ "private synthetic upload"
+      end)
+
+    for _attempt <- 1..5, do: assert_receive({^ref, _request}, @request_detection_timeout_ms)
+    refute_received {^ref, _request}
+    refute log =~ "synthetic-secret"
+    refute log =~ "private synthetic upload"
+  end
+
+  test "nonretryable statuses including redirects perform only one PUT" do
+    path = upload_tempfile!("synthetic upload")
+
+    for status <- [301, 307, 400, 403, 408, 429, 500, 502, 504] do
+      %{url: url, served_ref: ref} = start_upload_capture_server!([status, 201])
+      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert_receive {^ref, _request}, @request_detection_timeout_ms
+      refute_received {^ref, _request}
+    end
+  end
+
+  @tag slow: "exercises the real one-second Retry-After delay"
+  test "storage retry delays are honored with millisecond header precedence" do
+    path = upload_tempfile!("synthetic upload")
+
+    for {headers, minimum_ms} <- [
+          {[{"x-ms-retry-after-ms", "40"}, {"retry-after", "999999"}], 40},
+          {[{"x-ms-retry-after-ms", "invalid"}, {"retry-after", "1"}], 1_000}
+        ] do
+      %{url: url} = start_upload_capture_server!([{503, headers}, 201])
+      started = System.monotonic_time(:millisecond)
+      assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert System.monotonic_time(:millisecond) - started >= minimum_ms
+    end
+  end
+
+  test "malformed and duplicate retry delays fall back without crashing" do
+    path = upload_tempfile!("synthetic upload")
+
+    for headers <- [
+          [{"retry-after", "1suffix"}],
+          [{"retry-after", "-1"}],
+          [{"retry-after", "not-a-date"}],
+          [{"retry-after", "0"}, {"retry-after", "1"}],
+          [{"retry-after", "Mon, 01 Jan 2024 09:00:00 GMT"}]
+        ] do
+      %{url: url} = start_upload_capture_server!([{503, headers}, 201])
+      assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    end
+  end
+
+  test "a retry delay outside the shared budget stops without retrying early" do
+    path = upload_tempfile!("synthetic upload")
+
+    for headers <- [
+          [{"x-ms-retry-after-ms", "300000"}],
+          [{"x-ms-retry-after-ms", String.duplicate("9", 129)}],
+          [{"retry-after", "300"}],
+          [{"retry-after", Calendar.strftime(~U[2099-09-25 09:00:00Z], "%a, %d %b %Y %H:%M:%S GMT")}]
+        ] do
+      %{url: url, served_ref: ref} = start_upload_capture_server!([{503, headers}, 201])
+      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert_receive {^ref, _request}, @request_detection_timeout_ms
+      refute_received {^ref, _request}
+    end
+  end
+
+  @tag slow: "waits for the one-second shared upload deadline and socket closure"
+  test "the shared deadline cancels an in-flight PUT and closes its socket" do
+    Application.put_env(:codex_pooler, FileBridge, upload_timeout_ms: 1_000, upload_retry_interval_ms: 0)
+    path = upload_tempfile!("synthetic upload")
+    %{url: url, served_ref: ref} = start_upload_capture_server!([:stall, 201])
+
+    capture_log(fn ->
+      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    end)
+
+    assert_receive {^ref, _request}, @request_detection_timeout_ms
+    assert_receive {^ref, :closed}, @request_detection_timeout_ms
+    refute_received {^ref, _request}
+  end
+
+  test "an exhausted deadline or unreadable tempfile dispatches no PUT" do
+    %{url: url, served_ref: ref} = start_upload_capture_server!([201])
+    path = upload_tempfile!("synthetic upload")
+    File.rm!(path)
+    assert {:error, %{code: "invalid_request"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    Application.put_env(:codex_pooler, FileBridge, upload_timeout_ms: 0)
+    assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    refute_received {^ref, _request}
+  end
+
+  test "request process cancellation closes the in-flight upload without retrying" do
+    path = upload_tempfile!("synthetic upload")
+    %{url: url, served_ref: ref} = start_upload_capture_server!([:stall, 201])
+    caller = spawn(fn -> FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"}) end)
+    on_exit(fn -> if Process.alive?(caller), do: Process.exit(caller, :kill) end)
+    monitor = Process.monitor(caller)
+    assert_receive {^ref, _request}, @request_detection_timeout_ms
+    Process.exit(caller, :shutdown)
+    assert_receive {:DOWN, ^monitor, :process, ^caller, :shutdown}, @request_detection_timeout_ms
+    assert_receive {^ref, :closed}, @request_detection_timeout_ms
+    refute_received {^ref, _request}
+  end
+
+  test "a tempfile removed after the first attempt is rejected before a second PUT" do
+    path = upload_tempfile!("synthetic upload")
+    %{url: url, served_ref: ref} = start_upload_capture_server!([{:remove_file, path}, 201])
+    assert {:error, %{code: "invalid_request"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert_receive {^ref, _request}, @request_detection_timeout_ms
+    refute_received {^ref, _request}
+  end
+
   test "logs upload transport failures with safe request context" do
     request_id = Ecto.UUID.generate()
     assignment_id = Ecto.UUID.generate()
@@ -258,7 +426,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     }
   end
 
-  defp start_upload_capture_server! do
+  defp start_upload_capture_server!(statuses \\ [200]) do
     {:ok, listen_socket} =
       :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
 
@@ -268,18 +436,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
     pid =
       spawn_link(fn ->
-        {:ok, socket} = :gen_tcp.accept(listen_socket)
-        request = read_raw_http_request(socket)
+        Enum.each(statuses, fn action ->
+          {:ok, socket} = :gen_tcp.accept(listen_socket)
+          serve_upload(socket, action, parent, served_ref)
+          :gen_tcp.close(socket)
+        end)
 
-        :ok =
-          :gen_tcp.send(socket, [
-            "HTTP/1.1 200 OK\r\n",
-            "content-length: 0\r\n",
-            "connection: close\r\n\r\n"
-          ])
-
-        send(parent, {served_ref, request})
-        :gen_tcp.close(socket)
         :gen_tcp.close(listen_socket)
       end)
 
@@ -289,6 +451,45 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     end)
 
     %{url: "http://127.0.0.1:#{port}/upload", served_ref: served_ref}
+  end
+
+  defp serve_upload(socket, :interrupt, parent, ref) do
+    {:ok, _partial_request} = :gen_tcp.recv(socket, 1_024, @request_detection_timeout_ms)
+    :ok = :inet.setopts(socket, linger: {true, 0})
+    send(parent, {ref, :interrupted})
+  end
+
+  defp serve_upload(socket, :stall, parent, ref) do
+    request = read_raw_http_request(socket)
+    send(parent, {ref, request})
+    assert {:error, :closed} = :gen_tcp.recv(socket, 0, @request_detection_timeout_ms)
+    send(parent, {ref, :closed})
+  end
+
+  defp serve_upload(socket, {:remove_file, path}, parent, ref) do
+    File.rm!(path)
+    serve_upload(socket, 503, parent, ref)
+  end
+
+  defp serve_upload(socket, status, parent, ref) when is_integer(status),
+    do: serve_upload(socket, {status, [{"x-ms-retry-after-ms", "0"}]}, parent, ref)
+
+  defp serve_upload(socket, {status, headers}, parent, ref) do
+    serve_upload(socket, {status, headers, ""}, parent, ref)
+  end
+
+  defp serve_upload(socket, {status, headers, body}, parent, ref) do
+    request = read_raw_http_request(socket)
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "HTTP/1.1 #{status} Response\r\n",
+        Enum.map(headers, fn {name, value} -> [name, ": ", value, "\r\n"] end),
+        "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n",
+        body
+      ])
+
+    send(parent, {ref, request})
   end
 
   defp split_raw_http_request!(request) do

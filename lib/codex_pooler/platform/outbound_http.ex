@@ -24,8 +24,9 @@ defmodule CodexPooler.Platform.OutboundHTTP do
   balancer, or proxy that has already dropped that flow resets the next write,
   and the request fails `closed` in milliseconds after its bytes may have left
   the host. Req and Finch report send-phase and receive-phase closes as the
-  same error, so that failure is not safe to retry for a POST or PUT; the bound
-  removes the stale socket instead. A longer bound means fewer reconnects but
+  same error, so that failure is not generally safe to retry; the bound
+  removes the stale socket instead. The file bridge's replayable blob PUT
+  owns a separate bounded retry policy. A longer bound means fewer reconnects but
   more exposure to silently dropped connections.
 
   The 45 s default sits below the shortest idle timeouts common on egress

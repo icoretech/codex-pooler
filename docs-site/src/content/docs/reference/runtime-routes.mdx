@@ -349,7 +349,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td>Upstream-backed file metadata create flow</td>
       <td>Partial</td>
       <td>Partial</td>
-      <td>Creates metadata for Codex-compatible upstream file storage. Backend <code>/backend-api/files</code> remains JSON-only; this is the OpenAI-compatible file-create surface.</td>
+      <td>Uploads to Codex-compatible upstream file storage. Transient storage failures retry the same upload, with at most five PUT attempts within five minutes. Backend <code>/backend-api/files</code> remains JSON-only; this is the OpenAI-compatible file-create surface.</td>
     </tr>
     <tr>
       <td><code>GET /v1/files/:file_id</code></td>
