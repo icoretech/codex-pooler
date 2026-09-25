@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Repo
@@ -25,10 +25,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
   # as the awaited turn row settles.
   @detection_timeout_ms 15_000
 
-  for forwarding <- [:owner_forwarding, :direct], mode <- ["full", "lite"] do
-    @tag forwarding: forwarding, serving_mode: mode
-    test "a compacted full-history turn leaves its exhausted account over the live websocket (#{forwarding}, #{mode})",
-         %{forwarding: forwarding, serving_mode: mode} do
+  for forwarding <- [:owner_forwarding, :direct], mode <- ["full", "lite"], history_kind <- [:compaction, :agent_handoff] do
+    @tag forwarding: forwarding, serving_mode: mode, history_kind: history_kind
+    test "a full-history turn with #{history_kind} leaves its exhausted account over the live websocket (#{forwarding}, #{mode})",
+         %{forwarding: forwarding, serving_mode: mode, history_kind: history_kind} do
       if forwarding == :owner_forwarding do
         CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
         Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
@@ -73,12 +73,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
       prime_exhausted_routing_quota!(setup.identity)
       put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
 
+      {conn, websocket} =
+        if history_kind == :agent_handoff do
+          anchored =
+            setup
+            |> turn_payload(thread_id, "compacted-history-turn", [%{"type" => "custom_tool_call_output", "call_id" => "call_synthetic_patch", "output" => "synthetic result"}])
+            |> CodexPooler.JSON.decode!()
+            |> Map.put("previous_response_id", "resp_compacted_sticky_first")
+            |> CodexPooler.JSON.encode!()
+
+          {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, anchored)
+          {conn, websocket, _types, refused} = receive_until_terminal(conn, websocket, ref, [])
+          assert %{"type" => "error", "status" => 503, "error" => %{"code" => "pinned_continuation_unavailable"}} = refused
+          {conn, websocket}
+        else
+          {conn, websocket}
+        end
+
       # provenance: shape of the released client's full-history request after
       # one remote compaction (Codex rust-v0.156.0 `ResponseItem::Compaction`:
       # `type`, optional `id`, `encrypted_content`); content synthetic.
+      portable_item = portable_item(history_kind)
+
       compacted_history =
         [
-          %{"type" => "compaction", "id" => "cmp_synthetic_checkpoint", "encrypted_content" => "synthetic-compaction-checkpoint"},
+          portable_item,
           %{"type" => "reasoning", "encrypted_content" => "synthetic-reasoning", "content" => nil, "summary" => []}
         ] ++
           native_text_input("synthetic turn after compaction") ++
@@ -103,11 +122,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
       [%{json: moved}] = FakeUpstream.requests(fallback_upstream)
       refute Map.has_key?(moved, "previous_response_id")
 
-      assert [%{"type" => "compaction", "encrypted_content" => "synthetic-compaction-checkpoint"}] =
-               Enum.filter(moved["input"], &(&1["type"] == "compaction"))
+      assert [moved_item] = Enum.filter(moved["input"], &(&1["type"] == portable_item["type"]))
+      assert Map.delete(moved_item, "id") == Map.delete(portable_item, "id")
 
       first_id = first.id
-      assert [%Request{id: ^first_id}, %Request{id: moved_id}] = pool_requests(setup.pool.id)
+      assert [%Request{id: ^first_id} | later] = pool_requests(setup.pool.id)
+
+      moved_id =
+        case {history_kind, later} do
+          {:compaction, [%Request{id: moved_id}]} ->
+            moved_id
+
+          {:agent_handoff, [%Request{status: "rejected", last_error_code: "pinned_continuation_unavailable"} = denied, %Request{id: moved_id}]} ->
+            assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^denied.id), :count) == 0
+            assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^denied.id), :count) == 0
+            moved_id
+        end
+
       await_turn_settled!(moved_id)
       moved_request = await_request_settled!(moved_id)
       assert moved_request.status == "succeeded"
@@ -122,10 +153,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ExhaustedPinCompactionHis
 
       metadata_text = inspect({moved_request.request_metadata, attempt.response_metadata})
       refute metadata_text =~ "synthetic-compaction-checkpoint"
+      refute metadata_text =~ "synthetic-encrypted-handoff"
       refute metadata_text =~ "synthetic turn after compaction"
       refute metadata_text =~ setup.raw_key
       refute metadata_text =~ "upstream-token"
     end
+  end
+
+  defp portable_item(:compaction),
+    do: %{"type" => "compaction", "id" => "cmp_synthetic_checkpoint", "encrypted_content" => "synthetic-compaction-checkpoint"}
+
+  # Released Desktop multi-agent envelope; the ciphertext is synthetic. Its
+  # full-history HTTP fallback already moves this item to another account.
+  defp portable_item(:agent_handoff) do
+    %{
+      "type" => "agent_message",
+      "author" => "/root",
+      "recipient" => "/root/sample",
+      "content" => [
+        %{"type" => "input_text", "text" => "Message Type: NEW_TASK\nTask name: /root/sample\nSender: /root\nPayload:\n"},
+        %{"type" => "encrypted_content", "encrypted_content" => "synthetic-encrypted-handoff"}
+      ]
+    }
   end
 
   # The released client's frame: its turn metadata names the thread and the

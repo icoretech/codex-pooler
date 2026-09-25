@@ -71,6 +71,67 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     end
   end
 
+  test "recognized encrypted agent handoffs are portable without exempting nested ownership constraints" do
+    endpoint = "/backend-api/codex/responses"
+    base = RequestOptions.build(%{}, endpoint, %{})
+
+    for kind <- ["NEW_TASK", "MESSAGE"],
+        {author, recipient} <- [{"/root", "/root/sample"}, {"/root/sample", "/root"}, {"/root/sample", "/root/other"}, {"/morpheus", "/root/sample"}] do
+      handoff = %{
+        "type" => "agent_message",
+        "author" => author,
+        "recipient" => recipient,
+        "content" => [
+          %{"type" => "input_text", "text" => "Message Type: #{kind}\nTask name: #{recipient}\nSender: #{author}\nPayload:\n"},
+          %{"type" => "encrypted_content", "encrypted_content" => "synthetic-handoff"}
+        ]
+      }
+
+      [header, cipher] = handoff["content"]
+
+      for item <- [handoff, Map.put(handoff, "status", "completed")] do
+        payload = %{"input" => [item]}
+        assert RequestOptions.build(%{}, endpoint, payload).payload_context.portable_full_history?
+        assert RequestOptions.for_payload(base, endpoint, payload).payload_context.portable_full_history?
+        assert RequestOptions.retarget(base, endpoint, payload).payload_context.portable_full_history?
+      end
+
+      constraints = [
+        %{"type" => "item_reference", "id" => "msg_synthetic"},
+        %{"type" => "input_file", "file_id" => "file_synthetic"},
+        %{"type" => "compaction_trigger"},
+        %{"type" => "context_compaction", "encrypted_content" => "synthetic-bound"},
+        %{"type" => "unknown", "encrypted_content" => "synthetic-bound"}
+      ]
+
+      for constraint <- constraints,
+          item <- [
+            Map.put(handoff, "extra", constraint),
+            Map.put(handoff, "content", [Map.put(header, "extra", constraint), cipher]),
+            Map.put(handoff, "content", [header, Map.put(cipher, "extra", constraint)])
+          ] do
+        payload = %{"input" => [item]}
+        refute RequestOptions.for_payload(base, endpoint, payload).payload_context.portable_full_history?
+        refute RequestOptions.retarget(base, endpoint, payload).payload_context.portable_full_history?
+      end
+
+      for item <- [
+            Map.put(handoff, "file_id", "file_synthetic"),
+            Map.put(handoff, "encrypted_content", "synthetic-bound"),
+            Map.put(handoff, "author", "/unknown"),
+            Map.put(handoff, "content", [Map.put(header, "text", "unrecognized envelope"), cipher]),
+            Map.put(handoff, "content", [header, Map.put(cipher, "encrypted_content", " ")]),
+            Map.put(handoff, "content", [header, cipher, %{"type" => "input_text", "text" => "extra"}]),
+            cipher
+          ] do
+        refute RequestOptions.for_payload(base, endpoint, %{"input" => [item]}).payload_context.portable_full_history?
+      end
+
+      anchored = %{"input" => [handoff], "previous_response_id" => "resp_synthetic_anchor"}
+      refute RequestOptions.for_payload(base, endpoint, anchored).payload_context.portable_full_history?
+    end
+  end
+
   @identity_id "00000000-0000-0000-0000-000000000002"
   @effective_model "gpt-6-sol"
   @reset_probe_route_class "proxy_http"

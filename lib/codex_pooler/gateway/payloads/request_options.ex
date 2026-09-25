@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.UsageAuthentication
   alias CodexPooler.Accounting.ClientRetry.OriginalWitness
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
+  alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
@@ -1036,17 +1037,33 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   defp upstream_bound_input?(%{"type" => "compaction"} = item),
     do: item |> Map.drop(["type", "id", "encrypted_content"]) |> Map.values() |> upstream_bound_input?()
 
+  # Recognized agent handoffs travel with full history across accounts, just
+  # as they do on the client's HTTP fallback. Exempt only the known cipher;
+  # extra fields on the envelope or either content part retain their fences.
+  defp upstream_bound_input?(%{"type" => "agent_message"} = item) do
+    if ContinuityPayload.v2_encrypted_handoff?(item) do
+      [header, cipher] = item["content"]
+      upstream_bound_fields?(Map.put(item, "content", [header, Map.delete(cipher, "encrypted_content")]))
+    else
+      upstream_bound_fields?(item)
+    end
+  end
+
   defp upstream_bound_input?(%{} = item) do
-    Map.get(item, "type") in ["item_reference", "compaction_trigger"] or
-      Map.has_key?(item, "file_id") or
-      (Map.has_key?(item, "encrypted_content") and Map.get(item, "type") != "reasoning") or
-      Enum.any?(Map.values(item), &upstream_bound_input?/1)
+    upstream_bound_fields?(item)
   end
 
   defp upstream_bound_input?(items) when is_list(items),
     do: Enum.any?(items, &upstream_bound_input?/1)
 
   defp upstream_bound_input?(_value), do: false
+
+  defp upstream_bound_fields?(item) do
+    Map.get(item, "type") in ["item_reference", "compaction_trigger"] or
+      Map.has_key?(item, "file_id") or
+      (Map.has_key?(item, "encrypted_content") and Map.get(item, "type") != "reasoning") or
+      Enum.any?(Map.values(item), &upstream_bound_input?/1)
+  end
 
   defp usage_authentication(opts) do
     %UsageAuthentication{

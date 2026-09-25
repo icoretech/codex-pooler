@@ -51,6 +51,56 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
   for mode <- ["full", "lite"] do
     @mode mode
 
+    test "native websocket #{mode}: encrypted handoff history leaves an exhausted remote owner account", %{peer_node: peer_node} do
+      upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
+      sibling_upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
+      setup = gateway_setup(upstream, quota?: false)
+      sibling = gateway_upstream(setup.pool, sibling_upstream, "upstream-token-handoff-sibling", compact?: false)
+      use_routing_strategy!(setup.pool, "quota_first", 2)
+      prime_routing_quota!(setup.identity, %{used_percent: Decimal.new("10")})
+      prime_routing_quota!(sibling.identity, %{used_percent: Decimal.new("90")})
+      pool = pool_with_sibling!(setup, @mode, upstream, sibling, sibling_upstream)
+      turn_state = "remote-handoff-#{System.unique_integer([:positive])}"
+      peer = start_shared_peer_session_owner!(pool, %{accepted_turn_state: turn_state}, peer_node, [sibling.identity])
+      port = start_public_endpoint!()
+      {conn, websocket, ref} = public_websocket_connect!(port, pool, turn_state)
+
+      try do
+        opening = %{"type" => "response.create", "model" => pool.model.exposed_model_id, "input" => native_text_input("synthetic opening"), "stream" => true}
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(opening))
+        {conn, websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+        assert %{"type" => "response.completed"} = terminal
+        assert [%Request{status: "succeeded"}] = settled_rows!(pool)
+        await_session_assignment!(peer.session.id, setup.assignment.id)
+        prime_exhausted_routing_quota!(setup.identity)
+
+        handoff = %{
+          "type" => "agent_message",
+          "author" => "/root/sample",
+          "recipient" => "/root",
+          "content" => [
+            %{"type" => "input_text", "text" => "Message Type: MESSAGE\nTask name: /root\nSender: /root/sample\nPayload:\n"},
+            %{"type" => "encrypted_content", "encrypted_content" => "synthetic-peer-handoff"}
+          ]
+        }
+
+        history = Map.put(opening, "input", opening["input"] ++ [handoff])
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(history))
+        {_conn, _websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+        assert %{"type" => "response.completed"} = terminal
+        rows = settled_rows!(pool)
+        assert length(rows) == 2
+        assert Enum.all?(rows, &(&1.status == "succeeded" and &1.transport == "websocket"))
+        await_session_assignment!(peer.session.id, sibling.assignment.id)
+        assert {FakeUpstream.count(upstream), FakeUpstream.count(sibling_upstream)} == {1, 1}
+        assert [%{json: moved}] = FakeUpstream.requests(sibling_upstream)
+        assert handoff in moved["input"]
+        assert_peer_owner_served!(peer)
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+
     # Rows 206-598 and 206-599 over a remote owner.
     test "public /v1 websocket #{mode}: a failover the sibling serves reaches the client", %{peer_node: peer_node} do
       pool = failover_pool!(@mode, served_frames())
@@ -173,6 +223,22 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
       assert %{"partition_count" => 2, "routable_selection" => false} = row.request_metadata["canonical_partition"]
       assert FakeUpstream.websocket_connection_count(pool.exhausted_upstream) == 0
       assert_peer_owner_served!(peer)
+    end
+  end
+
+  defp await_session_assignment!(session_id, assignment_id, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 15_000
+    actual = Repo.get!(CodexSession, session_id).pool_upstream_assignment_id
+
+    if actual == assignment_id do
+      :ok
+    else
+      assert System.monotonic_time(:millisecond) < deadline, "session assignment did not finish updating"
+
+      receive do
+      after
+        5 -> await_session_assignment!(session_id, assignment_id, deadline)
+      end
     end
   end
 
@@ -352,11 +418,16 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
   end
 
   defp native_terminal!(conn, websocket, ref) do
+    {_conn, _websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+    terminal
+  end
+
+  defp native_terminal_state!(conn, websocket, ref) do
     {conn, websocket, text} = public_websocket_receive_text!(conn, websocket, ref)
 
     case CodexPooler.JSON.decode!(text) do
-      %{"type" => type} = terminal when type in ["response.completed", "response.failed", "error"] -> terminal
-      _progress -> native_terminal!(conn, websocket, ref)
+      %{"type" => type} = terminal when type in ["response.completed", "response.failed", "error"] -> {conn, websocket, terminal}
+      _progress -> native_terminal_state!(conn, websocket, ref)
     end
   end
 
