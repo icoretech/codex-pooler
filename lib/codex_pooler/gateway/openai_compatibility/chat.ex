@@ -33,7 +33,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
            prepare_response_payload(payload),
          {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)) do
-      {:ok, Map.put(response, :chat_payload, chat_payload)}
+      response =
+        response
+        |> Map.put(:chat_payload, chat_payload)
+        |> Map.update!(:request_options, &RequestOptions.put_openai_compatibility(&1, openai_chat_payload: chat_payload))
+
+      {:ok, response}
     end
   end
 
@@ -50,6 +55,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       do: chat_validation_param(param, chat_payload)
 
   def public_validation_param(param, _chat_payload), do: param
+
+  defp chat_validation_param("reasoning.effort", %{"reasoning" => effort}) when is_binary(effort),
+    do: "reasoning"
 
   defp chat_validation_param("reasoning.effort", %{"reasoning_effort" => _effort}),
     do: "reasoning_effort"
@@ -126,6 +134,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          :ok <- Validation.reject_unsupported_fields(payload, :chat),
          :ok <- Validation.require_model(payload),
          {:ok, payload} <- discard_user_identifier(payload),
+         {:ok, payload} <- normalize_reasoning_alias(payload),
          :ok <- reject_responses_fallback_fields_with_messages(payload),
          :ok <- reject_locally_unsupported_fields(payload),
          :ok <- validate_reasoning_effort(payload),
@@ -150,6 +159,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     do: {:error, Error.invalid_request("user must be a string or null", "user")}
 
   defp discard_user_identifier(payload), do: {:ok, payload}
+
+  defp normalize_reasoning_alias(%{"messages" => [_message | _rest], "reasoning" => effort} = payload)
+       when is_binary(effort) do
+    with :ok <- Validation.validate_reasoning_effort_token(effort, "reasoning"),
+         normalized = normalize_enum(effort),
+         canonical = Map.get(payload, "reasoning_effort", normalized),
+         true <- is_binary(canonical) and normalize_enum(canonical) == normalized do
+      {:ok, Map.put(payload, "reasoning_effort", normalized)}
+    else
+      false -> conflicting_reasoning_alias()
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp normalize_reasoning_alias(payload), do: {:ok, payload}
+
+  defp conflicting_reasoning_alias,
+    do: {:error, Error.invalid_request("reasoning and reasoning_effort must match", "reasoning")}
 
   defp reject_legacy_functions(payload) do
     cond do
@@ -210,7 +237,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp reject_responses_fallback_fields_with_messages(%{"messages" => messages} = payload)
        when is_list(messages) and messages != [] do
-    case Enum.find(@responses_fallback_fields, &Map.has_key?(payload, &1)) do
+    case Enum.find(@responses_fallback_fields, &responses_fallback_field?(payload, &1)) do
       nil ->
         :ok
 
@@ -224,6 +251,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   end
 
   defp reject_responses_fallback_fields_with_messages(_payload), do: :ok
+
+  defp responses_fallback_field?(%{"reasoning" => effort}, "reasoning") when is_binary(effort), do: false
+  defp responses_fallback_field?(payload, field), do: Map.has_key?(payload, field)
 
   defp validate_reasoning_effort(%{"reasoning_effort" => effort}),
     do: Validation.validate_reasoning_effort_token(effort, "reasoning_effort")
@@ -873,6 +903,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       tool =
         function
         |> Map.take(["name", "description", "parameters", "strict"])
+        # Responses may make an omitted strict flag strict; Chat defaults to non-strict.
+        |> Map.put("strict", Map.get(function, "strict") || false)
         |> Map.put("type", "function")
 
       {:ok, tool}

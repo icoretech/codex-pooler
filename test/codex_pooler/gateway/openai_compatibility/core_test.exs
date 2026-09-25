@@ -6702,7 +6702,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "strict false and omitted strict function parameters preserve accepted behavior" do
+  test "Responses preserves omitted strict while Chat makes its non-strict default explicit" do
     response_payload = %{
       "model" => "gpt-fixture-text",
       "input" => "synthetic input",
@@ -7462,6 +7462,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   defp translated_chat_tool(%{"type" => "function", "function" => function}) do
     function
     |> Map.take(["name", "description", "parameters", "strict"])
+    |> Map.put_new("strict", false)
     |> Map.put("type", "function")
   end
 

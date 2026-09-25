@@ -35,13 +35,18 @@ defmodule CodexPooler.Gateway.Payloads.ReasoningEffort do
     case request_options.openai_compatibility.source_endpoint do
       source_endpoint when is_binary(source_endpoint) ->
         if String.ends_with?(source_endpoint, "/chat/completions"),
-          do: "reasoning_effort",
+          do: chat_parameter(request_options.openai_compatibility.openai_chat_payload),
           else: "reasoning.effort"
 
       _source_endpoint ->
         "reasoning.effort"
     end
   end
+
+  defp chat_parameter(%{"messages" => [_message | _rest], "reasoning" => effort}) when is_binary(effort),
+    do: "reasoning"
+
+  defp chat_parameter(_payload), do: "reasoning_effort"
 
   @spec normalize_known(term()) :: String.t() | nil
   def normalize_known(value) when is_binary(value) do

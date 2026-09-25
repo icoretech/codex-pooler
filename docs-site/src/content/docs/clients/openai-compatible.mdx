@@ -349,12 +349,21 @@ The `/v1` surface is compatibility over Codex routing, not a separate OpenAI eng
 `POST /v1/chat/completions` accepts normal `messages` requests. It also accepts
 Responses-shaped `input` with `reasoning`, `text`, and `include` when `messages`
 is absent or empty. Combining these fallback fields with nonempty `messages`
-returns `invalid_request`.
+returns `invalid_request`, except that a string `reasoning` value is accepted
+as an alias for Chat's `reasoning_effort`. The alias follows the same validation
+and API-key reasoning policy. If both effort fields are present, their normalized
+values must match; conflicting values return `invalid_request`. A Responses
+`reasoning` object remains invalid alongside nonempty `messages`.
 
 Both shapes return Chat Completions JSON or SSE. `stream_options.include_usage`
 controls the terminal streamed usage chunk and is not forwarded upstream.
 Successful function or custom-tool turns return `finish_reason: "tool_calls"`,
 including streams whose terminal event omits the output list.
+
+Chat function tools keep Chat's non-strict default: omitted or null `strict`
+is forwarded as `strict: false`. Explicit `strict: true` remains strict.
+Direct Responses requests and Responses-shaped fallback requests retain their
+own strict-mode defaults.
 
 The optional `user` field accepts a string or null and is discarded before
 dispatch. It does not establish ownership, permissions, or routing identity.
