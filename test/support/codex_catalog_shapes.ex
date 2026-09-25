@@ -269,6 +269,7 @@ defmodule CodexPooler.CodexCatalogShapes do
       {"legacy instructions only", legacy_source("gpt-vector"), []},
       {"template only", Map.delete(base, "base_instructions"), []},
       {"unknown fields", Map.merge(base, %{"future_flag" => "x", "future_struct" => %{"a" => [1, nil]}}), []},
+      {"code mode tool messages", put_in(base, ["model_messages", "tools"], %{"code_mode" => %{"exec" => %{"description" => "Synthetic code mode"}, "wait" => %{"parameters" => "{}"}, "deferred_nested_tools_guidance" => "", "mcp_typescript_preamble" => ""}}), []},
       {"custom reasoning effort", Map.put(base, "supported_reasoning_levels", [%{"effort" => "turbo", "description" => "Synthetic"}]), []},
       {"unknown tool_mode and multi_agent_version", Map.merge(base, %{"tool_mode" => "future_mode", "multi_agent_version" => "v9"}), []},
       {"shell_type aliases", Map.put(base, "shell_type", "default"), []},
@@ -300,7 +301,8 @@ defmodule CodexPooler.CodexCatalogShapes do
       {"access programs without cyber", Map.put(base, "available_access_programs", %{})},
       {"string reasoning-effort-updates flag", Map.put(base, "supports_reasoning_effort_updates", "yes")},
       {"string guardian policy", Map.put(base, "guardian", "adaptive")},
-      {"string approvals messages", put_in(base, ["model_messages", "approvals"], "text")}
+      {"string approvals messages", put_in(base, ["model_messages", "approvals"], "text")},
+      {"string code mode tool messages", put_in(base, ["model_messages", "tools"], %{"code_mode" => "text"})}
     ]
   end
 

@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   its bundled one with only a log line (findings#258 row 258-34).
 
   The rules below are only those that make serde fail in every client release
-  from `0.154.0` through `0.156.1` (every tag reporting those whole versions,
+  from `0.154.0` through `0.157.0` (every tag reporting those whole versions,
   alphas included): required fields, closed enums, scalar types and the
   instructions rule of `deserialize_model_infos_with_legacy_base`. Anything the
   client tolerates stays out: unknown fields, `#[serde(other)]` enums, any
@@ -24,7 +24,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   """
 
   @verified_since {0, 154, 0}
-  @verified_through {0, 156, 1}
+  @verified_through {0, 157, 0}
 
   @i32_range -2_147_483_648..2_147_483_647
   @i64_range -9_223_372_036_854_775_808..9_223_372_036_854_775_807
