@@ -499,6 +499,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     metadata
     |> Map.merge(public_openai_responses_stream_metadata(state))
     |> Map.merge(DownstreamStream.native_http_progress_metadata(state))
+    |> Map.merge(DownstreamStream.native_http_tool_metadata(state))
   end
 
   def merge_stream_state_metadata(metadata, _state), do: metadata

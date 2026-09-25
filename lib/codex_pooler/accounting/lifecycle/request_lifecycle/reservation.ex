@@ -320,6 +320,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp unreserved_turn_claim?(%Request{}), do: false
 
+  defp link_semantic_execution_retry!(_opts, %{predecessor_request_id: id, predecessor_shape: :partial_http_tool_cut}, request, timestamp),
+    do: ClientRetry.insert_link!(%Request{id: id}, request, timestamp)
+
   defp link_semantic_execution_retry!(opts, %{predecessor_request_id: id}, request, timestamp) do
     case attr(opts, :correlation_id) do
       "codex-turn:" <> _digest ->
@@ -570,6 +573,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       native_client_retry_witness: attr(opts, :native_client_retry_witness),
       native_http_input_count: attr(opts, :native_http_input_count),
       native_http_semantic_turn_key: attr(opts, :native_http_semantic_turn_key),
+      native_http_transport: attr(opts, :transport),
       payload: context.payload,
       anchor_present?: attr(opts, :anchor_present?) == true
     }

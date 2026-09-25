@@ -32,6 +32,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     RequestReplayEntitlement
   }
 
+  alias CodexPooler.Accounting.NativeHttpToolObservation
   alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.CodexTurn
@@ -53,6 +54,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           optional(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
           optional(:native_http_input_count) => non_neg_integer() | nil,
           optional(:native_http_semantic_turn_key) => <<_::256>> | nil,
+          optional(:native_http_transport) => String.t() | nil,
           optional(:payload) => map() | nil,
           optional(:anchor_present?) => boolean()
         }
@@ -75,6 +77,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           | :task_exception
           | :lifecycle_cut
           | :partial_reasoning_cut
+          | :partial_http_tool_cut
           | :advanced_http_resume
           | :previsible_disconnect
           | :undelivered_completion
@@ -199,6 +202,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # A turn has at most one successor per predecessor. A client-retry link
   # naming the request keeps the fence unless it is one of the chain's own
   # edges (`chain_edges_only?/2`).
+  defp validate_semantic_retry(request, :partial_http_tool_cut, _scope, chain_edges) do
+    if chain_edges_only?(request, chain_edges), do: :ok, else: {:error, :terminal_predecessor}
+  end
+
   defp validate_semantic_retry(request, shape, %{semantic_claim?: true} = scope, chain_edges) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
@@ -279,6 +286,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       request.status == "succeeded" ->
         undelivered_completion(request, scope, now)
 
+      native_http_tool_scope?(request, scope) ->
+        admit_native_http_partial_tool(request, scope, now)
+
       not transport_scoped?(request, scope) ->
         {:error, :authorization_changed}
 
@@ -293,6 +303,38 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
       true ->
         admit_predecessor(request, family, scope, now)
+    end
+  end
+
+  # A client-side tool is dispatched only once its output_item.done arrives.
+  # Unlike an absent receipt, this bounded observation proves the HTTP source
+  # ended with only an incomplete tool. It authorizes one client-authored
+  # exact successor under this chain's locks, never an automatic replay.
+  defp native_http_tool_scope?(%Request{transport: "http_sse", request_metadata: %{"native_http_claim_arm" => arm}}, %{native_http_transport: "http_sse"}),
+    do: arm in ["opening", "tool_continuation"]
+
+  defp native_http_tool_scope?(_request, _scope), do: false
+
+  defp admit_native_http_partial_tool(request, scope, now) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    with %Request{status: "failed", last_error_code: @stream_error_code, completed_at: %DateTime{}} <- request,
+         %CodexTurn{status: "failed", error_code: @stream_error_code, completed_at: %DateTime{}, codex_session_id: session_id} <- turn,
+         true <- session_id == Map.get(scope, :codex_session_id),
+         %Attempt{status: "failed", transport: "http_sse", network_error_code: @stream_error_code, replay_generation: 0, completed_at: %DateTime{}} <- attempt,
+         true <- NativeHttpToolObservation.eligible_metadata?(attempt.response_metadata["native_http_partial_tool"]),
+         %ClientRetry.OriginalWitness{version: 1, digest: digest, auth_epoch: epoch} <- Map.get(scope, :native_client_retry_witness),
+         true <- ClientRetry.original_witness_eligible?(request),
+         true <- secure_compare(request.native_client_retry_digest, digest),
+         true <- request.native_client_retry_auth_epoch == epoch,
+         false <- Repo.exists?(from link in RequestClientRetryLink, where: link.successor_request_id == ^request.id),
+         false <- live_turn?(request.id) or live_attempt?(request.id) or entitlement?(request.id),
+         :ok <- validate_retry_window(request, attempt, now, scope) do
+      {:ok, :partial_http_tool_cut}
+    else
+      {:error, :retry_expired} = error -> error
+      _unsafe -> {:error, :terminal_predecessor}
     end
   end
 

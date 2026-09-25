@@ -373,6 +373,18 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
     end
   end
 
+  # Ordinary HTTP tool continuations can retry only their exact request after
+  # a proved partial-tool cut, so they need no tail or grown-history witnesses.
+  defp native_client_retry_witness(identity, %{"input" => input} = payload, request_options, :tool_continuation)
+       when is_list(input) do
+    with {:ok, digest} <- WebsocketTurnIdentity.replay_claim_digest(identity.semantic_turn_key, payload),
+         {:ok, witness} <- ClientRetry.original_witness(digest, request_options.runtime.api_key_runtime_epoch) do
+      witness
+    else
+      _unavailable -> nil
+    end
+  end
+
   defp native_client_retry_witness(_identity, _payload, _request_options, _arm), do: nil
 
   # A body that already carries the marker is its own marked variant; it is

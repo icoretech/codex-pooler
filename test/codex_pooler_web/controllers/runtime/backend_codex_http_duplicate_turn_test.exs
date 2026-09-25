@@ -191,6 +191,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
              :advanced_http_resume,
              :claim_by_request_kind,
              :known_gaps,
+             :partial_http_tool_retry,
              :payload_independent_claims,
              :public_error
            ]

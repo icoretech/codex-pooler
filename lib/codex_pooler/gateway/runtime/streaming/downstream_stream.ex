@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @moduledoc false
 
   alias CodexPooler.Accounting.ClientRetry
+  alias CodexPooler.Accounting.NativeHttpToolObservation
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
@@ -264,6 +265,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   def public_openai_responses_stream_metadata(_state), do: %{}
 
+  @spec enable_native_http_tool_observation(state()) :: state()
+  def enable_native_http_tool_observation(state),
+    do: Map.put(state, :native_http_tool_observation, NativeHttpToolObservation.new())
+
+  @spec native_http_tool_metadata(state()) :: map()
+  def native_http_tool_metadata(%{native_http_tool_observation: observation} = state) do
+    complete? = get_in(state, [:codex_responses_sse_block_state, :buffer]) == ""
+    %{"native_http_partial_tool" => NativeHttpToolObservation.metadata(observation, complete?)}
+  end
+
+  def native_http_tool_metadata(_state), do: %{}
+
+  @spec native_http_tool_started?(state()) :: boolean()
+  def native_http_tool_started?(%{native_http_tool_observation: %{call_type: type}}),
+    do: type in ["custom_tool_call", "function_call"]
+
+  def native_http_tool_started?(_state), do: false
+
   @spec native_http_progress_metadata(state()) :: map()
   def native_http_progress_metadata(%{native_http_progress: progress}) do
     case ClientRetry.native_http_progress_metadata(progress) do
@@ -345,7 +364,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
     buffer = sse_block_state.buffer
 
-    if buffer == "" and not sse_block_state.skip_leading_lf? and
+    if not Map.has_key?(state, :native_http_tool_observation) and
+         buffer == "" and not sse_block_state.skip_leading_lf? and
          not codex_responses_sse_chunk?(data) do
       {data, state, nil}
     else
@@ -376,6 +396,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> observe_native_http_tool_blocks(parsed, buffered_size > StreamProtocol.max_incomplete_sse_block_bytes())
         |> stage_native_http_progress(parsed)
         |> track_native_completion(parsed)
 
@@ -405,6 +426,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> observe_native_http_tool_blocks(parsed, false)
         |> stage_native_http_progress(parsed)
         |> track_native_completion(parsed)
 
@@ -444,6 +466,26 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp stage_native_http_progress(state, _blocks), do: state
+
+  defp observe_native_http_tool_blocks(%{native_http_tool_observation: observation} = state, blocks, oversized?) do
+    observation = if oversized?, do: NativeHttpToolObservation.poison(observation), else: observation
+
+    observation =
+      Enum.reduce(blocks, observation, fn block, observation ->
+        if comment_block?(block.raw) do
+          observation
+        else
+          NativeHttpToolObservation.observe(observation, block.event_type, block.decoded)
+        end
+      end)
+
+    Map.put(state, :native_http_tool_observation, observation)
+  end
+
+  defp observe_native_http_tool_blocks(state, _blocks, _oversized?), do: state
+
+  defp comment_block?(raw),
+    do: raw |> String.split(["\r\n", "\n", "\r"]) |> Enum.all?(&(&1 == "" or String.starts_with?(&1, ":")))
 
   defp normalize_native_blocks(blocks, opts, %{target: target}) do
     private_details? = target != :websocket and MisalignmentPolicyViolation.details_allowed?(opts)

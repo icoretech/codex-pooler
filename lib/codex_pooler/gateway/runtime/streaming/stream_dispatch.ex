@@ -309,6 +309,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     target
     |> base_stream_relay_state(opts, response)
     |> maybe_enable_native_http_progress(request)
+    |> maybe_enable_native_http_tool_observation(request)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())
@@ -321,6 +322,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
        do: DownstreamStream.enable_native_http_progress(state)
 
   defp maybe_enable_native_http_progress(state, _request), do: state
+
+  defp maybe_enable_native_http_tool_observation(
+         %{target: %Plug.Conn{}} = state,
+         %{transport: "http_sse", native_client_retry_version: 1, request_metadata: %{"native_http_claim_arm" => arm}}
+       )
+       when arm in ["opening", "tool_continuation"],
+       do: DownstreamStream.enable_native_http_tool_observation(state)
+
+  defp maybe_enable_native_http_tool_observation(state, _request), do: state
 
   defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
     DownstreamStream.initial_state(target, opts, stream_source(response))
@@ -548,7 +558,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         {:ok, state, ""}
 
       _missing_terminal ->
-        missing_public_openai_responses_terminal_result(state)
+        if DownstreamStream.native_http_tool_started?(state),
+          do: {:failure, state, "", :upstream_stream_interrupted},
+          else: missing_public_openai_responses_terminal_result(state)
     end
   end
 

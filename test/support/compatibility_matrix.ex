@@ -416,6 +416,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           :advanced_http_resume,
           :claim_by_request_kind,
           :known_gaps,
+          :partial_http_tool_retry,
           :payload_independent_claims,
           :public_error
         ],
@@ -441,6 +442,17 @@ defmodule CodexPooler.CompatibilityMatrix do
           requires_input_prefix_match: true,
           requires_delivered_output_receipt_match: true,
           identical_retry_refused: true
+        },
+        partial_http_tool_retry: %{
+          predecessor_transport: "http_sse",
+          predecessor_error: "upstream_stream_error",
+          claim_arms: ["opening", "tool_continuation"],
+          partial_tools: ["custom_tool_call", "function_call"],
+          retry_limit: 1,
+          retry_window_seconds: 30,
+          completed_item_retry: false,
+          requires_exact_request: true,
+          requires_complete_observation: true
         },
         claim_by_request_kind: %{
           turn: %{shape: "bare_payload_independent_codex_turn_claim", prefix: "codex-turn:"},
