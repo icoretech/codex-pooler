@@ -31,7 +31,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     Callbacks,
     DownstreamState,
     Logger,
-    Persistence
+    Persistence,
+    Status
   }
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
@@ -1273,6 +1274,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        |> schedule_owner_renewal()}
     end
   end
+
+  @impl GenServer
+  @spec format_status(Status.projection()) :: Status.projection()
+  def format_status(status), do: Status.format(status)
 
   @impl GenServer
   def handle_call(:native_compaction_trace_cooperative?, _from, state),
