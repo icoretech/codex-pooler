@@ -360,6 +360,12 @@ controls the terminal streamed usage chunk and is not forwarded upstream.
 Successful function or custom-tool turns return `finish_reason: "tool_calls"`,
 including streams whose terminal event omits the output list.
 
+Streamed function arguments and custom-tool input can be completed from the
+upstream's final argument, item, or completed-response snapshot. Pooler appends
+only the missing suffix when the tool identity and already-delivered bytes
+agree. Conflicting snapshots end the stream with a sanitized error rather than
+reporting a successful tool call.
+
 Chat function tools keep Chat's non-strict default: omitted or null `strict`
 is forwarded as `strict: false`. Explicit `strict: true` remains strict.
 Direct Responses requests and Responses-shaped fallback requests retain their

@@ -133,6 +133,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  def terminal_outcome(%{public_openai_chat: stream_state}) do
+    if ChatCompletions.reconciliation_failed?(stream_state), do: {:failed, nil}
+  end
+
   def terminal_outcome(%{native_terminal_outcome: :completed}), do: :completed
   def terminal_outcome(_state), do: nil
 
