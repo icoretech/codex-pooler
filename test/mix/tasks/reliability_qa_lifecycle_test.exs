@@ -78,26 +78,30 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     assert length(phase) == 3, "the blocked preparation never started, so the cap was not shown to cancel it"
   end
 
-  @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
-  test "the cap still cancels preparation when its first TERM is lost before the supervisor owns the phase" do
-    fixture = wrapper_fixture!(0, 0)
-    supervisor = Path.join(fixture.root, "dev_support/bin/qa-phase")
-    File.rename!(supervisor, supervisor <> "-real")
+  for term_blocked <- [false, true] do
+    @tag term_blocked: term_blocked
+    @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
+    test "the cap cancels delayed supervisor startup with wrapper TERM blocked=#{term_blocked}", %{term_blocked: term_blocked} do
+      fixture = Map.put(wrapper_fixture!(0, 0), :term_blocked, term_blocked)
+      supervisor = Path.join(fixture.root, "dev_support/bin/qa-phase")
+      File.rename!(supervisor, supervisor <> "-real")
 
-    # Stands in for the forked shell between fork and exec of the supervisor:
-    # Bash 3.2 (macOS /bin/bash) runs the inherited trap there, so a TERM sent
-    # at that moment never reaches the supervisor, which then runs the phase.
-    # This shell consumes the first TERM and only then becomes the supervisor.
-    write_executable!(supervisor, """
-    #!/bin/bash
-    lost=0
-    trap 'lost=1' TERM
-    while [ "$lost" = 0 ]; do sleep 0.05; done
-    trap - TERM
-    exec "$0-real" "$@"
-    """)
+      # Stands in for the forked shell before exec: Bash 3.2 can consume an
+      # inherited TERM there. Release the delay on either that signal or the
+      # watchdog marker: exec itself does not require a TERM. Waiting only for
+      # one deadlocks this fixture when the wrapper never acts on its signal,
+      # before the real supervisor can observe the marker (Drone 1597).
+      write_executable!(supervisor, """
+      #!/bin/bash
+      lost=0
+      trap 'lost=1' TERM
+      while [ "$lost" = 0 ] && [ ! -e "$QA_PHASE_CANCEL_FILE" ]; do sleep 0.05; done
+      trap - TERM
+      exec "$0-real" "$@"
+      """)
 
-    assert_cap_cancels_blocked_preparation!(fixture)
+      assert_cap_cancels_blocked_preparation!(fixture)
+    end
   end
 
   @tag slow: "the wrapper's cap is whole seconds, so the cancellation under test cannot fire before one second"
