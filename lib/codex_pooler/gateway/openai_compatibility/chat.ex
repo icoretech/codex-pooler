@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OpenAICompatibility.Chat.TextParts
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -32,11 +33,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   def coerce(payload, opts \\ %{}) do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
            prepare_response_payload(payload),
-         {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)) do
+         {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)),
+         {:ok, normalized_payload} <- TextParts.normalize(response.payload, chat_payload) do
+      options =
+        if normalized_payload == response.payload,
+          do: response.request_options,
+          else: RequestOptions.for_payload(response.request_options, response.endpoint, normalized_payload)
+
       response =
         response
+        |> Map.put(:payload, normalized_payload)
         |> Map.put(:chat_payload, chat_payload)
-        |> Map.update!(:request_options, &RequestOptions.put_openai_compatibility(&1, openai_chat_payload: chat_payload))
+        |> Map.put(:request_options, RequestOptions.put_openai_compatibility(options, openai_chat_payload: chat_payload))
 
       {:ok, response}
     end

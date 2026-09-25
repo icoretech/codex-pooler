@@ -85,6 +85,7 @@ request row. Check the HTTP ingress log for the request path, status and
 | Access to private networks is forbidden | Use a publicly reachable HTTPS endpoint instead of localhost or a private address. |
 | Model name is not valid | Check the API key switch, exact model ID, Pool permissions, and any team BYOK policy. Start a new chat after enabling the key. |
 | Unsupported parameter | [Report a bug](https://github.com/icoretech/codex-pooler/issues/new) with your Cursor and Codex Pooler versions, selected model, parameter name, and sanitized error code. Do not include API keys, prompts, or raw request bodies. |
+| `string_above_max_length` in an existing chat | Pooler splits oversized Chat history text and text tool results into smaller parts without truncation. If the error persists, include your Pooler version and the failed attempt's **Upstream error parameter** from Request logs; total context limits and non-text fields are separate constraints. |
 | Auto answers but Pooler has no request | Select the explicit model. Auto can use Cursor's own routing. |
 
 ![Cursor free-plan message blocking an explicitly selected model](/cursor-free-plan-limit.png)

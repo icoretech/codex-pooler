@@ -371,6 +371,15 @@ is forwarded as `strict: false`. Explicit `strict: true` remains strict.
 Direct Responses requests and Responses-shaped fallback requests retain their
 own strict-mode defaults.
 
+For ordinary Chat `messages`, text fields larger than 10 MiB are divided into
+smaller UTF-8 content parts before dispatch, preserving all text and its order.
+This includes message history and textual tool outputs. Oversized combined
+system/developer instructions keep their normalized content in one leading
+developer message with multiple parts. Nothing is truncated or summarized.
+Request-size and model context limits still apply; opaque fields such as tool
+arguments and encoded media are not split. Direct Responses and `input`
+fallback requests retain their existing representation.
+
 The optional `user` field accepts a string or null and is discarded before
 dispatch. It does not establish ownership, permissions, or routing identity.
 
