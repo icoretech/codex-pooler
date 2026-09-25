@@ -1118,9 +1118,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
+      listener = ThousandIsland.Server.listener_pid(server)
+      %{listener_sockets: listener_sockets} = :sys.get_state(listener)
+
       on_exit(fn ->
         refute Process.alive?(server)
-        assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
+        refute Process.alive?(listener)
+        # A released port can already belong to another partition. Inspect our
+        # original sockets instead of connecting to whoever now owns the port.
+        for {_id, socket} <- listener_sockets, do: assert({:error, :einval} == :inet.sockname(socket))
 
         CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :successor_cap_cleanup, listener_stopped: true, port_closed: true}))
       end)

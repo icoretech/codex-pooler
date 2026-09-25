@@ -39,6 +39,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SteeredTur
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Repo
 
   @detection_timeout_ms 15_000
@@ -303,6 +304,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SteeredTur
     {conn, ws, ref} = connect!(port, setup)
     {conn, ws} = public_websocket_send_text!(conn, ws, ref, encode(payload))
     {conn, _ws, frames} = receive_until_terminal!(conn, ws, ref)
+    # A peer can deliver the terminal before its durable turn finalization.
+    # These scenarios exercise continuation after completion, not take-over
+    # of an inherited turn that is still running.
+    if List.last(frames)["type"] == "response.completed" do
+      await_completed_turns!(setup, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+    end
+
     _closed = Mint.HTTP.close(conn)
     {:ok, frames}
   end
@@ -313,6 +321,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SteeredTur
     case last do
       %{"type" => "error"} -> {"error", last["status"], get_in(last, ["error", "code"])}
       %{"type" => type} -> {type, get_in(last, ["response", "id"])}
+    end
+  end
+
+  defp await_completed_turns!(setup, deadline_ms) do
+    unfinished = Repo.exists?(from t in CodexTurn, join: r in Request, on: r.id == t.request_id, where: r.pool_id == ^setup.pool.id and (t.status == "in_progress" or r.status in ["accepted", "in_progress"]))
+
+    if unfinished do
+      assert System.monotonic_time(:millisecond) < deadline_ms, "completed response did not finalize its persisted turn"
+      Process.sleep(10)
+      await_completed_turns!(setup, deadline_ms)
     end
   end
 
