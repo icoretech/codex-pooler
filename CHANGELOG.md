@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.9.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.0...codex-pooler-v0.9.1) (2026-09-25)
+
+
+### Features
+
+* **admin:** identify DeepSeek Harness in request logs ([d72ec5a](https://github.com/icoretech/codex-pooler/commit/d72ec5a32f96eee4d3f21c7c53d232bab28eef55))
+
+
+### Bug Fixes
+
+* **gateway:** allow encrypted agent handoffs to leave exhausted accounts ([0e05011](https://github.com/icoretech/codex-pooler/commit/0e0501136fa511356aada5f145c57b11421528bc))
+* **gateway:** retry incomplete native HTTP tool output once ([44cc8b5](https://github.com/icoretech/codex-pooler/commit/44cc8b5ff15e9a560a5c846d1ce57a539750f40f))
+
+
+### Tests
+
+* **admin:** await API key budget loading before assertions ([a95e92c](https://github.com/icoretech/codex-pooler/commit/a95e92cdd59c71878fb7ac775dd8adc9de67573d))
+* fence committed pool cleanup behind owner shutdown ([dd10149](https://github.com/icoretech/codex-pooler/commit/dd1014993ef7acdee676f16c661a6586697ab05c))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency openai/codex to v0.157.0 ([cf3071f](https://github.com/icoretech/codex-pooler/commit/cf3071f22ba43aacfac5416d294c8c8667e868a6))
+* **deps:** update docs and frontend dependencies ([a7a5f5f](https://github.com/icoretech/codex-pooler/commit/a7a5f5f52d5eea70cfc50901bd4baa8a709b2a99))
+
 ## [0.9.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.8.6...codex-pooler-v0.9.0) (2026-09-24)
 
 
