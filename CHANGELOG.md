@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.3...codex-pooler-v0.9.4) (2026-09-25)
+
+
+### Bug Fixes
+
+* **compat:** complete streamed tool arguments from final snapshots ([0d7cc9e](https://github.com/icoretech/codex-pooler/commit/0d7cc9ed339edaf2147e84f98b836a04e1979d03))
+* **deps:** update dependency @astrojs/starlight to v0.42.4 ([e45f98b](https://github.com/icoretech/codex-pooler/commit/e45f98bdb8cbc15cf99458f771659a4f74191a4b))
+
 ## [0.9.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.2...codex-pooler-v0.9.3) (2026-09-25)
 
 
