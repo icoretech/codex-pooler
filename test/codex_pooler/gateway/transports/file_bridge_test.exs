@@ -467,8 +467,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   end
 
   defp serve_upload(socket, {:remove_file, path}, parent, ref) do
+    # File.stream! opens lazily during the first send. Delete only after that
+    # PUT is complete so this action tests revalidation before the retry.
+    request = read_raw_http_request(socket)
     File.rm!(path)
-    serve_upload(socket, 503, parent, ref)
+    send_upload_response(socket, 503, [{"x-ms-retry-after-ms", "0"}], "")
+    send(parent, {ref, request})
   end
 
   defp serve_upload(socket, status, parent, ref) when is_integer(status),
@@ -480,7 +484,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
   defp serve_upload(socket, {status, headers, body}, parent, ref) do
     request = read_raw_http_request(socket)
+    send_upload_response(socket, status, headers, body)
+    send(parent, {ref, request})
+  end
 
+  defp send_upload_response(socket, status, headers, body) do
     :ok =
       :gen_tcp.send(socket, [
         "HTTP/1.1 #{status} Response\r\n",
@@ -488,8 +496,6 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
         "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n",
         body
       ])
-
-    send(parent, {ref, request})
   end
 
   defp split_raw_http_request!(request) do
