@@ -293,10 +293,31 @@ defmodule CodexPoolerWeb.V1.APIKeyActiveRequestsTest do
     end
   end
 
+  test "endpoint cleanup tolerates another listener reusing its released port" do
+    {server, port} = start_public_endpoint_with_server!()
+    cleanup = endpoint_cleanup(server)
+    :ok = ThousandIsland.stop(server)
+
+    replacement =
+      start_supervised!({Bandit, plug: CodexPoolerWeb.Endpoint, port: port, ip: {127, 0, 0, 1}, startup_log: false})
+
+    cleanup.()
+
+    assert Process.alive?(replacement)
+    assert {:ok, {{127, 0, 0, 1}, ^port}} = ThousandIsland.listener_info(replacement)
+  end
+
   defp owned_endpoint! do
     {server, port} = start_public_endpoint_with_server!()
+    on_exit(endpoint_cleanup(server))
+    port
+  end
 
-    on_exit(fn ->
+  defp endpoint_cleanup(server) do
+    listener = ThousandIsland.Server.listener_pid(server)
+    %{listener_sockets: [_ | _] = listener_sockets} = :sys.get_state(listener)
+
+    fn ->
       monitor = Process.monitor(server)
 
       try do
@@ -306,12 +327,13 @@ defmodule CodexPoolerWeb.V1.APIKeyActiveRequestsTest do
       end
 
       assert_receive {:DOWN, ^monitor, :process, ^server, _}, 15_000
-      assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
+      refute Process.alive?(listener)
+      # The port can already belong to another partition; only our captured
+      # sockets establish whether this endpoint released its listener.
+      for {_id, socket} <- listener_sockets, do: assert({:error, :einval} == :inet.sockname(socket))
 
-      CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :wire_cleanup, listener_stopped: true, port_closed: true}))
-    end)
-
-    port
+      CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :wire_cleanup, listener_stopped: true, owned_sockets_closed: true}))
+    end
   end
 
   for path <- ["/v1/responses", "/v1/chat/completions"], stream? <- [false, true] do

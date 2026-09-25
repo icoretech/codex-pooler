@@ -74,14 +74,17 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
       start_supervised!({Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    listener = ThousandIsland.Server.listener_pid(server)
+    %{listener_sockets: [_ | _] = listener_sockets} = :sys.get_state(listener)
 
     on_exit(fn ->
       refute Process.alive?(server)
+      refute Process.alive?(listener)
 
-      assert {:error, :econnrefused} =
-               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+      # A released ephemeral port can be reused by another partition.
+      for {_id, socket} <- listener_sockets, do: assert({:error, :einval} == :inet.sockname(socket))
 
-      CodexPooler.TestDiagnostics.puts("usage_http_cleanup listener_alive=false port_open=false")
+      CodexPooler.TestDiagnostics.puts("usage_http_cleanup listener_alive=false owned_sockets_closed=true")
     end)
 
     before_usage = curl_usage!(port, config, "/v1/usage", "before_correction")
