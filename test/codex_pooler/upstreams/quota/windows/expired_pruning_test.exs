@@ -214,13 +214,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ExpiredPruningTest do
         Repo.query!("SELECT wait_event, pg_blocking_pids(pid) FROM pg_stat_activity WHERE pid = $1", [backend_pid])
       end)
 
-    # A waiter joins the lock queue, which `pg_blocking_pids/1` reports, before
-    # it reports the wait itself, so one sample can pair the holder with a nil
-    # `wait_event` (Drone 1527, findings#206 row 206-344). That sample is "not
-    # yet observed", never the answer.
+    # Activity and blockers are sampled separately: the holder can already
+    # appear while `wait_event` is nil or still ClientRead. Only the actual
+    # advisory wait with that holder proves the pruner reached its mutex.
     case rows do
-      [[wait_event, [^holder_pid]]] when is_binary(wait_event) ->
-        {wait_event, [holder_pid]}
+      [["advisory", [^holder_pid]]] ->
+        {"advisory", [holder_pid]}
 
       other ->
         if System.monotonic_time(:millisecond) >= deadline,
