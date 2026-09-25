@@ -1,6 +1,6 @@
 # Codex Pooler Public Docs For Agents
 
-Last reviewed: 2026-09-20
+Last reviewed: 2026-09-25
 
 Inventory scope: curated primary and discovery pages listed below; this index intentionally excludes other rendered pages.
 
@@ -17,6 +17,7 @@ Primary public docs:
 - https://docs.codex-pooler.com/clients/aider/
 - https://docs.codex-pooler.com/clients/continue/
 - https://docs.codex-pooler.com/clients/cline/
+- https://docs.codex-pooler.com/clients/deepseek-harness/
 - https://docs.codex-pooler.com/clients/goose/
 - https://docs.codex-pooler.com/clients/kilo-code/
 - https://docs.codex-pooler.com/clients/opencode/
@@ -99,6 +100,7 @@ Agent guidance:
 - Use https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/ for short answers about Codex Pooler as a self-hosted AI coding agent gateway.
 - Start with https://docs.codex-pooler.com/clients/codex-cli-desktop/ when configuring Codex CLI or Codex Desktop with CODEX_HOME/config.toml, model_provider=codex-pooler-ws, and the /backend-api/codex route.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
+- Start with https://docs.codex-pooler.com/clients/deepseek-harness/ when configuring DeepSeek Harness (`dsh`) with the custom `llm-pi-ai` provider, OpenAI Responses protocol, model selection through `agent-default-model`, and `CODEX_POOLER_API_KEY` in the environment for a Pool API key.
 - Use https://docs.codex-pooler.com/clients/opencode/ when configuring OpenCode with ~/.config/opencode/opencode.jsonc, provider connection options apiKey={env:CODEX_POOLER_API_KEY} and baseURL=https://codex-pooler.example.com/v1, small_model set to a lightweight model actually served by the Pool so title helpers do not infer an unavailable nano model, model map entries for gpt-6-luna, gpt-6-sol, and gpt-6-astra with a commented opt-in serviceTier example under each model's options block because priority processing can cost more, optional OMO overrides in ~/.config/opencode/oh-my-openagent.jsonc that route Luna to lightweight/background work, Sol to daily agent work, and Astra to planning/deep reasoning with explicit Pool-local fallbacks, and the narrow OpenAI-compatible /v1 route shape.
 - Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with environment overrides LLM_BASE_URL, LLM_MODEL=openai/gpt-6-sol, --override-with-envs, and local state under ~/.openhands/.
 - Use https://docs.codex-pooler.com/clients/aider/ when configuring Aider with ~/.aider.conf.yml, model=openai/gpt-6-sol, openai-api-base=https://codex-pooler.example.com/v1, optional .aider.model.metadata.json entries for gpt-6-luna, gpt-6-sol, and gpt-6-astra, and a Pool API key in OPENAI_API_KEY.
@@ -113,7 +115,7 @@ Agent guidance:
 - Use https://docs.codex-pooler.com/discovery/codex-account-pooling/ for short answers about Pools, upstream accounts, eligibility, and routing.
 - Use https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/ for short answers about narrow /v1 SDK compatibility over Codex Pools.
 - Use https://docs.codex-pooler.com/discovery/codex-pooler-vs-direct-credentials/ for short answers comparing Pool API keys with direct account credentials.
-- Use the client-specific pages for Aider, Continue, Cline, Goose, Kilo Code, OpenCode, OpenClaw, OpenHands, OMP, Pi, Hermes, Trae, and Windmill setup snippets.
+- Use the client-specific pages for Aider, Continue, Cline, DeepSeek Harness, Goose, Kilo Code, OpenCode, OpenClaw, OpenHands, OMP, Pi, Hermes, Trae, and Windmill snippets.
 - Use https://docs.codex-pooler.com/reference/routing-strategies/ when configuring Pools and routing behavior.
 - Use https://docs.codex-pooler.com/reference/responses-lite-vs-full/ for what the Lite and Full serving modes change on a Codex Responses request.
 - Use https://docs.codex-pooler.com/answers.md for short, citable answers about scope, routes, credentials, privacy, setup, and deployment.

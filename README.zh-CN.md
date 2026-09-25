@@ -17,6 +17,7 @@
   <a href="https://docs.codex-pooler.com/clients/continue/" title="Continue"><img src=".github/assets/continue-favicon.png" alt="Continue" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/cline/" title="Cline"><img src=".github/assets/cline-favicon.png" alt="Cline" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/goose/" title="Goose"><img src=".github/assets/goose-favicon.png" alt="Goose" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/deepseek-harness/" title="DeepSeek Harness"><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/windmill/" title="Windmill AI"><img src=".github/assets/windmill-favicon.png" alt="Windmill AI" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openhands/" title="OpenHands"><img src=".github/assets/openhands-favicon.png" alt="OpenHands" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openai-compatible/" title="OpenAI-compatible SDKs"><img src=".github/assets/python-favicon.png" alt="OpenAI-compatible SDKs" width="24" height="24"></a>
@@ -1664,6 +1665,44 @@ extensions:
 
 OpenAI 兼容模型请求使用 Pool API 密钥，`/mcp` 使用运营者 MCP 令牌。不要把 Pool
 API 密钥复用给 MCP。
+
+</details>
+
+<details>
+<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>$DSH_HOME/profiles/headless/cordis.patch.yml</code></summary>
+
+![Codex Pooler DeepSeek Harness integration](.github/assets/codex-pooler-deepseek.png)
+
+通过 `npm install -g @deepseek-ai/dsh@latest` 安装当前版本（升级时请检查是否有更新版本）。在运行 `dsh` 的环境中设置 `CODEX_POOLER_API_KEY`，运行 `dsh --profile headless --dump-default-config` 初始化 profile，然后将以下配置加入 `$DSH_HOME/profiles/headless/cordis.patch.yml`：
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      codex-pooler:
+        apiKeyEnv: CODEX_POOLER_API_KEY
+        api: openai-responses
+        compat:
+          supportsStrictMode: true
+        baseURL: http://localhost:4000/v1
+        models:
+          - id: gpt-6-luna
+            contextWindow: 828400
+          - id: gpt-6-sol
+            contextWindow: 828400
+          - id: gpt-6-astra
+            contextWindow: 828400
+- id: agent-default-model
+  config:
+    provider: codex-pooler
+    model: gpt-6-luna
+```
+
+部署后请将 `http://localhost:4000/v1` 替换为你的 `/v1` 地址，并且只选择 Pool 可用的模型。若编辑已有补丁，请保留这些条目中的其他键：Cordis 补丁会替换条目的整个 `config`。运行 `dsh --profile headless "Reply exactly: deepseek pooler ok"` 检查文本回复。
+
+保留 `compat.supportsStrictMode: true`：它会让普通工具显式发送 `strict: false`，使可选参数保持可选。已知上游输出限制时，可以为每个模型设置 `maxTokens`。
+
+Codex Pooler 默认对每个 Pool-model 组合使用 **Auto**：当可路由的模型目录证据表明支持 Lite 时使用 Lite，否则使用 Full。Full 会保留普通 Responses 行为，例如并行工具调用；Agent 需要此行为时，请为该 Pool-model 组合选择 Full。此客户端配置不会选择服务端模式。
 
 </details>
 

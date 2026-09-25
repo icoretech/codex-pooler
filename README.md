@@ -17,6 +17,7 @@
   <a href="https://docs.codex-pooler.com/clients/continue/" title="Continue"><img src=".github/assets/continue-favicon.png" alt="Continue" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/cline/" title="Cline"><img src=".github/assets/cline-favicon.png" alt="Cline" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/goose/" title="Goose"><img src=".github/assets/goose-favicon.png" alt="Goose" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/deepseek-harness/" title="DeepSeek Harness"><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/windmill/" title="Windmill AI"><img src=".github/assets/windmill-favicon.png" alt="Windmill AI" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openhands/" title="OpenHands"><img src=".github/assets/openhands-favicon.png" alt="OpenHands" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openai-compatible/" title="OpenAI-compatible SDKs"><img src=".github/assets/python-favicon.png" alt="OpenAI-compatible SDKs" width="24" height="24"></a>
@@ -1808,6 +1809,44 @@ if you keep the optional operator MCP add-on, change the extension `uri` to
 
 Use a Pool API key for OpenAI-compatible model requests and an operator MCP token
 for `/mcp`. Do not reuse the Pool API key for MCP.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/deepseek-harness-favicon.png" alt="DeepSeek Harness logo" width="16" height="16"> DeepSeek Harness (<code>dsh</code>) <code>$DSH_HOME/profiles/headless/cordis.patch.yml</code></summary>
+
+![Codex Pooler DeepSeek Harness integration](.github/assets/codex-pooler-deepseek.png)
+
+Install the current release with `npm install -g @deepseek-ai/dsh@latest` (check for a newer release when upgrading). Set `CODEX_POOLER_API_KEY` in the environment where `dsh` runs, initialize the profile with `dsh --profile headless --dump-default-config`, then add this to `$DSH_HOME/profiles/headless/cordis.patch.yml`:
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      codex-pooler:
+        apiKeyEnv: CODEX_POOLER_API_KEY
+        api: openai-responses
+        compat:
+          supportsStrictMode: true
+        baseURL: http://localhost:4000/v1
+        models:
+          - id: gpt-6-luna
+            contextWindow: 828400
+          - id: gpt-6-sol
+            contextWindow: 828400
+          - id: gpt-6-astra
+            contextWindow: 828400
+- id: agent-default-model
+  config:
+    provider: codex-pooler
+    model: gpt-6-luna
+```
+
+Use your deployed `/v1` URL instead of `http://localhost:4000/v1`, and only select models available to your Pool. If editing an existing patch, preserve other keys in these entries: a Cordis patch replaces an entry's complete `config`. Verify a text reply with `dsh --profile headless "Reply exactly: deepseek pooler ok"`.
+
+Keep `compat.supportsStrictMode: true`: it makes ordinary tools send explicit `strict: false`, so optional arguments remain optional. When you know the upstream's output limit, you can set a per-model `maxTokens` value.
+
+Codex Pooler defaults each Pool-model pair to **Auto**: it uses Lite when routable catalog evidence reports support, otherwise Full. Full preserves ordinary Responses behavior such as parallel tool calls; select Full for this Pool-model pair when the agent needs it. This client configuration does not choose the server-side mode.
 
 </details>
 

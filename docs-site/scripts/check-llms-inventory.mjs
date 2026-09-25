@@ -21,6 +21,7 @@ const expectedInventory = {
     "/clients/aider/",
     "/clients/continue/",
     "/clients/cline/",
+    "/clients/deepseek-harness/",
     "/clients/goose/",
     "/clients/kilo-code/",
     "/clients/opencode/",
