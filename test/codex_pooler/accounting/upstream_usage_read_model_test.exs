@@ -134,6 +134,23 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
              Accounting.build_codex_usage_for_chatgpt_account(account_id)
   end
 
+  test "representative usage recognizes workspace and consumer plan SKUs without substring matching" do
+    workspace_plans = ~w(team business ent26 enterprise enterprise_cbp_automation enterprise_cbp_usage_based self_serve_business_prolite self_serve_business_usage_based edu edu_plus edu_pro hc education)
+
+    pairs = Enum.map(workspace_plans, &{&1, "promax"}) ++ Enum.map(~w(pro prolite promax), &{&1, "plus"}) ++ [{"plus", "go"}, {"go", "unknown"}, {"free", "enterprise_preview_unknown"}]
+
+    for {preferred, other} <- pairs do
+      pool = pool_fixture()
+
+      for plan <- [other, preferred] do
+        %{identity: identity} = upstream_assignment_fixture(pool, %{plan_label: plan, plan_family: String.replace(plan, "_", "-")})
+        put_fresh_account_quota(identity)
+      end
+
+      assert {:ok, %{plan_type: ^preferred}} = Accounting.build_codex_usage_for_pool(pool)
+    end
+  end
+
   test "public usage selects a fresh available identity without account windows" do
     as_of = ~U[2026-09-01 12:00:00.000000Z]
     pool = pool_fixture()

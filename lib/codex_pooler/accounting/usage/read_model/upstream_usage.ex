@@ -267,13 +267,14 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   end
 
   defp plan_rank(%UpstreamIdentity{} = identity) do
-    plan = identity.plan_family || plan_label(identity.plan_label) || ""
+    plan = (identity.plan_family || plan_label(identity.plan_label) || "") |> String.downcase() |> String.replace("_", "-")
 
+    # Presentation precedence for the representative usage account, not quota or pricing entitlement.
     cond do
-      plan =~ ~r/enterprise|team/i -> 4
-      plan =~ ~r/pro/i -> 3
-      plan =~ ~r/plus/i -> 2
-      plan =~ ~r/free/i -> 1
+      plan in ~w(team business ent26 enterprise enterprise-cbp-automation enterprise-cbp-usage-based self-serve-business-prolite self-serve-business-usage-based edu edu-plus edu-pro hc education) -> 4
+      plan in ~w(pro prolite promax chatgpt-pro) -> 3
+      plan in ~w(plus chatgpt-plus) -> 2
+      plan in ~w(free go) -> 1
       true -> 0
     end
   end
