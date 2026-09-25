@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.1...codex-pooler-v0.9.2) (2026-09-25)
+
+
+### Bug Fixes
+
+* **catalog:** extend verified decode filtering to Codex 0.157.0 ([bb282fc](https://github.com/icoretech/codex-pooler/commit/bb282fcee7189698006a7f65f14b6e4045618d63))
+* **deps:** update dependency astro to v7.3.5 ([#435](https://github.com/icoretech/codex-pooler/issues/435)) ([d4d3576](https://github.com/icoretech/codex-pooler/commit/d4d35766018b2d45ac0c5b5f7b2faab97ca75de4))
+* **files:** retry transient presigned blob uploads within one deadline ([9d43fec](https://github.com/icoretech/codex-pooler/commit/9d43fecef3a8d32ea05f3d38bebe36c060bee9e6))
+* **websocket:** redact owner status and crash diagnostics ([df6b2a7](https://github.com/icoretech/codex-pooler/commit/df6b2a7232d8f72f96703db9016c5bec4b9d84f8))
+
+
+### Tests
+
+* **dev:** release delayed QA supervisor on watchdog expiry ([5bbb13a](https://github.com/icoretech/codex-pooler/commit/5bbb13a8da4258801c3c98e831165d5a61a88225))
+* **files:** receive the first upload before removing its tempfile ([beebfba](https://github.com/icoretech/codex-pooler/commit/beebfbaceec8cdd45dc6112d7c3e7a6f28ba5314))
+* **quota:** wait for the pruner advisory lock event ([d2d4b6d](https://github.com/icoretech/codex-pooler/commit/d2d4b6d1c75b4a20aa7c6c989bd7771c63b8fe40))
+
+
+### Miscellaneous Chores
+
+* **deps:** update ghcr.io/icoretech/codex-docker docker tag to v0.157.0 ([ce404a4](https://github.com/icoretech/codex-pooler/commit/ce404a41d193cdbc70cd9aed1f9684c6b203a439))
+* **pricing:** refresh the 2026-09-24 catalog snapshot ([f9d53aa](https://github.com/icoretech/codex-pooler/commit/f9d53aa9b6ae757b31ddd69ffac7c332c729ba72))
+
 ## [0.9.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.0...codex-pooler-v0.9.1) (2026-09-25)
 
 
