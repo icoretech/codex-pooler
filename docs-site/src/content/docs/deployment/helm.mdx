@@ -189,7 +189,7 @@ curl -fsS --get http://127.0.0.1:9090/api/v1/query \
 
 Useful first queries:
 
-```text
+```promql
 vm_memory_total_bytes{namespace="codex-pooler", job="codex-pooler-app"}
 sum by (pod) (rate(phoenix_endpoint_stop_count{namespace="codex-pooler", job="codex-pooler-app"}[5m]))
 sum by (method, status_class) (rate(codex_pooler_http_request_count{namespace="codex-pooler", job="codex-pooler-app"}[5m]))
