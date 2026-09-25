@@ -11,6 +11,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
+  @budget_usage_timeout_ms 15_000
+
   setup :register_and_log_in_user
 
   test "limits explain known, provisional and pending budget without changing measured burn", %{
@@ -45,6 +47,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
     {:ok, view, _} = live(conn, ~p"/admin/api-keys")
     view |> element("#edit-api-key-#{key.id}") |> render_click()
     select_api_key_section(view, :limits)
+    render_async(view, @budget_usage_timeout_ms)
 
     for window <- ["daily", "weekly"] do
       assert has_element?(view, "#api-key-budget-#{window}-known", "123")
