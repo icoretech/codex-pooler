@@ -209,14 +209,14 @@ of OpenAI directly.
 
 Use the `openai-api` setup above. Hermes can also reach Codex Pooler through its `openai-codex` provider pointed at the Pooler's `/v1` surface, but treat this as an advanced option with limits:
 
-- A few Hermes code paths on this provider use hard-coded `chatgpt.com` URLs and send the credential-pool key there as a bearer token: the model catalog and context-length probe, the `/model` picker, and the `openai-codex` image plugin. A Codex Pooler key is not valid at `chatgpt.com`, so those requests fail. When the probe does get an answer, Hermes also takes that service's context window instead of your Pool's. See [icoretech/codex-pooler#430](https://github.com/icoretech/codex-pooler/issues/430). If you have run this setup without the precautions below, rotate the Pool API key as a precaution.
-- Always set `model.context_length`, which removes the probe. Do not use the `/model` picker, and do not set `image_gen.provider: openai-codex`.
+- Always set `model.context_length` from your Pool's `/v1/models` result. The Codex picker expects a native catalog and cannot read that endpoint's OpenAI-compatible format; do not use it to select your Pool's models or context limits.
+- With Hermes 0.21.5, the unconfigured context probe, `/model` picker and `openai-codex` image plugin can send the Pool API key to `chatgpt.com`. Keep the context limit explicit, avoid that picker and use `image_gen.provider: openai`. If the key was sent outside your Pooler instance, rotate it.
 - Web search switches to the provider's hosted `web_search` tool.
 - Hermes never sends `service_tier` on this provider, and the named-provider option above does not apply to it.
 - Image generation and speech-to-text still need the `OPENAI_*` variables pointed at the Pooler's `/v1` surface.
 - Hermes sends a `session_id` header here. An ingress proxy that drops headers containing underscores removes it.
 
-What it adds is a Codex Pooler session for each Hermes session, which the websocket bridge can use when the instance has owner forwarding enabled. We have measured no prompt-cache gain over the recommended setup. Keep the base URL on `/v1`: pointing this provider at the native `/backend-api/codex` route currently loses the prompt cache.
+This provider supplies a session header that Codex Pooler's websocket bridge can use when owner forwarding is enabled. A body `prompt_cache_key` alone does not enable the bridge. Keep the base URL on `/v1`: the recommended setup already supports prompt-cache locality, so switching providers or routes is unnecessary for that purpose.
 
 Keep the endpoint value in the environment:
 
