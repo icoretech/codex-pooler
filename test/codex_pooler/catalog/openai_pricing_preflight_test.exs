@@ -6,7 +6,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
+  @target_sha256 "d9bfc702b212e3728b9d74080c3677d0dbf2c3a7c1478966adfcbfc78be6b291"
 
   @skipped_pricing_type_paths [
     "models.gpt-4o-mini-transcribe.pricing_type",
@@ -17,8 +17,6 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     "models.gpt-realtime-translate.pricing_type",
     "models.gpt-realtime-whisper.pricing_type",
     "models.gpt-transcribe.pricing_type",
-    "models.sora-2-pro.pricing_type",
-    "models.sora-2.pricing_type",
     "models.tts-1-hd.pricing_type",
     "models.tts-1.pricing_type",
     "models.whisper.pricing_type"
@@ -122,28 +120,28 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
            ]
   end
 
-  test "classifies the reviewed September 22 target with exact artifact and warning coverage" do
+  test "classifies the reviewed September 24 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
     payload = CodexPooler.JSON.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
-    assert byte_size(raw) == 73_335
+    assert byte_size(raw) == 71_433
     assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
-    assert payload["generated_at"] == "2026-09-22T18:00:08.224828Z"
-    assert payload["models_count"] == 85
-    assert map_size(payload["models"]) == 85
+    assert payload["generated_at"] == "2026-09-24T18:20:07.500692Z"
+    assert payload["models_count"] == 83
+    assert map_size(payload["models"]) == 83
     assert payload["tools_count"] == 4
     assert map_size(payload["tools"]) == 4
 
     assert result.compatible?
     assert result.errors == []
-    assert length(result.warnings) == 87
+    assert length(result.warnings) == 85
 
     assert result.summary == %{
              importable_rows: 203,
              priced_rows: 197,
              unavailable_rows: 6,
-             skipped_models: 13,
+             skipped_models: 11,
              skipped_price_buckets: 74
            }
 
@@ -156,7 +154,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert Enum.frequencies_by(result.warnings, & &1.code) == %{
              incomplete_price_bucket: 4,
              unsupported_price_bucket: 70,
-             unsupported_pricing_type: 13
+             unsupported_pricing_type: 11
            }
 
     warning_paths = Enum.group_by(result.warnings, & &1.code, & &1.path)

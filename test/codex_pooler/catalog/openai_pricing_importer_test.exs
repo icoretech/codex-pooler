@@ -14,8 +14,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
-  @target_generated_at "2026-09-22T18:00:08.224828Z"
+  @target_sha256 "d9bfc702b212e3728b9d74080c3677d0dbf2c3a7c1478966adfcbfc78be6b291"
+  @target_generated_at "2026-09-24T18:20:07.500692Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -41,7 +41,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     "gpt-5.2-codex",
     "o1-mini",
     "o3-deep-research",
-    "o4-mini-deep-research"
+    "o4-mini-deep-research",
+    "sora-2",
+    "sora-2-pro"
   ]
   @reviewed_rates %{
     "gpt-6-astra" => %{
@@ -317,7 +319,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 22 target as canonical revision 2 rows" do
+  test "imports the reviewed September 24 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -342,7 +344,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
     assert first.inserted == 203
-    assert first.skipped == 87
+    assert first.skipped == 85
 
     rows =
       Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
@@ -370,7 +372,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
              end)
     end)
 
-    assert {:ok, %{inserted: 0, skipped: 87}} = OpenAIPricingImporter.import_file(@target)
+    assert {:ok, %{inserted: 0, skipped: 85}} = OpenAIPricingImporter.import_file(@target)
   end
 
   # The rows above only prove the importer wrote the rates. These settle real
