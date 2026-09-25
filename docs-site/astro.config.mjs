@@ -144,6 +144,7 @@ export default defineConfig({
         autogenerateGroup("Reference", "reference"),
         autogenerateGroup("Operators", "operators"),
         autogenerateGroup("Deployment", "deployment"),
+        autogenerateGroup("Monitoring", "monitoring"),
       ],
     }),
     removePrivateMarkdownAssets(),

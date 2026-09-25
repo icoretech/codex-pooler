@@ -1,0 +1,80 @@
+---
+title: Logs and memory
+description: Correlate Codex Pooler application and ingress logs, and use the memory sampler to investigate pressure on web, worker and scheduler roles.
+sidebar:
+  order: 6
+---
+
+Logs complement metrics when a failure has no request row, when a worker is not scraped, or when a short-lived memory spike is missed between scrapes.
+
+## Correlate a request
+
+Use a bounded UTC time window and inspect the relevant application replicas. For a known request, start with [Request logs](/operators/request-logs/); for an early refusal, start with the application log.
+
+| Evidence | What it establishes |
+| --- | --- |
+| Client error and timestamp | What the client observed |
+| Ingress/access log | The edge response and connection timing |
+| Application log | The gateway boundary, bounded reason and available correlation metadata |
+| Request and attempt records | Persisted outcome, dispatch attempts and recorded usage |
+
+An upstream HTTP 200 is not proof that the streamed turn completed. A client disconnect does not, on its own, prove the user pressed Stop. Correlate terminal outcomes and timing before assigning a cause.
+
+Useful application-log searches include:
+
+- `runtime request refused before admission`
+- `runtime request refused before dispatch`
+- `replay rejection`
+- `memory sampler threshold exceeded`
+
+Collect logs from the role that performed the work, including workers and schedulers on split deployments. Kubernetes previous-container logs or your central log store can retain evidence from before a restart.
+
+## Memory sampler
+
+The memory sampler is enabled by default on every release role. It reacts to VM memory observations and logs a warning when the greater of BEAM total memory and available cgroup usage reaches the configured fraction of the memory limit.
+
+It needs a usable memory limit: either an explicit override or a detected cgroup limit. On a host without either, enabling the sampler does not make it emit threshold snapshots.
+
+A snapshot includes:
+
+- release-role metadata
+- BEAM memory categories and selected cgroup memory statistics
+- process and port counts
+- top processes by memory and message-queue length
+- top ETS tables by memory, without their contents
+
+The sampler does not log process messages, ETS contents, prompts, files, raw frames or credentials.
+
+## Configure the sampler
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEX_POOLER_MEMORY_SAMPLER_ENABLED` | `true` | Enable threshold snapshots |
+| `CODEX_POOLER_MEMORY_SAMPLER_THRESHOLD_RATIO` | `0.70` | Fraction of the effective memory limit that triggers a snapshot |
+| `CODEX_POOLER_MEMORY_SAMPLER_MIN_INTERVAL_MS` | `60000` | Minimum gap between snapshots |
+| `CODEX_POOLER_MEMORY_SAMPLER_TOP_PROCESSES` | `20` | Maximum entries in each top-process list |
+| `CODEX_POOLER_MEMORY_SAMPLER_TOP_ETS_TABLES` | `20` | Maximum ETS entries |
+| `CODEX_POOLER_MEMORY_SAMPLER_LIMIT_BYTES` | Detected cgroup limit | Optional explicit limit for threshold comparison |
+
+The minimum interval throttles logging; it is not a promise to sample every 60 seconds. A process can reach OOM before a snapshot is emitted.
+
+For a temporary investigation, lower the threshold or reduce the minimum interval through your deployment's environment settings, then restart the affected role. Restore normal settings afterward to limit logging overhead.
+
+Set `CODEX_POOLER_MEMORY_SAMPLER_LIMIT_BYTES` only when you need an explicit comparison limit, for example on a host without a usable cgroup limit. It does not change the container's actual memory limit.
+
+## Interpret memory pressure
+
+Compare snapshots with the [Grafana memory panels](/monitoring/grafana/#compare-memory-signals):
+
+- Rising binary memory can point to retained stream or transport data.
+- Rising process memory or mailbox sizes can point to accumulating work.
+- Container memory rising independently of BEAM warrants checking other processes and cgroup memory categories.
+- A restart with an OOM termination reason is stronger evidence of a limit breach than a missing final application log.
+
+Worker and scheduler roles do not run the application Prometheus reporter. Use their own sampler logs together with Kubernetes container memory, resource-limit, restart and termination metrics.
+
+## Share a bounded report
+
+Include timestamps, roles, pod names, memory categories, counts and sanitized error codes. Keep request content and credentials out of shared logs, screenshots, tickets and dashboard annotations.
+
+Use [runtime triage](/monitoring/runtime-triage/) for the meaning of refusal and lifecycle counters, or [PromQL recipes](/monitoring/promql/#memory-and-restarts) for the matching resource queries.

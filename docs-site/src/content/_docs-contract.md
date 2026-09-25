@@ -426,6 +426,10 @@ and `test/support/compatibility_matrix.ex`.
 
 ## Metrics and operator-session boundaries
 
+Monitoring guides live under `monitoring/`, in a dedicated sidebar group after Deployment. Separate collection setup, dashboard use, runtime interpretation, PromQL recipes and logs. Keep the legacy `/operators/monitoring/` page hidden from navigation/search with its old heading anchors linking to the new guides; retain the existing dashboard JSON download URL. Update the curated llms inventory when adding or moving primary monitoring pages.
+
+Verify monitoring claims against `Telemetry.prometheus_metrics/0`, `Telemetry.RoleCoverage`, the metrics controller, memory sampler and the public chart. Keep direct and relayed event coverage explicit, use `max` for shared relay gauges, and distinguish current lifecycle metadata from a complete transition history. A quiet graph is not proof that an event never happened. Give each PromQL expression a purpose, collector requirements and interpretation; use one runnable expression per block.
+
 `/metrics` is outside the runtime firewall. Public operator docs may describe
 only its three states: **open** when no metrics bearer is configured,
 **bearer-protected** when one is configured, and **unavailable** when settings

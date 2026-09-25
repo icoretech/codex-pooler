@@ -1,0 +1,101 @@
+---
+title: Metrics setup
+description: Secure and collect Codex Pooler Prometheus metrics, including Helm ServiceMonitor settings and coverage across release roles.
+sidebar:
+  order: 2
+---
+
+Codex Pooler serves Prometheus metrics at `GET /metrics` on the application listener. Configure access first, then verify your collector can scrape every application replica you want to observe.
+
+## Protect the metrics endpoint
+
+Manage the metrics bearer token in **System** at `/admin/system`. It is separate from Pool API keys and operator MCP tokens.
+
+| Metrics token state | Endpoint behavior |
+| --- | --- |
+| Intentionally unset | Scrapes are allowed without a token |
+| Configured | A matching `Authorization: Bearer …` header is required; missing or incorrect credentials return `401 metrics_unauthorized` |
+| Unavailable | Access fails closed with `401 metrics_unauthorized` |
+
+The runtime ingress firewall does **not** protect `/metrics`. An ingress exposing the application at `/` can also expose this endpoint.
+
+For a public deployment, configure the metrics token or block `/metrics` at the ingress and scrape the application pods privately. Keep the token in your collector's secret store. Do not paste it into a dashboard, a shared command, or Helm values.
+
+Metrics contain bounded labels and counters rather than conversation content, but they still reveal traffic volume and failure rates.
+
+## Collect metrics with the Helm chart
+
+The chart can create a Prometheus Operator `ServiceMonitor`. Prometheus Operator and its custom resource definitions must already be installed.
+
+Merge this into your chart values:
+
+```yaml title="values.yaml" frame="code"
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 30s
+    scrapeTimeout: 10s
+    bearerTokenSecret:
+      name: metrics-scrape-token
+      key: token
+```
+
+Create the referenced Secret in the same namespace as the `ServiceMonitor`, containing the token configured in Codex Pooler. The example contains only the Secret reference. Omit `bearerTokenSecret` when you intentionally leave the endpoint open on a private network.
+
+The `release` label is an example: it must match your Prometheus instance's `serviceMonitorSelector`. Its namespace selector must also include the namespace containing this monitor.
+
+The chart selects the application service's `http` port and defaults to `path: /metrics` and `scheme: http`. The interval and timeout above are chart defaults. For a temporary high-resolution investigation, `interval: 10s` with `scrapeTimeout: 5s` is a possible choice; account for the extra scrape load.
+
+Outside Kubernetes, configure a Prometheus scrape job for each application instance's reachable `/metrics` URL and supply the metrics bearer through Prometheus authentication settings.
+
+## Verify collection
+
+In Prometheus Targets, confirm that:
+
+1. The expected application targets appear and show **UP**.
+2. The last scrape has no authentication or connection error.
+3. The target labels identify the namespace, job and pod you will select in Grafana.
+4. `vm_memory_total_bytes` is present and request counters change during known traffic.
+
+If a target is missing, check monitor selectors and service labels. If it exists but is down, check the address, network access, token and scrape timeout. A missing series with a healthy target can also mean that its event has not occurred yet.
+
+The reporter folds and renders its cached payload once per second. Faster scrapes do not force another render; collection and dashboard refresh intervals add their own delay.
+
+## Understand release-role coverage
+
+| Release role | App Prometheus reporter | How to observe it |
+| --- | --- | --- |
+| `OBAN_MODE=web` | Enabled | Scrape its application endpoint |
+| `OBAN_MODE=all` | Enabled | Scrape the combined application/job process |
+| `OBAN_MODE=worker` or `scheduler` | Disabled | Use Kubernetes resource metrics and role-local logs; selected events can arrive through the relay |
+
+The chart's `ServiceMonitor` selects application pods only. The app's VM, query and queue measurements do not describe worker or scheduler processes.
+
+### Selected background events
+
+A PostgreSQL relay delivers selected background events to an application reporter:
+
+- pre-attempt reservation releases
+- saved-reset convergence
+- quota cycle decisions
+- gateway stream outcomes
+
+These families have a `via` label: `in_process` for direct observations and `job_relay` for relayed observations. They remain classified as **partial**. The starter dashboard selects `via="in_process"` for these panels; it does not silently combine the two shares.
+
+Delivery is best effort and at most once. Claimed samples are not replayed. Unclaimed rows expire after one hour, and a process crash or a failure between claim and scrape can lose observations. The `pod` label on a relayed sample identifies the application consumer, not the worker that produced it.
+
+Use [relay queries](/monitoring/promql/#telemetry-relay) to inspect backlog, fresh consumers and known loss. Aggregate these shared gauges with `max`, not `sum`, across application observers.
+
+An empty worker-related panel is not evidence that the event never happened:
+
+| Signal | More authoritative evidence |
+| --- | --- |
+| Reservation release | Accounting ledger entries and their release details |
+| Interrupted turn | Request and attempt records |
+| Saved-reset convergence | Current account lifecycle metadata; it is overwritten as the lifecycle advances, not a complete transition history |
+| Quota cycle decisions | Current quota windows and evidence; they do not record every decision the counter describes |
+| Instance heartbeat failures | Instance freshness; worker/scheduler failures are not one of the four relayed families |
+
+Continue with [Grafana dashboards](/monitoring/grafana/) or [runtime triage](/monitoring/runtime-triage/).

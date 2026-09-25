@@ -1,0 +1,109 @@
+---
+title: Runtime triage
+description: Interpret Codex Pooler refusal, connection, routing and saved-reset signals without confusing missing telemetry with absent events.
+sidebar:
+  order: 4
+---
+
+Start from the symptom and its time window. Compare the affected pods, client/provider transports and deployment changes before attributing an error to a client, Codex Pooler or the provider.
+
+[PromQL recipes](/monitoring/promql/) contains the matching queries. [Logs and memory](/monitoring/logs/) explains what to collect when metrics cannot identify the cause.
+
+## Websocket control-path failures
+
+`codex_pooler_gateway_websocket_control_failure_count` records observed callback failures with bounded `phase` and `reason` labels. Phases are `init`, `serve` and `terminate`.
+
+These failures can occur before request reservation, so an empty Request logs error list does not rule them out. `cleanup_deferred` means cleanup exceeded its short synchronous budget and continues under supervision; it does not, by itself, prove that cleanup failed.
+
+When the rate rises, compare database checkout pressure, owner-process logs and rollout timing. This counter does not measure TCP resets or prove that a close frame reached the client.
+
+## Duplicate-turn refusals
+
+`codex_pooler_gateway_duplicate_turn_refused_count` counts client-visible `409 duplicate_turn` refusals. The refused duplicate does not get its own request row, so database-derived request/error totals do not include it.
+
+A few refusals can be normal after a disconnect: a client resends while an earlier execution is still reserved or has already produced output.
+
+Use the `stage` and `transport` labels to find where the refusal happened, then search the matching `replay rejection` application log. A rise after a rollout or concentration on one pod deserves investigation.
+
+`owner_busy` and `owner_unavailable` are different outcomes. A new turn arriving while the owner is handling another turn is not automatically a duplicate, and a preflight refusal without a matched turn is not necessarily counted here.
+
+## Database unavailable before dispatch
+
+Database connection failures, timeouts or cancelled statements during authentication and request preparation can return `503 service_unavailable` before upstream dispatch. A WebSocket turn can receive an error event while the connection stays open.
+
+Look for these log messages:
+
+- `runtime request refused before admission stage=authentication`
+- `runtime request refused before dispatch stage=…`
+
+The bounded stage and `reason_class` help locate the boundary. The refused request may have no request row because persistence was unavailable.
+
+Use HTTP status metrics for HTTP refusals; an error inside an already-upgraded WebSocket is not a new HTTP 503 response. For that case, inspect the application logs and WebSocket diagnostics.
+
+A burst across replicas points to a shared dependency or resource problem. Check PostgreSQL availability, connection-pool pressure, query cancellation and deployment changes before concluding that storage or the database server is the cause.
+
+## Fenced affinity writes
+
+`codex_pooler_gateway_routing_affinity_stale_write_count` records routing-affinity updates rejected because their event timestamp is older than the stored value.
+
+The bounded labels are `operation` (`success_upsert` or `miss_update`) and `affinity_kind` (`codex_session`, `idempotency_key` or `request_correlation`); invalid values become `unknown`.
+
+Some reordering is expected when overlapping work finishes on different nodes. The refused update loses an ordering hint; it does not itself fail the completed turn or change its accounting.
+
+If the signal is sustained or concentrated on one replica, compare node clocks and overlapping request timing. The `pod` label identifies the writer whose update was refused, not necessarily the node that caused the timestamp mismatch. Clock skew is a hypothesis to verify, not a conclusion from this metric alone.
+
+## Native compaction admission clears
+
+`codex_pooler_gateway_native_compaction_admission_clear_count` records the end of an admission for native in-band compaction. A clear is not automatically an error.
+
+| Label combination | Interpretation |
+| --- | --- |
+| `reason="connection_closed", stage="armed"` | A connection ended while a possible compaction was armed |
+| `reason="final_success", stage="finalizing"` | An in-band compaction completed |
+| Other clears while `compacting` or `finalizing` | Investigate an incomplete compaction using its reason and logs |
+
+`topology` distinguishes `direct` from `forwarded`. Reasons such as `compact_failure` and `final_failure` identify unsuccessful exchanges; owner lifecycle, client departure and explicit request rejection have their own reasons.
+
+These events come from serving application nodes and have no worker/scheduler reporter gap. A clear when no admission existed is not counted.
+
+## Pre-attempt reservation releases
+
+`codex_pooler_accounting_reservation_pre_attempt_release_count` counts reservations released before an attempt row exists. Read `phase` before treating a release as a failure:
+
+| Phase | What to check |
+| --- | --- |
+| `routing_rejected` | A deliberate refusal before dispatch; inspect the routing reason |
+| `turn_interrupted` | Client departure or owner lifecycle; inspect the release reason |
+| `task_exception` | A process raised before creating an attempt; investigate the pre-dispatch path |
+| `stale_sweep` | Cleanup found a reservation abandoned beyond the six-hour threshold |
+| `unrecorded` | The releasing path did not declare its boundary; a rising count needs investigation |
+
+The cleanup job runs every 15 minutes; six hours is the staleness threshold, not its schedule.
+
+On split `OBAN_MODE=worker`/`scheduler` deployments, the job-side share can reach the reporter as `via="job_relay"`. The starter dashboard selects only `via="in_process"`. A flat direct-series graph does not exclude stale-sweep activity.
+
+The release ledger's `pre_attempt_phase` detail is the durable evidence. A release after a dispatched or terminal attempt belongs to a different lifecycle even if no later retry started.
+
+## Saved-reset post-consume convergence
+
+`codex_pooler_saved_reset_convergence_count` records observed committed outcomes after a saved reset is consumed: `confirmed_by_quota`, `reblocked`, `expired` or `unknown`.
+
+Three histograms describe different parts of the observed timeline:
+
+| Histogram suffix | Interval |
+| --- | --- |
+| `applied_to_canonical_seconds` | Reset application to accepted quota evidence |
+| `canonical_to_lifecycle_seconds` | Accepted evidence to lifecycle completion |
+| `applied_to_lifecycle_seconds` | Reset application to lifecycle completion |
+
+These are observations, not a timer for database replication or proof that every transition was measured. Missing or invalid timestamps produce no latency sample.
+
+Under split `OBAN_MODE`, some transitions are emitted by worker jobs and reach the app reporter only through the best-effort relay. The direct panels can therefore undercount. Current account lifecycle metadata describes the latest state; it is overwritten as the lifecycle changes and cannot reconstruct every historical transition.
+
+Use the metric to locate a time window, then inspect the account's saved-reset and quota state in [Upstreams](/operators/upstreams/). Do not infer duplicate reset consumption from an empty or delayed panel.
+
+## Escalate with useful evidence
+
+Record the UTC window, affected role/pod, application release, relevant error or reason codes, and whether the client used HTTP/SSE or WebSocket. Include known request/correlation IDs when available.
+
+Keep client symptoms, edge responses, gateway events and provider results separate. Share only metadata; do not attach raw conversation bodies, credentials or frames.

@@ -1,0 +1,390 @@
+---
+title: PromQL recipes
+description: Focused Prometheus queries for Codex Pooler traffic, gateway pressure, PostgreSQL timings, memory and telemetry relay health.
+sidebar:
+  order: 5
+---
+
+Use these queries after [metric collection](/monitoring/metrics/) is working. Each code block contains one expression that you can paste into Prometheus or a Grafana panel.
+
+Replace `namespace="example-app"` and `job="codex-pooler-app"` with your target labels. Examples assume one cluster; if your data source combines clusters, select one cluster consistently before joining or aggregating pod-level series.
+
+Application metrics come from Codex Pooler. Container metrics require kubelet/cAdvisor, and `kube_*` metrics require kube-state-metrics.
+
+## Traffic and latency
+
+### HTTP request rate
+
+Requests per second by method and HTTP status class. This describes HTTP responses, not error frames within an already-open WebSocket.
+
+```text
+sum by (method, status_class) (
+  rate(codex_pooler_http_request_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Endpoint latency p95
+
+Seconds at the 95th percentile for application HTTP requests. Long-lived or streamed requests can have different duration patterns from short endpoints.
+
+```text
+histogram_quantile(0.95,
+  sum by (le) (
+    rate(phoenix_endpoint_stop_duration_seconds_bucket{namespace="example-app", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+### Stream outcomes
+
+The direct request-path share, split by outcome and both transport directions. Under split OBAN_MODE, job-recovered interruptions are not included in this direct series; see [coverage](/monitoring/metrics/#selected-background-events).
+
+```text
+sum by (outcome, downstream_transport, upstream_transport) (
+  rate(codex_pooler_gateway_stream_outcome_count{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+)
+```
+
+## Gateway pressure
+
+### Running requests
+
+Current admitted work per pod and route class. This is a gauge, so read the value directly rather than applying rate().
+
+```text
+codex_pooler_gateway_admission_running{namespace="example-app", job="codex-pooler-app"}
+```
+
+### Queued requests
+
+Current local queue depth. Compare pods individually before interpreting a cluster aggregate.
+
+```text
+codex_pooler_gateway_admission_queued{namespace="example-app", job="codex-pooler-app"}
+```
+
+### Newly queued requests
+
+Requests per second entering the local admission queue.
+
+```text
+sum by (route_class, transport) (
+  rate(codex_pooler_gateway_admission_enqueued_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Admission wait p95
+
+Seconds spent waiting by requests that were eventually dequeued. Timed-out requests have a separate histogram and are not part of this percentile.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, route_class, transport) (
+    rate(codex_pooler_gateway_admission_dequeued_time_seconds_bucket{namespace="example-app", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+### Websocket control failures
+
+A nonzero increase is a starting point for investigation, not proof of a lost connection. For an alert, consider a one-minute hold and tune it to your workload; cleanup_deferred includes supervised work continuing after the synchronous budget.
+
+```promql
+sum by (phase, reason) (
+  increase(codex_pooler_gateway_websocket_control_failure_count{namespace="example-app", job="codex-pooler-app"}[5m])
+) > 0
+```
+
+### Bridge fallbacks
+
+Fallback events by bounded reason. Interpret these with client and upstream transport evidence.
+
+```text
+sum by (reason) (
+  rate(codex_pooler_gateway_websocket_bridge_fallback_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Bridge precommit overflow
+
+A separate counter for overflowing the bridge's precommit buffer.
+
+```text
+sum(
+  rate(codex_pooler_gateway_websocket_bridge_precommit_overflow_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Stream buffer releases
+
+Oversized incomplete buffers released without retaining them, grouped by transport and route class.
+
+```text
+sum by (transport, route_class) (
+  rate(codex_pooler_gateway_stream_buffer_oversized_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Stream buffer truncations
+
+Retained stream bodies reduced to a bounded suffix. This is distinct from the oversized-buffer counter.
+
+```text
+sum by (transport, route_class) (
+  rate(codex_pooler_gateway_stream_buffer_truncated_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+## Database timings
+
+### Repository query rate
+
+Queries per second from each scraped application pod. Worker/scheduler queries are not exported by those roles.
+
+```text
+sum by (pod) (
+  rate(codex_pooler_repo_query_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Most active query sources
+
+The ten busiest bounded query-source and SQL-command labels. These labels do not contain raw SQL.
+
+```text
+topk(10,
+  sum by (source, command) (
+    rate(codex_pooler_repo_query_count{namespace="example-app", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+### Unclassified query sources
+
+Queries whose source was classified as unknown. A rise means less attribution, not necessarily a failed query.
+
+```text
+sum by (pod, command) (
+  rate(codex_pooler_repo_query_count{namespace="example-app", job="codex-pooler-app", source="unknown"}[5m])
+)
+```
+
+### Total repository time p95
+
+Total query time by source and command, in seconds. Compare this with connection checkout wait and database execution timing.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source, command) (
+    rate(codex_pooler_repo_query_total_time_seconds_bucket{namespace="example-app", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+### Connection checkout wait p95
+
+Seconds waiting for a database connection, per pod. This can rise even when SQL execution remains fast.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, pod) (
+    rate(codex_pooler_repo_query_queue_time_seconds_bucket{namespace="example-app", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+## Memory and restarts
+
+### Container working set
+
+Application-container working set in bytes. Replace the container selector when your deployment uses a different name.
+
+```text
+max by (namespace, pod) (
+  container_memory_working_set_bytes{namespace="example-app", container="app", image!=""}
+)
+```
+
+### BEAM total memory
+
+Memory reported by the Erlang runtime, in bytes.
+
+```text
+vm_memory_total_bytes{namespace="example-app", job="codex-pooler-app"}
+```
+
+Use the same selector with these gauges for more detail:
+
+| Metric | Meaning |
+| --- | --- |
+| `vm_memory_binary_bytes` | Binary data |
+| `vm_memory_processes_bytes` | Process memory |
+| `vm_memory_ets_bytes` | ETS tables |
+| `vm_memory_system_bytes` | BEAM system memory |
+| `vm_system_counts_process_count` | Process count |
+| `vm_system_counts_port_count` | Port count |
+| `vm_total_run_queue_lengths_total` | Total scheduler run queue |
+
+### Container memory beyond BEAM total
+
+An approximate comparison of two memory measurements, not an exact leak size. Select the same cluster, namespace and application pod on both sides.
+
+```text
+clamp_min(
+  max by (namespace, pod) (
+    container_memory_working_set_bytes{namespace="example-app", container="app", image!=""}
+  )
+  - on (namespace, pod)
+  max by (namespace, pod) (
+    vm_memory_total_bytes{namespace="example-app", job="codex-pooler-app"}
+  ),
+  0
+)
+```
+
+### Recent restarts
+
+Restart increments over 15 minutes. This example follows the dashboard's kube-state-metrics label convention; use container instead of exported_container if that is how your collector exposes the workload container.
+
+```text
+increase(kube_pod_container_status_restarts_total{
+  namespace="example-app",
+  exported_container="app"
+}[15m])
+```
+
+## Routing and lifecycle signals
+
+See [runtime triage](/monitoring/runtime-triage/) before deciding whether these events require action.
+
+### Routing circuit changes
+
+Transitions by route class and bounded reason, useful around retry or availability changes.
+
+```text
+sum by (transition, route_class, reason_class) (
+  rate(codex_pooler_gateway_routing_circuit_transition_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Rejected stale affinity writes
+
+The pod label identifies the writer whose update was refused. Check timing and clocks before attributing a sustained pattern to one node.
+
+```text
+sum by (pod, operation, affinity_kind) (
+  rate(codex_pooler_gateway_routing_affinity_stale_write_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Duplicate-turn refusals
+
+Refusals that do not create a separate request row for the duplicate.
+
+```text
+sum by (stage, transport) (
+  rate(codex_pooler_gateway_duplicate_turn_refused_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Native compaction admission clears
+
+Count normal completion and interruption separately using reason, stage and topology.
+
+```text
+sum by (reason, stage, topology) (
+  rate(codex_pooler_gateway_native_compaction_admission_clear_count{namespace="example-app", job="codex-pooler-app"}[5m])
+)
+```
+
+### Pre-attempt releases
+
+Direct observations only. Under split OBAN_MODE, stale-sweep job activity can be absent here; the release ledger is the durable evidence.
+
+```text
+sum by (phase, transport) (
+  rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+)
+```
+
+### Saved-reset outcomes
+
+Direct observations only. Under split OBAN_MODE, job-side transitions are partial and relayed separately.
+
+```text
+sum by (source, outcome) (
+  rate(codex_pooler_saved_reset_convergence_count{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+)
+```
+
+### Reset application to accepted evidence p95
+
+Seconds until canonical quota evidence was observed. Under split OBAN_MODE this query includes only the direct share. Missing timing observations do not mean zero delay.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+  )
+)
+```
+
+### Accepted evidence to lifecycle completion p95
+
+Seconds from canonical evidence to the observed lifecycle finish. Under split OBAN_MODE this query includes only the direct share. Missing timing observations do not mean zero delay.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+  )
+)
+```
+
+### Reset application to lifecycle completion p95
+
+Seconds across the complete observed interval. Under split OBAN_MODE this query includes only the direct share. Missing timing observations do not mean zero delay.
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace="example-app", job="codex-pooler-app", via="in_process"}[5m])
+  )
+)
+```
+
+## Telemetry relay
+
+These are shared database observations repeated by application reporters. Use `max` across observers; summing would multiply a shared value by the number of reporting pods.
+
+### Unclaimed relay backlog
+
+Unclaimed samples, including expired backlog until cleanup removes it. A sustained rise can indicate that consumers are not keeping up.
+
+```text
+max(codex_pooler_telemetry_relay_backlog_samples{namespace="example-app", job="codex-pooler-app"})
+```
+
+### Fresh relay consumers
+
+Consumers reporting within the freshness window. Zero warrants investigation; it does not stop producers from inserting events.
+
+```text
+max(codex_pooler_telemetry_relay_consumers_fresh{namespace="example-app", job="codex-pooler-app"})
+```
+
+### Known lost relay samples
+
+Durable cumulative loss by reason. These are gauges of shared totals, not per-pod counters. Hard-kill and post-claim/pre-scrape losses are not fully measured.
+
+```text
+max by (reason) (
+  codex_pooler_telemetry_relay_loss_samples{namespace="example-app", job="codex-pooler-app"}
+)
+```
+
+## Reading the result
+
+A five-minute rate needs enough samples in that window. Missing event series and empty quantiles are not measured zeros. Keep the `le` label when aggregating classic histogram buckets before `histogram_quantile`.
+
+Do not combine direct and relayed shares accidentally: keep the explicit `via="in_process"` selector for the partial families above, or select `via="job_relay"` deliberately for a separate diagnostic view. Neither a graph nor its absence replaces request/accounting evidence.

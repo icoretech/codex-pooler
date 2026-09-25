@@ -1,0 +1,47 @@
+---
+title: Monitoring
+description: Set up metrics, import the Grafana dashboard, and choose the right evidence when investigating Codex Pooler.
+sidebar:
+  label: Overview
+  order: 1
+---
+
+Monitoring helps you answer three questions: is Codex Pooler available, is it keeping up with traffic, and where should you look when something fails?
+
+Start with the admin dashboard for account health, quotas and usage. Add Prometheus and Grafana for trends across requests, application replicas and background jobs.
+
+## Set up monitoring
+
+1. [Configure metric collection](/monitoring/metrics/) and protect the `/metrics` endpoint.
+2. [Import the Grafana dashboard](/monitoring/grafana/) and select your Prometheus data source, namespace and pods.
+3. Check a period with known traffic before relying on a graph or alert. An empty panel can mean missing collection or incomplete coverage.
+
+| Guide | What it helps you do |
+| --- | --- |
+| [Metrics setup](/monitoring/metrics/) | Secure the endpoint, configure a collector and understand which roles emit metrics |
+| [Grafana dashboards](/monitoring/grafana/) | Import the starter dashboard and understand its panels and dependencies |
+| [Runtime triage](/monitoring/runtime-triage/) | Investigate refusals, connection failures, abandoned reservations and saved resets |
+| [PromQL recipes](/monitoring/promql/) | Query traffic, latency, memory, queues and telemetry relay health |
+| [Logs and memory](/monitoring/logs/) | Correlate logs with requests and investigate memory pressure on any release role |
+
+## Choose the right evidence
+
+| Question | Start here |
+| --- | --- |
+| Can the instance accept traffic? | `/healthz`, `/readyz`, scrape health and pod readiness |
+| Are requests slow or failing? | Grafana request, latency and admission panels; then Request logs |
+| Is an account available? | Upstreams, Pools and quota state in the admin UI |
+| Why did a request fail before it appeared in Request logs? | Runtime triage counters and application logs |
+| Did a request use tokens or incur an estimated cost? | Recorded request and accounting data |
+| Is a worker or scheduler running out of memory? | Kubernetes memory/restart metrics and that role's memory sampler logs |
+
+A healthy scrape is not proof that every account has quota. A quiet graph is not proof that no errors occurred. Some failures happen before a request row can be written, and some background events are delivered only on a best-effort basis.
+
+## Keep these boundaries in mind
+
+- **Pods are not interchangeable.** Application memory and admission queues are local to each pod. A cluster total can hide one overloaded replica.
+- **Client and provider transports can differ.** An HTTP/SSE client may use an upstream WebSocket connection. Keep both labels when investigating streams.
+- **Metrics are not the accounting ledger.** Request and token records are the source for recorded usage; charts are a correlation tool.
+- **Monitor metadata, not content.** Do not put prompts, replies, files, audio, images, raw frames or credentials in dashboards, alerts or shared investigation notes.
+
+For account and Pool notifications, use [operator alerts](/operators/alerts/). For individual request details, use [Request logs](/operators/request-logs/).

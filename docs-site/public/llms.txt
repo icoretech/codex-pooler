@@ -34,9 +34,14 @@ Primary public docs:
 - https://docs.codex-pooler.com/reference/responses-lite-vs-full/
 - https://docs.codex-pooler.com/operators/admin-ui/
 - https://docs.codex-pooler.com/operators/alerts/
-- https://docs.codex-pooler.com/operators/monitoring/
 - https://docs.codex-pooler.com/deployment/docker-compose/
 - https://docs.codex-pooler.com/deployment/helm/
+- https://docs.codex-pooler.com/monitoring/overview/
+- https://docs.codex-pooler.com/monitoring/metrics/
+- https://docs.codex-pooler.com/monitoring/grafana/
+- https://docs.codex-pooler.com/monitoring/runtime-triage/
+- https://docs.codex-pooler.com/monitoring/promql/
+- https://docs.codex-pooler.com/monitoring/logs/
 
 AI search discovery pages:
 - https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/
