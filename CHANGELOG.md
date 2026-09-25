@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.2...codex-pooler-v0.9.3) (2026-09-25)
+
+
+### Bug Fixes
+
+* **compat:** preserve Chat reasoning and non-strict tool defaults ([82a4274](https://github.com/icoretech/codex-pooler/commit/82a4274aa2d95f86b334587a227b70204b720105))
+
 ## [0.9.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.1...codex-pooler-v0.9.2) (2026-09-25)
 
 
