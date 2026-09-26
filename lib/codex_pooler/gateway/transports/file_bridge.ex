@@ -3,10 +3,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   require Logger
 
+  alias CodexPooler.Files.UploadUrlPolicy
+  alias CodexPooler.Files.UploadUrlPolicy.Target
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Routing.RoutingSelection
+  alias CodexPooler.Gateway.Transports.PinnedUpload
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Upstreams.EndpointMetadata
@@ -63,18 +66,24 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     create_file_with_selection(payload, request_options, selection)
   end
 
-  @spec upload_file(String.t(), map(), bridge_opts()) :: :ok | {:error, map()}
+  @spec prepare_upload(term()) :: {:ok, Target.t()} | {:error, UploadUrlPolicy.file_error()}
+  def prepare_upload(upload_url), do: UploadUrlPolicy.resolve(upload_url)
+
+  @spec upload_file(String.t() | Target.t(), map(), bridge_opts()) :: :ok | {:error, map()}
   def upload_file(upload_url, file, opts \\ %{})
 
-  def upload_file(upload_url, %{"path" => path, "content_type" => content_type}, opts)
-      when is_binary(upload_url) do
+  def upload_file(upload_url, file, opts) when is_binary(upload_url) do
+    with {:ok, target} <- prepare_upload(upload_url), do: upload_file(target, file, opts)
+  end
+
+  def upload_file(%Target{} = target, %{"path" => path, "content_type" => content_type}, opts) do
     timeout = config() |> Keyword.get(:upload_timeout_ms, @upload_timeout_ms) |> max(0) |> min(@upload_timeout_ms)
     deadline = System.monotonic_time(:millisecond) + timeout
 
-    # Finch's response timeout starts after sending the body. This linked task
+    # The HTTP response timeout starts after sending the body. This linked task
     # bounds file reads, sending, receiving and backoff together, and cannot
     # outlive an abnormally terminated request process.
-    task = Task.async(fn -> upload_attempt(upload_url, path, content_type, deadline, 1) end)
+    task = Task.async(fn -> upload_attempt(target, path, content_type, deadline, 1) end)
 
     case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> normalize_upload_response(result, opts)
@@ -105,13 +114,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     end
   end
 
-  defp upload_once(url, path, content_type, remaining) do
+  defp upload_once(%Target{url: url, address: address}, path, content_type, remaining) do
     with {:ok, body, byte_size} <- readable_file_stream(path) do
       options =
         upload_req_options(url, body, content_type, byte_size)
-        |> Keyword.update!(:finch, &Keyword.merge(&1, pool_timeout: min(15_000, remaining), receive_timeout: min(30_000, remaining), request_timeout: remaining))
+        |> Keyword.put_new(:adapter, PinnedUpload)
 
-      url |> upload_request() |> OutboundHTTP.put(options)
+      url |> upload_request(address, remaining) |> OutboundHTTP.put(options)
     end
   rescue
     exception in [Req.TransportError, Req.HTTPError, Finch.TransportError, Finch.HTTPError, Mint.TransportError, Mint.HTTPError] ->
@@ -361,10 +370,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     )
   end
 
-  @spec upload_request(String.t()) :: Req.Request.t()
-  defp upload_request(upload_url) do
+  @spec upload_request(String.t(), :inet.ip_address(), pos_integer()) :: Req.Request.t()
+  defp upload_request(upload_url, address, remaining) do
     [url: upload_url]
     |> Req.new()
+    |> Req.Request.put_private(:codex_pooler_pinned_upload, {address, remaining})
     |> disable_request_steps(@upload_request_step_denylist)
   end
 

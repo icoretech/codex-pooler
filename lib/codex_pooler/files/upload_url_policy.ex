@@ -5,6 +5,64 @@ defmodule CodexPooler.Files.UploadUrlPolicy do
 
   @type file_error :: CodexPooler.Files.file_error()
 
+  defmodule Target do
+    @moduledoc false
+    @enforce_keys [:url, :address]
+    defstruct [:url, :address]
+
+    @type t :: %__MODULE__{url: String.t(), address: :inet.ip_address()}
+  end
+
+  @type resolver :: (charlist(), :inet | :inet6 -> {:ok, [:inet.ip_address()]} | {:error, atom()})
+  @resolution_timeout_ms 5_000
+
+  @spec resolve(term()) :: {:ok, Target.t()} | {:error, file_error()}
+  def resolve(upload_url), do: resolve(upload_url, resolver())
+
+  @spec resolve(term(), resolver()) :: {:ok, Target.t()} | {:error, file_error()}
+  def resolve(upload_url, resolver) when is_function(resolver, 2) do
+    with :ok <- validate(upload_url) do
+      host = upload_url |> URI.parse() |> Map.fetch!(:host) |> String.downcase() |> String.trim_trailing(".")
+
+      case parse_ip(host) do
+        {:ok, address} -> {:ok, %Target{url: upload_url, address: address}}
+        :error -> resolve_hostname(upload_url, host, resolver)
+      end
+    end
+  end
+
+  defp resolve_hostname(url, host, resolver) do
+    task = Task.async(fn -> Enum.map([:inet, :inet6], &resolver.(String.to_charlist(host), &1)) end)
+
+    case Task.yield(task, @resolution_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, results} -> resolved_target(url, results)
+      _timeout -> invalid_response()
+    end
+  end
+
+  defp resolved_target(url, results) do
+    addresses = for {:ok, addresses} <- results, address <- addresses, do: address
+
+    if addresses != [] and Enum.all?(results, &resolved_family?/1) and
+         Enum.all?(addresses, &(not unsafe_ip?(&1))) do
+      {:ok, %Target{url: url, address: hd(addresses)}}
+    else
+      invalid_response()
+    end
+  end
+
+  defp resolved_family?({:ok, addresses}) when is_list(addresses), do: true
+  defp resolved_family?({:error, reason}) when reason in [:nxdomain, :eafnosupport], do: true
+  defp resolved_family?(_result), do: false
+
+  if Mix.env() == :test do
+    defp resolver do
+      Application.get_env(:codex_pooler, __MODULE__, []) |> Keyword.get(:resolver, &:inet.getaddrs/2)
+    end
+  else
+    defp resolver, do: &:inet.getaddrs/2
+  end
+
   @raw_control_or_whitespace ~r/[\p{Cc}\p{Zs}\p{Zl}\p{Zp}]/u
   @local_hostname_suffixes ~w(localhost localhost.localdomain)
   @local_hostname_exact_matches ~w(
@@ -190,7 +248,8 @@ defmodule CodexPooler.Files.UploadUrlPolicy do
   end
 
   defp reserved_ipv6?({first, second, third, fourth, _fifth, _sixth, _seventh, _eighth}) do
-    multicast_ipv6?(first) or discard_ipv6?(first, second, third, fourth) or
+    (first &&& 0xE000) != 0x2000 or (first == 0x3FFF and second < 0x1000) or
+      multicast_ipv6?(first) or discard_ipv6?(first, second, third, fourth) or
       protocol_assignment_ipv6?(first, second, third) or six_to_four_ipv6?(first)
   end
 

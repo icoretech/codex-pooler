@@ -58,7 +58,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.FileDispatch do
            upload_v1_file(
              auth,
              create_result.file,
-             create_result.body["upload_url"],
+             create_result.upload_target,
              file,
              request_options
            ) do
@@ -83,13 +83,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.FileDispatch do
          {:ok, bridge_result} <-
            payload
            |> FileBridge.create_file(bridge_request_options, selection)
-           |> complete_file_bridge_result(auth, bridge_request_options, selection) do
-      Files.create_pending_record_from_bridge_result(
-        auth,
-        pending_attrs,
-        bridge_result,
-        FileRequestMetadata.from_request_options(request_options)
-      )
+           |> complete_file_bridge_result(auth, bridge_request_options, selection),
+         {:ok, upload_target} <- prepare_upload_target(bridge_result, create_context),
+         {:ok, result} <-
+           Files.create_pending_record_from_bridge_result(
+             auth,
+             pending_attrs,
+             bridge_result,
+             FileRequestMetadata.from_request_options(request_options)
+           ) do
+      {:ok, Map.put(result, :upload_target, upload_target)}
     else
       {:error, %{upstream: _upstream} = bridge_error} ->
         Files.record_create_bridge_failure(
@@ -105,6 +108,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.FileDispatch do
         error
     end
   end
+
+  defp prepare_upload_target(%{body: body}, {:v1, _purpose}), do: FileBridge.prepare_upload(Map.get(body, "upload_url"))
+  defp prepare_upload_target(_bridge_result, :backend), do: {:ok, nil}
 
   defp create_file_payload(%{file_name: file_name, file_size: file_size, use_case: use_case}) do
     %{"file_name" => file_name, "file_size" => file_size, "use_case" => use_case}

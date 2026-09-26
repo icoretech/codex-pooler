@@ -977,3 +977,5 @@ No. Pool API keys authenticate runtime clients for `/backend-api` and `/v1`. The
 ### Does Codex Pooler store uploaded file bytes?
 
 No. The backend file bridge stores file metadata and uses upstream-backed upload or download URLs. Raw file bytes, upload URLs, prompts, response bodies, media bodies, credentials, and websocket frames are not stored or exposed as public docs evidence.
+
+For multipart `POST /v1/files`, the storage upload URL must use HTTPS and resolve exclusively to public addresses. Codex Pooler checks both address families before creating local file metadata and pins one validated address for every upload attempt. A configured HTTPS proxy receives that literal address in CONNECT, while TLS verification and the storage Host header retain the original hostname. DNS failure, private or reserved answers, and mixed public/private answers are rejected; storage redirects are not followed.

@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Files.UploadUrlPolicy
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
 
@@ -20,6 +21,14 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
   setup do
     old_files_config = Application.get_env(:codex_pooler, Files, [])
     CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
+    CodexPooler.TestAppEnv.restore_on_exit(UploadUrlPolicy)
+
+    Application.put_env(:codex_pooler, UploadUrlPolicy,
+      resolver: fn
+        _host, :inet -> {:ok, [{93, 184, 216, 34}]}
+        _host, :inet6 -> {:error, :nxdomain}
+      end
+    )
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -398,6 +407,31 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert [create_request, finalize_request] = FakeUpstream.requests(upstream)
     assert create_request.path == "/backend-api/files"
     assert finalize_request.path == "/backend-api/files/#{file_id}/uploaded"
+  end
+
+  @tag :upload_url_policy
+  test "private DNS answers fail before direct PUT or file row", %{conn: conn} do
+    Application.put_env(:codex_pooler, UploadUrlPolicy, resolver: fn _host, _family -> {:ok, [{127, 0, 0, 1}]} end)
+    setup = active_api_key_fixture()
+    file_id = "file_private_dns_#{System.unique_integer([:positive])}"
+    upload_url = stub_upload_put(file_id)
+    upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id, upload_url: upload_url))
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      chatgpt_account_id: "acct_private_dns",
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "synthetic-private-dns-token"
+    })
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/files", %{"purpose" => "user_data", "file" => upload_fixture("sample.txt", "text/plain", "synthetic bytes")})
+
+    assert_openai_error(response, 502, code: "upstream_file_bridge_invalid_response", message: "upstream file create returned an invalid upload_url")
+    refute Repo.get_by(FileRecord, file_id: file_id)
+    assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
+    refute_received {:upload_put, ^file_id, _method, _path, _body, _headers}
   end
 
   @tag :upload_url_policy

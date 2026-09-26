@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Files.UploadUrlPolicy
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -28,6 +29,14 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
     CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
+    CodexPooler.TestAppEnv.restore_on_exit(UploadUrlPolicy)
+
+    Application.put_env(:codex_pooler, UploadUrlPolicy,
+      resolver: fn
+        _host, :inet -> {:ok, [{93, 184, 216, 34}]}
+        _host, :inet6 -> {:error, :nxdomain}
+      end
+    )
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,

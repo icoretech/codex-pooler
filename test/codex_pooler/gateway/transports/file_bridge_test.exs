@@ -3,10 +3,9 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
   import ExUnit.CaptureLog
 
-  alias CodexPooler.FakeUpstream
+  alias CodexPooler.Files.UploadUrlPolicy.Target
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Transports.FileBridge
-  alias CodexPooler.UpstreamConnPoolTelemetry
 
   @request_detection_timeout_ms 15_000
 
@@ -21,7 +20,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     path = upload_tempfile!(contents)
     %{url: url, served_ref: ref} = start_upload_capture_server!([503, 201])
 
-    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert :ok = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
 
     for _attempt <- 1..2 do
       assert_receive {^ref, request}, @request_detection_timeout_ms
@@ -37,7 +36,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     path = upload_tempfile!(contents)
     %{url: url, served_ref: ref} = start_upload_capture_server!([:interrupt, 201])
 
-    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert :ok = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     assert_receive {^ref, :interrupted}, @request_detection_timeout_ms
     assert_receive {^ref, request}, @request_detection_timeout_ms
     {head, body} = split_raw_http_request!(request)
@@ -53,7 +52,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
         201
       ])
 
-    assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert :ok = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     for _attempt <- 1..2, do: assert_receive({^ref, _request}, @request_detection_timeout_ms)
   end
 
@@ -63,7 +62,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
     log =
       capture_log(fn ->
-        assert {:error, error} = FileBridge.upload_file(url <> "?sig=synthetic-secret", %{"path" => path, "content_type" => "text/plain"})
+        assert {:error, error} = upload_file(url <> "?sig=synthetic-secret", %{"path" => path, "content_type" => "text/plain"})
         assert error.code == "upstream_file_upload_failed"
         refute inspect(error) =~ "synthetic-secret"
         refute inspect(error) =~ "private synthetic upload"
@@ -80,7 +79,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
     for status <- [301, 307, 400, 403, 408, 429, 500, 502, 504] do
       %{url: url, served_ref: ref} = start_upload_capture_server!([status, 201])
-      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert {:error, %{code: "upstream_file_upload_failed"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
       assert_receive {^ref, _request}, @request_detection_timeout_ms
       refute_received {^ref, _request}
     end
@@ -96,7 +95,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
         ] do
       %{url: url} = start_upload_capture_server!([{503, headers}, 201])
       started = System.monotonic_time(:millisecond)
-      assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert :ok = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
       assert System.monotonic_time(:millisecond) - started >= minimum_ms
     end
   end
@@ -112,7 +111,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
           [{"retry-after", "Mon, 01 Jan 2024 09:00:00 GMT"}]
         ] do
       %{url: url} = start_upload_capture_server!([{503, headers}, 201])
-      assert :ok = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert :ok = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     end
   end
 
@@ -126,7 +125,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
           [{"retry-after", Calendar.strftime(~U[2099-09-25 09:00:00Z], "%a, %d %b %Y %H:%M:%S GMT")}]
         ] do
       %{url: url, served_ref: ref} = start_upload_capture_server!([{503, headers}, 201])
-      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert {:error, %{code: "upstream_file_upload_failed"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
       assert_receive {^ref, _request}, @request_detection_timeout_ms
       refute_received {^ref, _request}
     end
@@ -139,7 +138,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     %{url: url, served_ref: ref} = start_upload_capture_server!([:stall, 201])
 
     capture_log(fn ->
-      assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+      assert {:error, %{code: "upstream_file_upload_failed"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     end)
 
     assert_receive {^ref, _request}, @request_detection_timeout_ms
@@ -151,16 +150,16 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     %{url: url, served_ref: ref} = start_upload_capture_server!([201])
     path = upload_tempfile!("synthetic upload")
     File.rm!(path)
-    assert {:error, %{code: "invalid_request"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert {:error, %{code: "invalid_request"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     Application.put_env(:codex_pooler, FileBridge, upload_timeout_ms: 0)
-    assert {:error, %{code: "upstream_file_upload_failed"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert {:error, %{code: "upstream_file_upload_failed"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     refute_received {^ref, _request}
   end
 
   test "request process cancellation closes the in-flight upload without retrying" do
     path = upload_tempfile!("synthetic upload")
     %{url: url, served_ref: ref} = start_upload_capture_server!([:stall, 201])
-    caller = spawn(fn -> FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"}) end)
+    caller = spawn(fn -> upload_file(url, %{"path" => path, "content_type" => "text/plain"}) end)
     on_exit(fn -> if Process.alive?(caller), do: Process.exit(caller, :kill) end)
     monitor = Process.monitor(caller)
     assert_receive {^ref, _request}, @request_detection_timeout_ms
@@ -173,7 +172,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   test "a tempfile removed after the first attempt is rejected before a second PUT" do
     path = upload_tempfile!("synthetic upload")
     %{url: url, served_ref: ref} = start_upload_capture_server!([{:remove_file, path}, 201])
-    assert {:error, %{code: "invalid_request"}} = FileBridge.upload_file(url, %{"path" => path, "content_type" => "text/plain"})
+    assert {:error, %{code: "invalid_request"}} = upload_file(url, %{"path" => path, "content_type" => "text/plain"})
     assert_receive {^ref, _request}, @request_detection_timeout_ms
     refute_received {^ref, _request}
   end
@@ -198,7 +197,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     log =
       capture_log(fn ->
         assert {:error, %{code: "upstream_file_upload_failed"}} =
-                 FileBridge.upload_file(
+                 upload_file(
                    "http://127.0.0.1:1/upload",
                    %{"path" => path, "content_type" => "text/plain"},
                    request_options
@@ -241,7 +240,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     log =
       capture_log(fn ->
         assert {:error, %{code: "upstream_file_upload_failed"}} =
-                 FileBridge.upload_file(
+                 upload_file(
                    upload_url,
                    %{"path" => path, "content_type" => "text/plain"},
                    request_options
@@ -284,7 +283,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     log =
       capture_log(fn ->
         assert :ok =
-                 FileBridge.upload_file(
+                 upload_file(
                    upload_url,
                    %{"path" => path, "content_type" => "text/plain"},
                    request_options
@@ -311,13 +310,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     refute log =~ "file bridge transport failed"
   end
 
-  test "presigned upload PUTs carry the outbound connection idle bound from settings" do
-    {:ok, storage} = FakeUpstream.start_link({:raw_body, 201, "", []})
-    on_exit(fn -> FakeUpstream.stop(storage) end)
-    upload_url = FakeUpstream.url(storage) <> "/upload"
-
-    UpstreamConnPoolTelemetry.put_idle_bound!(0)
-    UpstreamConnPoolTelemetry.attach!(upload_url)
+  test "each upload closes its storage connection even when keep-alive is offered" do
+    %{url: upload_url, served_ref: ref} = start_upload_capture_server!([:keepalive, :keepalive])
 
     request_options =
       %{request_id: Ecto.UUID.generate()}
@@ -328,15 +322,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
       path = upload_tempfile!("synthetic upload #{index}")
 
       assert :ok =
-               FileBridge.upload_file(
+               upload_file(
                  upload_url,
                  %{"path" => path, "content_type" => "text/plain"},
                  request_options
                )
-    end
 
-    assert FakeUpstream.count(storage) == 2
-    assert UpstreamConnPoolTelemetry.drain_events() == [:conn_max_idle_time_exceeded]
+      assert_receive {^ref, :closed}, @request_detection_timeout_ms
+    end
   end
 
   test "file control-plane envelope removes mixed-case residency forwarding" do
@@ -354,6 +347,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assert header_values(headers, "x-openai-internal-codex-residency") == [
              "file-region-authoritative"
            ]
+  end
+
+  defp upload_file(url, file, opts \\ %{}) do
+    {:ok, address} = url |> URI.parse() |> Map.fetch!(:host) |> String.to_charlist() |> :inet.parse_address()
+    FileBridge.upload_file(%Target{url: url, address: address}, file, opts)
   end
 
   defp upload_tempfile!(contents) do
@@ -462,6 +460,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   defp serve_upload(socket, :stall, parent, ref) do
     request = read_raw_http_request(socket)
     send(parent, {ref, request})
+    assert {:error, :closed} = :gen_tcp.recv(socket, 0, @request_detection_timeout_ms)
+    send(parent, {ref, :closed})
+  end
+
+  defp serve_upload(socket, :keepalive, parent, ref) do
+    _request = read_raw_http_request(socket)
+    :ok = :gen_tcp.send(socket, "HTTP/1.1 201 Created\r\ncontent-length: 0\r\nconnection: keep-alive\r\n\r\n")
     assert {:error, :closed} = :gen_tcp.recv(socket, 0, @request_detection_timeout_ms)
     send(parent, {ref, :closed})
   end

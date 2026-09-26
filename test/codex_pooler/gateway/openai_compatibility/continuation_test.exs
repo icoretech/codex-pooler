@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
+  alias CodexPooler.Files.UploadUrlPolicy
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
@@ -31,6 +32,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   setup do
     old_files_config = Application.get_env(:codex_pooler, Files, [])
     CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
+    CodexPooler.TestAppEnv.restore_on_exit(UploadUrlPolicy)
+
+    Application.put_env(:codex_pooler, UploadUrlPolicy,
+      resolver: fn
+        _host, :inet -> {:ok, [{93, 184, 216, 34}]}
+        _host, :inet6 -> {:error, :nxdomain}
+      end
+    )
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 256,
