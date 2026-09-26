@@ -252,7 +252,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
               id="request-log-page-header"
               title="Request logs"
               description="Every request through the gateway: where it routed, how it ended, and what it cost."
-            />
+            >
+              <:actions>
+                <.link id="request-log-model-guide-link" href="https://docs.codex-pooler.com/operators/lens/#read-the-request-log-warnings" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm gap-1.5"><.icon name="hero-question-mark-circle" class="size-4" /><span class="admin-control-label">Model warnings explained</span></.link>
+              </:actions>
+            </AdminComponents.page_header>
 
             <AdminComponents.filter_form
               id="request-log-filter-form"

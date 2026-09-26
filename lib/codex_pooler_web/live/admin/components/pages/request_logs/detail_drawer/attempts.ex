@@ -100,8 +100,27 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         Map.get(attempt, :model_serving_mode)
       )
 
-    present_rows(rows ++ mode_rows ++ websocket_connection_rows(attempt) ++ downstream_delivery_rows(attempt))
+    present_rows(rows ++ model_rows(attempt) ++ mode_rows ++ websocket_connection_rows(attempt) ++ downstream_delivery_rows(attempt))
   end
+
+  defp model_rows(attempt) do
+    observation = Map.get(attempt, :model_observation)
+    prefix = "request-log-detail-attempt-#{attempt.attempt_number}-model"
+
+    [
+      detail("#{prefix}-sent", "Sent model", Map.get(attempt, :upstream_model)),
+      detail("#{prefix}-first", "First model reported", Map.get(attempt, :served_model) || "Unavailable"),
+      detail("#{prefix}-coverage", "Model-name recording", if(observation, do: "#{observation["coverage"]} · collector v#{observation["version"]}", else: "Not collected")),
+      detail("#{prefix}-conflict", "Model name changed within response", conflict_label(observation)),
+      detail("#{prefix}-first-conflict", "First different name reported", observation && observation["first_conflicting_model"]),
+      detail("#{prefix}-terminal", "Model reported at end", (observation && observation["terminal_model"]) || "No final model reported"),
+      detail("#{prefix}-terminal-status", "Final response event", (observation && observation["terminal_status"]) || if(observation, do: "No final event recorded", else: "Not collected"))
+    ]
+  end
+
+  defp conflict_label(%{"conflict" => true}), do: "Yes — provider reported different names in one response"
+  defp conflict_label(%{"conflict" => false}), do: "No name change observed"
+  defp conflict_label(_observation), do: "Unknown"
 
   @spec transport_failure_rows(map()) :: [detail_row()]
   def transport_failure_rows(attempt) do

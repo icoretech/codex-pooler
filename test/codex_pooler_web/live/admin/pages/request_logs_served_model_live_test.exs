@@ -46,11 +46,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
 
     {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
+    assert has_element?(view, "#request-log-model-guide-link[href='https://docs.codex-pooler.com/operators/lens/#read-the-request-log-warnings'][target='_blank'][rel='noopener noreferrer']", "Model warnings explained")
+
     assert has_element?(
              view,
-             "#request-log-#{substituted.id}-served-model[data-role='served-model']",
-             "served gpt-6-luna"
+             "#request-log-#{substituted.id}-model-details [data-role='model-identity-line'] > [data-role='served-model']",
+             "gpt-6-luna"
            )
+
+    assert has_element?(view, "#request-log-#{substituted.id}-served-model .hero-exclamation-triangle.text-error")
+    assert has_element?(view, "#request-log-#{substituted.id}-served-model[aria-label*='Upstream declared model: gpt-6-luna']")
+    assert has_element?(view, "#request-log-#{substituted.id}-model-details [data-role='model-identity-line'] > [data-role='model-name']", "gpt-6-astra")
+    refute has_element?(view, "#request-log-#{substituted.id}-served-model", "served")
 
     assert has_element?(
              view,

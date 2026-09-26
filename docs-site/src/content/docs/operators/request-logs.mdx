@@ -285,7 +285,7 @@ A <code>default</code> report on a <code>priority</code> request is not evidence
 
 ### Served model
 
-The list's model column shows the model the client requested. The upstream can answer with a different model than the one the request was sent as, for example while the provider runs an A/B test or substitutes a faster model. Codex Pooler records the model the upstream declared on its response object separately from the model it sent, so that substitution stays visible:
+The list's model column shows the model the client requested. Codex Pooler separately records the model sent upstream and the first model name the provider reports. A different reported name is worth investigating regardless of model quality; the name alone does not explain why it differs:
 
 <table>
   <thead>
@@ -310,7 +310,11 @@ The list's model column shows the model the client requested. The upstream can a
   </tbody>
 </table>
 
-When the served model differs from the one sent, the list shows a <code>served &lt;model&gt;</code> token under the model name. A row without the token either received the model it sent or received no declaration. The served model is recorded for observability only; pricing keeps using the model the request was sent as. Values that are not plain model identifiers are stored as a short fingerprint rather than verbatim.
+When the first reported model differs from the one sent, the list shows a danger triangle and that reported name **beside the requested model**, on the same line. A row without the marker either has matching names or has no recorded name; absence of a warning is not proof of model identity.
+
+**Model name changed · attempts …** means something else: the provider reported different model names during the same attempt. This can happen even when the first name matched the model sent. Open the listed attempt numbers to compare the first reported name, the first different later name, and the final reported name.
+
+Use [Lens](/operators/lens/) for the history view, [examples of the two signals](/operators/lens/#understand-the-two-signals), and [recording limits](/operators/lens/#understand-missing-and-historical-data). The names are provider-reported evidence, not independent inspection of the underlying model. Pricing keeps using the model sent upstream. Values that are not plain model identifiers are stored as a short fingerprint rather than verbatim.
 
 ## Operational Checklist
 

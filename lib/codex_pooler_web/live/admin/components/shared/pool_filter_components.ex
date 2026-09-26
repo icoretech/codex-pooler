@@ -26,7 +26,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
       )
 
     ~H"""
-    <div class="grid gap-2">
+    <div class="grid min-w-0 gap-2">
       <input
         type="hidden"
         id={@hidden_id}
@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
       />
       <details
         id={@id}
-        class="dropdown w-full"
+        class="dropdown min-w-0 w-full"
         phx-click-away={JS.remove_attribute("open", to: "##{@id}")}
       >
         <summary
@@ -44,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
           class="select select-bordered flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
         >
           <.pool_filter_icon option={@selected} />
-          <span class="truncate">{@selected.label}</span>
+          <span class="min-w-0 flex-1 truncate">{@selected.label}</span>
           <span
             :if={Map.get(@selected, :strategy_label)}
             class="ml-auto shrink-0 text-[0.68rem] text-base-content/50"

@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:get, "/admin/incidents"},
                {:get, "/admin/invites"},
                {:get, "/admin/jobs"},
+               {:get, "/admin/lens"},
                {:get, "/admin/operators"},
                {:get, "/admin/pools"},
                {:get, "/admin/request-logs"},

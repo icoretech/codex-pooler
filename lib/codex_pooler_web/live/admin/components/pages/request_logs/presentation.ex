@@ -122,7 +122,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       >
         <table
           data-ledger-dense
-          class="admin-status-tick admin-ledger-table table table-sm admin-log-table lg:min-w-[56rem]"
+          class="admin-status-tick admin-ledger-table table table-sm admin-log-table lg:min-w-[61rem]"
         >
           <%!-- The count is the footer's job; the caption repeats it only for
           assistive tech, which reads it before the rows. --%>
@@ -135,12 +135,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           way when the table has to fit. Everything else keeps a floor.
 
           The floors only hold because the table carries a min-width equal to
-          their sum (8+9+10+17+6+6 = 56rem); without it a narrow container
+          their sum (8+14+10+17+6+6 = 61rem); without it a narrow container
           compresses every column at once and the elastic column stops being the
           one that gives. Below lg the rows reflow and the floors do not apply. --%>
           <colgroup>
             <col class="w-32" />
-            <col class="w-36" />
+            <col class="w-56" />
             <col class="w-40" />
             <col class="min-w-68" />
             <col class="w-24" />
@@ -416,27 +416,32 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     <span
       id={"#{@prefix}-#{@request_log.id}-model-details"}
       data-role="model-details"
-      class="min-w-0 gap-0.5 max-lg:block max-lg:h-5 max-lg:truncate max-lg:whitespace-nowrap lg:grid"
+      class={["min-w-0 gap-0.5 lg:grid", if(Map.get(@request_log, :model_conflict_attempts, []) == [], do: "max-lg:block max-lg:h-5 max-lg:truncate max-lg:whitespace-nowrap", else: "max-lg:grid")]}
       title={format_model_details_title(@request_log)}
     >
-      <span
-        data-role="model-name"
-        class="h-5 min-w-0 truncate whitespace-nowrap font-semibold leading-5 text-base-content max-lg:inline lg:block"
-      >
-        {format_model_name(@request_log)}
-      </span>
-      <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-lg:inline lg:flex">
-        <%!-- The provider declared a different model on its response than the
-        one this request was sent as: a substitution, not a Pooler alias. --%>
+      <span data-role="model-identity-line" class="inline-flex min-w-0 max-w-full items-center gap-1.5 align-middle lg:flex">
         <span
-          :if={served = format_served_model_detail(@request_log)}
+          data-role="model-name"
+          class="h-5 min-w-0 truncate whitespace-nowrap font-semibold leading-5 text-base-content"
+        >
+          {format_model_name(@request_log)}
+        </span>
+        <span
+          :if={format_served_model_detail(@request_log)}
           id={"#{@prefix}-#{@request_log.id}-served-model"}
           data-role="served-model"
-          class="text-warning"
-          title="Model the upstream declared on its response; it differs from the model this request was sent as"
+          class="inline-flex min-w-0 items-center gap-1 text-warning"
+          title={"Upstream declared model: #{@request_log.served_model}; differs from the model sent upstream"}
+          aria-label={"Upstream declared model: #{@request_log.served_model}; differs from the model sent upstream"}
         >
-          {served}
+          <.icon name="hero-exclamation-triangle" class="size-3.5 shrink-0 text-error" />
+          <span class="truncate">{@request_log.served_model}</span>
         </span>
+      </span>
+      <span :if={Map.get(@request_log, :model_conflict_attempts, []) != []} data-role="model-declaration-conflict" class="text-xs text-warning" title={"The provider reported different model names during the same response on attempts #{Enum.join(@request_log.model_conflict_attempts, ", ")}"}>
+        model name changed · attempts {Enum.join(@request_log.model_conflict_attempts, ", ")}
+      </span>
+      <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-lg:inline lg:flex">
         <span :if={reasoning = format_model_reasoning(@request_log)} data-role="model-reasoning">
           {reasoning}
         </span>

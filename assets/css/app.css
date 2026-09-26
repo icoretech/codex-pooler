@@ -1354,6 +1354,12 @@ body {
   text-box: trim-both cap alphabetic;
 }
 
+/* Selected filter options retain semantic icon colors in both themes. */
+[phx-hook="AdminFilterDropdowns"] .menu {
+  --menu-active-bg: color-mix(in oklab, var(--color-primary) 12%, var(--color-base-100));
+  --menu-active-fg: var(--color-base-content);
+}
+
 .btn.btn-primary {
   border-color: var(--codex-primary-border);
   background-color: var(--color-primary);

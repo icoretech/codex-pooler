@@ -182,6 +182,10 @@ Audit records can include actor class, masked actor identity, action, target kin
 
 Use audit logs to confirm operator changes such as Pool edits, upstream lifecycle changes, key creation or rotation, invite changes, operator permission updates, system settings changes, and MCP gate changes.
 
+## Lens
+
+[Lens](/operators/lens/) compares the model name sent upstream with the names the provider reports. It highlights a different first reported model and a model-name change during the same response. Use it to locate affected Pools, accounts, models and attempts, then open Request logs for the details. The purpose is to spot a different model, not to rate its quality; missing model names remain informational.
+
 ## Jobs
 
 The jobs page is owner-facing. It shows background work metadata so owners can see whether scheduled and queued maintenance tasks are healthy.

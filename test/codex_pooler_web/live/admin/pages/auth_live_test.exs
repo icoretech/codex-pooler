@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
     {"/admin/api-keys", "#admin-api-keys-live"},
     {"/admin/invites", "#admin-invites-live"},
     {"/admin/audit-logs", "#admin-audit-logs-live"},
+    {"/admin/lens", "#admin-model-history"},
     {"/admin/jobs", "#admin-jobs-page"},
     {"/admin/operators", "#admin-operators-live"},
     {"/admin/settings", "#admin-settings-live"}
@@ -36,6 +37,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
     "#admin-nav-invites",
     "#admin-nav-request-logs",
     "#admin-nav-audit-logs",
+    "#admin-nav-lens",
     "#admin-nav-jobs"
   ]
 

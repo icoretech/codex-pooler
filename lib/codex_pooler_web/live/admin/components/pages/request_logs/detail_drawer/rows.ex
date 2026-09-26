@@ -102,8 +102,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       []
     else
       [
-        detail("request-log-detail-upstream-model", "Sent upstream", sent, mono: true),
-        detail("request-log-detail-served-model", "Upstream served", served, mono: true)
+        detail("request-log-detail-upstream-model", "Sent upstream", sent),
+        detail("request-log-detail-served-model", "Upstream served", served)
       ]
     end
   end

@@ -178,6 +178,7 @@ defmodule CodexPoolerWeb.Router do
       on_mount: [{CodexPoolerWeb.UserAuth, :require_authenticated_password_current}] do
       live "/admin/operators", Admin.OperatorsLive, :index
       live "/admin/request-logs", Admin.RequestLogsLive, :index
+      live "/admin/lens", Admin.LensLive, :index
       live "/admin/pools", Admin.PoolsLive, :index
       live "/admin/stats", Admin.StatsLive, :index
       live "/admin/jobs", Admin.JobsLive, :index

@@ -366,15 +366,10 @@ utilities; never hardcode raw violet/oklch literals in `lib/`.
 **Label / Mono Font:** the Tailwind `font-mono` stack (`ui-monospace`, Menlo, …)
 
 **Character:** one condensed grotesque doing every job, narrow enough that a
-dense row of facts still reads at a glance, with monospace used strictly as
-data dress. There is no display face and no pairing to admire; the hierarchy is
+dense row of facts still reads at a glance. There is no display face and no pairing to admire; the hierarchy is
 carried by weight, case, and opacity rather than by contrast between families.
 
 ### Named Rules
-
-**The Mono-Is-Data Rule.** Monospace marks values you might copy, compare, or
-diff — IDs, prefixes, versions, tabular numbers, OTP slots, the sidebar nav
-labels. It is never reached for as personality, and never for prose.
 
 **The No-Hero-Type Rule.** No fluid or clamped hero type on admin screens. The
 largest type on any page is the `text-3xl` page title, and tracked uppercase
@@ -390,10 +385,7 @@ appears only at micro sizes.
   on the label span: `text-box: trim-both cap alphabetic` lets flex center the
   font's cap-to-baseline box beside its icon. Unsupported browsers retain the
   existing line box; icons and control hit areas keep their original geometry.
-- **Mono:** the Tailwind `font-mono` stack (`ui-monospace`, Menlo, …) is data
-  dress, used for IDs, prefixes, versions, tabular values
-  (`font-mono tabular-nums`), the sidebar nav labels, and the OTP slots. Mono
-  is never product personality.
+- **Mono:** existing shell and code-specific components may use the Tailwind `font-mono` stack. Data does not require a different font family; numeric alignment uses `tabular-nums`.
 
 Observed hierarchy (all from live pages):
 
@@ -1237,7 +1229,7 @@ verified in the local runtime with gold Pro, neutral Free and separate plan hues
   errors, and one compact constraint note immediately above the matrix for fixed
   route keys and numeric limits. Route names and numeric inputs use the shared
   admin form type so bulkhead values match every other editable number;
-  monospace remains reserved for read-only identifiers and diffable metadata.
+  read-only identifiers follow their component's typography.
   Each row-group header puts the sole top hairline on the spanning header cell
   so the boundary remains explicit after the preceding data row without a
   second border on the group row.
@@ -1630,6 +1622,10 @@ The API-key Limits panel uses a compact tonal key-wide control band, a bordered 
 
 ### Record row — the ledger contract
 
+Lens is the standalone model-declaration observability page at `/admin/lens`, immediately after Audit logs in the sidebar. It reuses the admin shell, filters, compact numeric strip and record ledger with the normal sans-serif UI font for model names and evidence. An ApexTimeSeriesChart plots unstacked mismatch/conflict counts over time below the counters. A neighboring horizontal bar chart shows the eight most frequent sent / first-declared / first-conflicting combinations among affected attempts, counting overlapping signals once per attempt. Both use the same Pool/upstream/model/window population. Declaration coverage is neutral information in a compact disclosure; missing declarations are never downgrade signals. The default attempt filter includes only mismatches or conflicts. The affected-groups table uses that same signals-only population and its links select signals explicitly. No retained attempts replace the whole data surface with the shared `empty_state`; retained data without signals replaces both charts with one shared empty panel and omits empty groups. An explicitly selected evidence filter with no rows uses the same empty-state component for the attempt list. Operator copy names the comparisons explicitly: Different from sent and Name changed in response. An inline help disclosure gives A/B examples and the Operators Lens guide explains the historical labels mismatch/conflict. The goal is to identify a different model; no quality comparison is required. The source of evidence remains the model name reported by the provider. The attempt table is one markup tree that stacks labelled model facts on phones and pairs them in the dense tablet ledger; the grouped count matrix retains contained horizontal scrolling. Unknown/uncollected evidence never receives a success badge. The drawer shows the evidence on each attempt, preserving sent-versus-first-model meaning. Reuse existing chart shells, colors, typography and hooks; no new visual language or chart library.
+
+Lens's main filter row uses the shared admin filter form and actual Pool selector with status/strategy icons, plus matching icon dropdowns for Window, Sent model and Attempt evidence. Keep all four on the same desktop row with accessible trigger names instead of visible labels. Evidence icons distinguish mismatch (warning arrows), conflict (error triangle), missing (muted question), uncollected (muted eye-off) and partial (info pie). Raw upstream identity belongs in Advanced filters. The page relies on the shared live-update controls without a separate header refresh or timestamp; a Retry action is shown only after a failed load. Mismatch/conflict links share the title row at the right of the signal-card header, with `admin-control-label` centering the text beside the icons. Filter menus use a soft primary selection background with normal content text so semantic icon colors stay readable in light and dark themes. Initial content has an async loading surface, event reloads preserve the previous charts, and failed refreshes label the stale snapshot. The shared live-update pause gates automatic refreshes, including in-flight publication, while explicit filters, error retries and authorization changes remain active.
+
 The jobs explorer and the request-log table are the two record tables. They
 share one contract, and a third record table should join it rather than invent
 a fourth shape.
@@ -1670,7 +1666,7 @@ scroll (`lg:overflow-x-auto`). Without it the floors are decoration: `<col>`
 widths are hints, so a narrow container compresses every column at once and the
 elastic column stops being the one that gives. The min-width is safe *because*
 the table reflows below `lg` — it never applies at a width where it could push
-content off a phone. Request logs: `8+9+10+17+6+6 = 56rem`. Jobs: `72rem`.
+content off a phone. Request logs: `8+14+10+17+6+6 = 61rem`; its model column keeps the requested model and a different upstream-declared model on one line. The declared value retains the normal UI font and a small danger triangle, with its meaning in an accessible label and tooltip instead of a visible "served" prefix. Matching or missing declarations add no warning. Jobs: `72rem`.
 
 **Status tick.** Opt in with `admin-status-tick` and put `data-tone` on the row
 (`success` / `warning` / `error` / `info`). A rounded 4px bar is painted inside

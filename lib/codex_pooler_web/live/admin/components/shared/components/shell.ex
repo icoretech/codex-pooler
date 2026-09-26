@@ -66,6 +66,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       icon: "hero-finger-print"
     },
     %{
+      key: :lens,
+      id: "admin-nav-lens",
+      label: "Lens",
+      path: "/admin/lens",
+      icon: "hero-magnifying-glass"
+    },
+    %{
       key: :jobs,
       id: "admin-nav-jobs",
       label: "System Jobs",

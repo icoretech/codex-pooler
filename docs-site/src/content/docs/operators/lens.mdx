@@ -1,0 +1,98 @@
+---
+title: Lens
+description: Find responses that report a different model from the one sent, understand model-name changes within a response, and inspect the affected requests.
+---
+
+Lens helps answer a specific question: **did the provider report the model this request was sent to, or a different one?** Open **Lens** below **Audit logs** in the admin sidebar, at `/admin/lens`.
+
+The goal is to detect a different model, regardless of whether it is better, worse, faster, or more expensive. Lens compares model names reported by the provider. It cannot independently inspect the model that generated the answer, or detect a substitution if the provider keeps reporting the expected name.
+
+## Understand the two signals
+
+An **attempt** is one try at sending a request upstream. A request that is retried can have several attempts. Lens counts each attempt separately.
+
+| Signal in Lens | What it means | Example |
+| --- | --- | --- |
+| **Different from sent** | The first model name reported by the provider differs from the model name Pooler sent upstream. Earlier versions call this a **mismatch**. | Pooler sends `model-a`; the provider first reports `model-b`. |
+| **Name changed in response** | The provider reports one model name, then a different name during the same attempt. Earlier versions call this a **declaration conflict**. | The response first reports `model-a`, then reports `model-b`. |
+
+These are different comparisons. They can happen separately or together. In this table, A, B and C stand for different model names:
+
+| Sent | Provider reports, in order | Different from sent | Name changed |
+| --- | --- | --- | --- |
+| A | A → A | No | No |
+| A | B → B | Yes | No |
+| A | A → B | No | Yes |
+| A | B → C | Yes | Yes |
+| A | A → B → A | No | Yes: returning to A does not erase the change. |
+| A | No model name reported | Unknown | Unknown |
+
+A repeated report of `model-b` does not add another change. An attempt contributes at most one count to each signal. Adding the two signal counts can double-count attempts that have both.
+
+### Requested, sent, and reported are separate facts
+
+| Model name | Where it comes from |
+| --- | --- |
+| **Requested** | The model the client asked Pooler to use. This is the main model name in Request logs. |
+| **Sent upstream** | The name Pooler actually sent after applying model policy, aliases, and catalog mapping. This is Lens's comparison baseline. |
+| **First model reported** | The first model name the provider returned for that attempt. The request drawer also calls this **Upstream served**. |
+| **First different name reported** | The first later name that differs from the provider's first report. |
+| **Model reported at end** | The name reported on the final response event, if one was observed and included a model name. |
+
+For example, a client can request an alias named `model-alias` that Pooler maps to `model-a`. If the provider reports `model-a`, Lens does not flag that configured mapping as a provider substitution. Compare the requested and sent values in the request drawer to see the mapping.
+
+Model-name comparisons ignore letter case. A different name is evidence of what the provider reported; it is not a measurement of model quality.
+
+## Read the request-log warnings
+
+In [Request logs](/operators/request-logs/), the two signals have different presentations:
+
+- **A danger triangle and another model name beside the requested model:** the latest attempt's first reported name differs from the model sent upstream. Hover the marker for its meaning. The extra name stays on the same line; it has no `served` prefix.
+- **“Model name changed · attempts …”:** the provider reported different names during one or more attempts. The listed attempt numbers identify which records to inspect. This warning can appear without the triangle when the first report matched the model sent but a later report changed.
+
+Open the request to see each attempt's **Sent model**, **First model reported**, **First different name reported**, and **Model reported at end**. The list's inline name comes from the latest attempt; the name-change warning can also point to an earlier attempt. A successful retry does not remove that earlier evidence.
+
+An HTTP success status and a model-name warning can both be correct: the request succeeded, but the provider reported a different model. Likewise, a failed or interrupted attempt may already have returned enough model-name information to show a difference.
+
+## Investigate a difference
+
+1. Select a time window and, if known, the relevant **Pool**. The default **Model differences** filter shows the two signals above.
+2. Use **Sent model** to narrow the model Pooler dispatched. **Advanced filters** accepts an upstream identity id for a specific account.
+3. Read **Reported model differences** to find when the signals appeared. The two series are separate because one attempt can have both.
+4. Read **Models involved** to see the most frequent sent → first-reported combinations. A later reported name appears beneath the bar when the name changed during the response.
+5. Use **Affected Pools and models** to locate the Pool, upstream and sent model involved. This table contains only affected attempts; each is counted once. Its links select the corresponding model differences. A retained group whose upstream identity is no longer available stays visible without a link that would select unrelated accounts.
+6. Open an entry under **Attempt evidence** to inspect the request and its individual attempts. Compare all three facts: what the client requested, what Pooler sent, and what the provider reported.
+
+The counters cover all attempts in the selected time/Pool/upstream/model scope. The evidence-type filter changes only the attempt list; it does not change those counters, the graphs, or the affected-groups table. Selecting **No model reported (info)** therefore does not turn missing data into a model-difference signal.
+
+The model-combination graph shows up to eight groups. The affected table and attempt list each show up to 100 entries. Time labels use UTC; the supported windows are one hour, 24 hours and seven days. The timeline retains intervals with no recorded signals.
+
+Lens updates as relevant Pool events arrive. The shared topbar pause control holds automatic updates; resuming loads the current data. Changing filters still loads the selected data while paused. A failed load offers **Retry**; a failed background update keeps the previous snapshot and labels it as stale.
+
+## Understand missing and historical data
+
+**Recording details** is information about what was observed, not another list of model problems.
+
+| Recording state | Meaning |
+| --- | --- |
+| **Recorded with a model name** | Model-name recording was enabled and at least one name was observed. |
+| **Without a model name** | Recording was enabled, but no model name was observed. A failed attempt, interrupted response, or response format without a name can produce this state. |
+| **Not collected** | The newer within-response observation data is absent, for example on older history or an older serving node. It must not be treated as “no name change.” |
+| **Incomplete recording** | Part of the model-name evidence could not be evaluated. A difference already observed remains useful, but an absence of differences is inconclusive. |
+| **No final event recorded** | No supported final response event was observed. This does not erase model names reported earlier. |
+
+The client, route and transport can affect what evidence is available. A missing name alone does not show that the provider used a different model. Missing and uncollected-only attempts are excluded from the default model-differences view and the affected-groups table; select them explicitly when investigating recording coverage.
+
+Older attempts may already have a stored first reported model. Lens can compare that value with the model sent upstream. It cannot reconstruct later names that were never recorded, so historical first-model comparisons and within-response changes have different coverage.
+
+The two rates use different denominators: **Different from sent** uses attempts with both the sent and first reported names; **Name changed within a response** uses attempts recorded by the newer observer with a reported model name. Neither rate describes attempts whose relevant evidence is missing.
+
+Lens reads retained attempt history. Deleting or expiring those attempts removes their contribution; there is no permanent historical total independent of the source rows.
+
+## Scope and privacy
+
+Lens follows the signed-in operator's visible Pools. It stores and displays bounded model names, attempt numbers, timestamps, status and safe routing metadata. Unusual model values may appear as short fingerprints instead of their original text.
+
+It does not expose prompts, generated answers, raw response bodies, websocket frames, credentials or upstream tokens. Model-name observations do not change routing, retries or billing: pricing continues to use the model sent upstream.
+
+For request outcomes and usage, see [Request logs](/operators/request-logs/). For operator actions that may explain a change, see [Audit logs](/operators/audit-logs/).
