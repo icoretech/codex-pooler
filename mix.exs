@@ -57,7 +57,7 @@ defmodule CodexPooler.MixProject do
   defp deps do
     [
       {:argon2_elixir, "== 4.1.3"},
-      {:phoenix, "== 1.8.14"},
+      {:phoenix, "== 1.8.15"},
       {:phoenix_ecto, "== 4.7.0"},
       {:ecto_sql, "== 3.14.0"},
       {:postgrex, "== 0.22.4"},
