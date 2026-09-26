@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.9.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.6...codex-pooler-v0.9.7) (2026-09-26)
+
+
+### Bug Fixes
+
+* **admin:** display persisted provider rejection diagnostics ([646de95](https://github.com/icoretech/codex-pooler/commit/646de95f885f54ce3ce1c14b16e6db1169159607))
+* **catalog:** extend verified decoding to Codex 0.157.1 ([794c191](https://github.com/icoretech/codex-pooler/commit/794c1913237d5228d511f9adbc9aeef20fb35fc2))
+* **compat:** normalize oversized Chat tool call identifiers ([fbfb840](https://github.com/icoretech/codex-pooler/commit/fbfb8406860b6a67e4509442a55a3ff148c8f3ba))
+* **deps:** update dependency apexcharts to v7.6.0 ([#422](https://github.com/icoretech/codex-pooler/issues/422)) ([a31aa66](https://github.com/icoretech/codex-pooler/commit/a31aa66da29c553f5868bb9ae3af3147fc387f63))
+* **deps:** update dependency daisyui to v5.7.45 ([#443](https://github.com/icoretech/codex-pooler/issues/443)) ([b36ef4a](https://github.com/icoretech/codex-pooler/commit/b36ef4af93e36b291a4d1df4454b7161684e2a57))
+* **deps:** update dependency daisyui to v5.7.46 ([#446](https://github.com/icoretech/codex-pooler/issues/446)) ([6d67e4c](https://github.com/icoretech/codex-pooler/commit/6d67e4ca6eb15c07973269bfd4dbccfdb31801e2))
+* **gateway:** treat nil owner forwarding config as disabled ([1a4f43e](https://github.com/icoretech/codex-pooler/commit/1a4f43ebf94498877a6cd0ecabed07cc5ffd66bf))
+* **usage:** classify Codex plan SKUs explicitly and update Pro labels ([0c3a34c](https://github.com/icoretech/codex-pooler/commit/0c3a34c79fef76ce47f0604b2ef60e8e301de71c))
+
+
+### Tests
+
+* **http:** verify endpoint cleanup against owned listener sockets ([6cdd3d1](https://github.com/icoretech/codex-pooler/commit/6cdd3d15486c40d54eb73ffe3b46de54906165cc))
+* **websocket:** await persisted turn completion and inspect owned listener sockets ([81aa682](https://github.com/icoretech/codex-pooler/commit/81aa682436450a3edc954b9d067aff02fc3c6679))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency lazy_html to v0.1.13 ([bb9375a](https://github.com/icoretech/codex-pooler/commit/bb9375aec7698fa714133fb08a7e4db3fe695641))
+* **deps:** update dependency openai/codex to v0.157.1 ([#447](https://github.com/icoretech/codex-pooler/issues/447)) ([9fb8e97](https://github.com/icoretech/codex-pooler/commit/9fb8e973bd4cb10525b566d5530d6b7b671a2383))
+* **deps:** update helm release codex-pooler to v0.9.0 ([#445](https://github.com/icoretech/codex-pooler/issues/445)) ([9256e43](https://github.com/icoretech/codex-pooler/commit/9256e43184af1636f9f6929fda8f01c9e118905f))
+
 ## [0.9.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.5...codex-pooler-v0.9.6) (2026-09-25)
 
 
