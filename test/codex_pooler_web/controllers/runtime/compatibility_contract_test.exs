@@ -64,6 +64,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     request_compression
     upstream_websocket_bridge
     image_generation_permission
+    responses_access_programs
     responses_allowed_tools
     responses_executable_custom_tools
     backend_agent_v2_handoffs

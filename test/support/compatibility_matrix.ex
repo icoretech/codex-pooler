@@ -867,6 +867,16 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "image generation and edits are Pool-gated by allow_image_generation (default on) after runtime authentication and before request parsing or upstream dispatch; disabled Pools receive a deterministic 403 image_generation_disabled error"
     },
     %{
+      slug: :responses_access_programs,
+      status: :supported,
+      current: :validated_forwarding,
+      categories: [:route, :auth, :error, :streaming],
+      routes: [%{method: :post, path: "/v1/responses"}, %{method: :get, path: "/v1/responses"}],
+      future_routes: [],
+      fixture: :responses_access_programs,
+      contract: "public Responses HTTP JSON/SSE and websocket response.create preserve access_programs in Full and Lite; its optional cyber key accepts standard, daybreak_blue, or daybreak_red, while malformed objects, unknown keys, and invalid selections fail before dispatch; the provider remains authoritative for account and model entitlement"
+    },
+    %{
       slug: :responses_allowed_tools,
       status: :supported,
       current: :declaration_backed_full_mode_choice,
@@ -1000,6 +1010,14 @@ defmodule CodexPooler.CompatibilityMatrix do
   ]
 
   @fixtures %{
+    responses_access_programs: %{
+      surfaces: ~w(http_json http_sse responses_websocket),
+      serving_modes: ~w(full lite),
+      cyber_values: ~w(standard daybreak_blue daybreak_red),
+      validation_error: %{status: 400, code: "invalid_request", upstream_dispatch: false},
+      forwarding: :unchanged,
+      entitlement: :upstream_authoritative
+    },
     file_upload: %{
       json: %{"file_name" => "fixture-upload.txt", "file_size" => 24, "use_case" => "codex"}
     },

@@ -849,6 +849,12 @@ MCP output is metadata-only and scoped by the operator's owner or assigned-Pool 
 
 The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP tools.
 
+## Responses access programs
+
+The narrow `/v1/responses` surface accepts `access_programs` on HTTP JSON, HTTP SSE, and websocket `response.create` requests in both Full and Lite modes. The object may contain only the optional `cyber` selection: `standard`, `daybreak_blue`, or `daybreak_red`. Codex Pooler validates the shape and forwards the selection unchanged; an omitted field or empty object leaves selection to the provider. Invalid shapes, unknown keys, and unsupported selections return `400 invalid_request` before upstream dispatch.
+
+Forwarding a selection does not grant access. The upstream account and model must be eligible for the requested program, and provider refusals follow the normal upstream error contract.
+
 ## Prompt-cache and continuity boundaries
 
 Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic and never guarantees a provider cache hit or cached-token accounting.

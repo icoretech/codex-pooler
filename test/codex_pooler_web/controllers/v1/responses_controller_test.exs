@@ -68,6 +68,44 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  for mode <- ~w(full lite), stream <- [false, true] do
+    @tag :access_programs
+    test "POST /v1/responses rejects malformed access programs before effects in #{mode} with stream=#{stream}", %{conn: conn} do
+      upstream = start_upstream(issue_241_completed_response("access_programs_rejected"))
+      setup = gateway_setup(upstream)
+      put_public_model_serving_mode!(setup, unquote(mode))
+      response = conn |> auth(setup) |> post("/v1/responses", %{"model" => setup.model.exposed_model_id, "input" => "synthetic request", "stream" => unquote(stream), "access_programs" => %{"cyber" => "unknown"}})
+      assert %{"error" => %{"type" => "invalid_request_error", "code" => "invalid_request", "param" => "access_programs.cyber"}} = json_response(response, 400)
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+    end
+
+    @tag :access_programs
+    test "POST /v1/responses preserves access programs in #{mode} with stream=#{stream}", %{conn: conn} do
+      upstream = start_upstream(issue_241_completed_response("access_programs"))
+      setup = gateway_setup(upstream)
+      put_public_model_serving_mode!(setup, unquote(mode))
+
+      for value <- ~w(standard daybreak_blue daybreak_red) do
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic access program request",
+            "stream" => unquote(stream),
+            "access_programs" => %{"cyber" => value}
+          })
+
+        assert response.status == 200
+        assert List.last(FakeUpstream.requests(upstream)).json["access_programs"] == %{"cyber" => value}
+      end
+    end
+  end
+
   # Failure-detection budget for an expected message: a green run returns as
   # soon as the message arrives, so only a missing one spends it.
   @detection_timeout_ms 15_000

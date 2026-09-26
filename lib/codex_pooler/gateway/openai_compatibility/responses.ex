@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Validation.reject_unsupported_fields(payload, :responses),
          :ok <- Validation.require_model(payload),
          :ok <- reject_locally_unsupported_fields(payload),
+         :ok <- validate_access_programs(payload),
          :ok <- validate_prompt_cache_options(payload),
          {:ok, payload} <- Input.drop_public_call_id_item_ids(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
@@ -83,6 +84,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       {:ok, %{endpoint: @endpoint, payload: payload, request_options: request_options}}
     end
   end
+
+  defp validate_access_programs(%{"access_programs" => programs}) when is_map(programs) do
+    cond do
+      Map.keys(programs) -- ["cyber"] != [] ->
+        {:error, Error.invalid_request("access_programs contains unsupported fields", "access_programs")}
+
+      not Map.has_key?(programs, "cyber") or programs["cyber"] in ~w(standard daybreak_blue daybreak_red) ->
+        :ok
+
+      true ->
+        {:error, Error.invalid_request("access_programs.cyber is not supported", "access_programs.cyber")}
+    end
+  end
+
+  defp validate_access_programs(%{"access_programs" => _value}),
+    do: {:error, Error.invalid_request("access_programs must be an object", "access_programs")}
+
+  defp validate_access_programs(_payload), do: :ok
 
   defp surface(opts) when is_list(opts), do: Keyword.get(opts, :surface, :responses)
   defp surface(%RequestOptions{}), do: :responses

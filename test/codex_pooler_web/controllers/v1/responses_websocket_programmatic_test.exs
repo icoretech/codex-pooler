@@ -42,6 +42,36 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
   @websocket_frame_timeout 2_000
 
+  for mode <- ~w(full lite) do
+    @tag :access_programs
+    test "public websocket preserves access programs in #{mode}" do
+      upstream = start_upstream(completed_websocket_response("access_programs"))
+      setup = gateway_setup(upstream)
+      put_public_model_serving_mode!(setup, unquote(mode))
+      port = start_public_endpoint!()
+      {conn, websocket, ref} = public_v1_websocket_connect!(port, setup, "access-programs-#{System.unique_integer([:positive])}")
+
+      try do
+        baseline = settled_post_upgrade_counts!(upstream)
+        {conn, websocket} = send_response_create!(conn, websocket, ref, setup, %{"input" => "synthetic invalid request", "access_programs" => %{"cyber" => "unknown"}})
+        {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+        assert %{"type" => "error", "status" => 400, "error" => %{"code" => "invalid_request", "param" => "access_programs.cyber"}} = CodexPooler.JSON.decode!(frame)
+        assert lifecycle_counts(upstream) == baseline
+
+        for value <- ~w(standard daybreak_blue daybreak_red), reduce: {conn, websocket} do
+          {conn, websocket} ->
+            {conn, websocket} = send_response_create!(conn, websocket, ref, setup, %{"input" => "synthetic access program request", "access_programs" => %{"cyber" => value}})
+            {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+            assert List.last(frames)["type"] == "response.completed"
+            assert List.last(FakeUpstream.requests(upstream)).json["access_programs"] == %{"cyber" => value}
+            {conn, websocket}
+        end
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
   test "public websocket helper preserves every co-decoded Mint text frame in FIFO order" do
     websocket = %Mint.WebSocket{}
 
