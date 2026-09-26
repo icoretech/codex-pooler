@@ -63,6 +63,24 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         mono: true
       ),
       detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-code",
+        "Provider rejection code",
+        Map.get(attempt, :rejection_error_code),
+        mono: true
+      ),
+      detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-type",
+        "Provider rejection type",
+        Map.get(attempt, :rejection_error_type),
+        mono: true
+      ),
+      detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-param",
+        "Provider rejection parameter",
+        Map.get(attempt, :rejection_error_param),
+        mono: true
+      ),
+      detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-latency",
         "Latency",
         format_route_latency(attempt.latency_ms),
