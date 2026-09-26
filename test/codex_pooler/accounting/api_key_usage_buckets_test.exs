@@ -10,6 +10,8 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucketsTest do
   import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
 
+  @lock_detection_timeout_ms 15_000
+
   describe "API-key usage bucket projection" do
     test "projects every effective ledger delta and reverses recorded rows on update and delete" do
       setup = accounting_setup()
@@ -344,17 +346,101 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucketsTest do
       Repo.delete!(Repo.reload!(failed.settlement))
       assert_rebuild_unchanged!(setup.api_key.id)
     end
+
+    test "rebuild arithmetic waits for an existing bucket reader before entering its maintenance window" do
+      setup = accounting_setup()
+      insert_entry!(setup, ~U[2026-08-02 00:00:00.000000Z], %{entry_kind: "settlement", usage_status: "usage_known", total_tokens: 7, settled_cost_micros: "13"})
+      [[rebuild_backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+      [[previous_lock_timeout]] = Repo.query!("SHOW lock_timeout").rows
+      {reader, reader_backend} = start_bucket_reader!()
+      refute reader_backend == rebuild_backend
+      supervisor = start_supervised!(Task.Supervisor)
+
+      task = Task.Supervisor.async_nolink(supervisor, fn -> assert_rebuild_unchanged!(setup.api_key.id) end)
+      task_pid = task.pid
+      monitor = Process.monitor(task_pid)
+
+      await_bucket_lock_wait!(reader, task_pid, rebuild_backend, reader_backend, System.monotonic_time(:millisecond) + @lock_detection_timeout_ms)
+      Postgrex.query!(reader, "ROLLBACK", [])
+
+      Task.await(task, @lock_detection_timeout_ms)
+      assert_receive {:DOWN, ^monitor, :process, ^task_pid, :normal}, @lock_detection_timeout_ms
+      assert Repo.query!("SHOW lock_timeout").rows == [[previous_lock_timeout]]
+    end
+
+    test "direct rebuild refuses a busy projection without changing buckets or retaining partial locks" do
+      setup = accounting_setup()
+      insert_entry!(setup, ~U[2026-08-02 00:00:00.000000Z], %{entry_kind: "settlement", usage_status: "usage_known", total_tokens: 7, settled_cost_micros: "13"})
+      before = bucket_rows(setup.api_key.id)
+      {reader, _reader_backend} = start_bucket_reader!()
+
+      try do
+        assert {:error, %Postgrex.Error{postgres: %{code: :lock_not_available}}} =
+                 Repo.query("SELECT public.rebuild_api_key_usage_components()", [], mode: :savepoint)
+
+        assert bucket_rows(setup.api_key.id) == before
+
+        assert %{rows: [[0]]} = Repo.query!("SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND relation = 'public.ledger_entries'::regclass AND mode = 'ShareRowExclusiveLock'")
+      after
+        Postgrex.query!(reader, "ROLLBACK", [])
+      end
+    end
   end
 
   defp assert_rebuild_unchanged!(api_key_id) do
-    sql =
-      "SELECT bucket_started_at, effective_request_count, effective_total_tokens, effective_cost_micros, known_total_tokens, provisional_total_tokens, admission_count, known_cost_micros FROM api_key_usage_buckets WHERE api_key_id = $1::text::uuid ORDER BY bucket_started_at"
+    # The production rebuild deliberately uses NOWAIT. Establish its idle
+    # maintenance window before checking arithmetic, rather than racing a
+    # reader or autovacuum on the test database. These locks live only in the
+    # sandbox transaction; a reader that never drains still fails the test.
+    [[previous_lock_timeout]] = Repo.query!("SHOW lock_timeout").rows
+    Repo.query!("SELECT set_config('lock_timeout', $1, true)", ["#{@lock_detection_timeout_ms}ms"])
+    Repo.query!("LOCK TABLE public.ledger_entries IN SHARE ROW EXCLUSIVE MODE")
+    Repo.query!("LOCK TABLE public.api_key_usage_buckets IN ACCESS EXCLUSIVE MODE")
+    Repo.query!("SELECT set_config('lock_timeout', $1, true)", [previous_lock_timeout])
 
-    before = Repo.query!(sql, [api_key_id]).rows
+    before = bucket_rows(api_key_id)
 
     for _ <- 1..2 do
       Repo.query!("SELECT public.rebuild_api_key_usage_components()")
-      assert Repo.query!(sql, [api_key_id]).rows == before
+      assert bucket_rows(api_key_id) == before
+    end
+  end
+
+  defp bucket_rows(api_key_id) do
+    Repo.query!(
+      "SELECT bucket_started_at, effective_request_count, effective_total_tokens, effective_cost_micros, known_total_tokens, provisional_total_tokens, admission_count, known_cost_micros FROM api_key_usage_buckets WHERE api_key_id = $1::text::uuid ORDER BY bucket_started_at",
+      [api_key_id]
+    ).rows
+  end
+
+  defp start_bucket_reader! do
+    options = Repo.config() |> Keyword.take([:hostname, :port, :username, :password, :database, :socket_dir])
+    reader = start_supervised!({Postgrex, options})
+    Postgrex.query!(reader, "BEGIN", [])
+    Postgrex.query!(reader, "SELECT 1 FROM public.api_key_usage_buckets LIMIT 0", [])
+    [[backend]] = Postgrex.query!(reader, "SELECT pg_backend_pid()", []).rows
+    {reader, backend}
+  end
+
+  defp await_bucket_lock_wait!(reader, task_pid, rebuild_backend, reader_backend, deadline) do
+    %{rows: [[waiting?]]} =
+      Postgrex.query!(reader, "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND relation = 'public.api_key_usage_buckets'::regclass AND mode = 'AccessExclusiveLock' AND NOT granted AND $2 = ANY(pg_blocking_pids($1)))", [rebuild_backend, reader_backend])
+
+    cond do
+      waiting? ->
+        :ok
+
+      not Process.alive?(task_pid) ->
+        flunk("rebuild finished before the bucket reader released its lock")
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("rebuild did not wait on the bucket reader")
+
+      true ->
+        receive do
+        after
+          10 -> await_bucket_lock_wait!(reader, task_pid, rebuild_backend, reader_backend, deadline)
+        end
     end
   end
 
