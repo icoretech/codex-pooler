@@ -1044,7 +1044,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         vary_header: "user-agent",
         client_version_query: :ignored,
         decode_checked: %{
-          window: {"0.154.0", "0.157.0"},
+          window: {"0.154.0", "0.157.1"},
           window_version: "whole_version_prereleases_included",
           body: "template_only_minus_entries_the_client_cannot_decode",
           left_out_model: %{advertised: false, routable: true},
