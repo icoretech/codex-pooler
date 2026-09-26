@@ -380,6 +380,14 @@ Request-size and model context limits still apply; opaque fields such as tool
 arguments and encoded media are not split. Direct Responses and `input`
 fallback requests retain their existing representation.
 
+Replayed Chat tool-call identifiers longer than 64 UTF-8 bytes are mapped to
+stable, bounded identifiers before dispatch. The matching call and result use
+the same identifier, including across repeated history requests. Short
+identifiers, tool names, arguments and outputs stay unchanged. If a mapped
+identifier would collide with another identifier in the request, Pooler rejects
+the request instead of merging distinct calls. Direct Responses and `input`
+fallback requests keep their original identifiers.
+
 The optional `user` field accepts a string or null and is discarded before
 dispatch. It does not establish ownership, permissions, or routing identity.
 

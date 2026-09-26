@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   @moduledoc false
 
-  alias CodexPooler.Gateway.OpenAICompatibility.Chat.TextParts
+  alias CodexPooler.Gateway.OpenAICompatibility.Chat.{CallIds, TextParts}
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -34,7 +34,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
            prepare_response_payload(payload),
          {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)),
-         {:ok, normalized_payload} <- TextParts.normalize(response.payload, chat_payload) do
+         {:ok, normalized_payload} <- TextParts.normalize(response.payload, chat_payload),
+         {:ok, normalized_payload} <- CallIds.normalize(normalized_payload, chat_payload) do
       options =
         if normalized_payload == response.payload,
           do: response.request_options,
