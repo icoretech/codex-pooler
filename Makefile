@@ -28,7 +28,7 @@ N ?= 4
 TEST_FAST_COMMAND ?= $(MIX) test
 TEST_FAST_DROP_COMMAND ?= $(MIX) ecto.drop --quiet
 
-.PHONY: dev dev-prepare dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-db-prune test-fast
+.PHONY: dev dev-prepare dev-db dev-compile dev-assets dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-db-prune test-fast
 
 dev: dev-prepare
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) $(MIX) phx.server' $(DEV_SERVER_LIFECYCLE) start
@@ -37,6 +37,7 @@ dev-prepare:
 	@$(MAKE) --no-print-directory dev-stop
 	@$(MAKE) --no-print-directory dev-db
 	@$(MAKE) --no-print-directory dev-compile
+	@$(MAKE) --no-print-directory dev-assets
 	@$(MAKE) --no-print-directory dev-migrate
 	@$(MAKE) --no-print-directory dev-pricing
 
@@ -61,6 +62,10 @@ dev-db:
 
 dev-compile:
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) compile --force
+
+dev-assets:
+	@$(MIX) assets.setup
+	@$(MIX) assets.build
 
 dev-migrate:
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) ecto.create --quiet

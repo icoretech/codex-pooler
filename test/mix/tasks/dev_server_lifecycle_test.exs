@@ -35,11 +35,23 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
              "db_up",
              "db_exec",
              "compile",
+             "assets_setup",
+             "assets_build",
              "create",
              "migrate",
              "pricing",
              "start_owner_forwarding=absent"
            ]
+  end
+
+  test "make dev refuses to start with a failed locked asset installation" do
+    fixture = parallel_make_fixture!()
+
+    {output, code} = System.cmd("make", ["-j4", "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}", "POSTGRES_PORT=#{fixture.postgres_port}", "dev"], cd: fixture.root, env: [{"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}, {"DEV_SERVER_EVENT_LOG", fixture.event_log}, {"DEV_SERVER_ASSET_SETUP_FAIL", "1"}], stderr_to_stdout: true)
+
+    assert code != 0
+    assert output =~ "asset installation failed"
+    assert File.read!(fixture.event_log) |> String.split("\n", trim: true) == ["stop_started", "stop_completed", "db_up", "db_exec", "compile"]
   end
 
   test "make dev imports websocket owner forwarding from the repository environment" do
@@ -530,7 +542,16 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     grep -qx 'stop_completed' "$DEV_SERVER_EVENT_LOG"
     case "$1 ${2:-}" in
       'compile --force') grep -qx 'db_exec' "$DEV_SERVER_EVENT_LOG"; event=compile ;;
-      'ecto.create --quiet') grep -qx 'compile' "$DEV_SERVER_EVENT_LOG"; event=create ;;
+      'assets.setup ')
+        grep -qx 'compile' "$DEV_SERVER_EVENT_LOG"
+        if [ "${DEV_SERVER_ASSET_SETUP_FAIL:-0}" = 1 ]; then
+          printf 'asset installation failed\n' >&2
+          exit 1
+        fi
+        event=assets_setup
+        ;;
+      'assets.build ') grep -qx 'assets_setup' "$DEV_SERVER_EVENT_LOG"; event=assets_build ;;
+      'ecto.create --quiet') grep -qx 'assets_build' "$DEV_SERVER_EVENT_LOG"; event=create ;;
       'run --no-start')
         [ "$#" -eq 4 ]
         [ "$3" = '-e' ]
