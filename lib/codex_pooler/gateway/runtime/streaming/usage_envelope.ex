@@ -1,10 +1,12 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
   @moduledoc false
 
+  alias CodexPooler.Accounting.Metadata
   alias CodexPooler.Gateway.Runtime.Streaming.{UsageJsonToken, UsageProjection}
 
   @context_bytes 80
   @encoded_context_bytes @context_bytes * 6 + 2
+  @model_context_bytes 16_384
   @string_boundary ~r/[\x00-\x1f"\\\x80-\xff]/
 
   @type frame :: %{
@@ -31,6 +33,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
           tier: binary() | nil,
           type: binary() | nil,
           model: binary() | nil,
+          root_id: binary() | nil,
+          response_id: binary() | nil,
+          model_coverage_complete?: boolean(),
           error: :malformed | :limit | :null | nil,
           usage_error: :malformed | :limit | :null | nil,
           done?: boolean(),
@@ -53,6 +58,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
             tier: nil,
             type: nil,
             model: nil,
+            root_id: nil,
+            response_id: nil,
+            model_coverage_complete?: true,
             error: nil,
             usage_error: nil,
             done?: false,
@@ -124,7 +132,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
              ["service_tier"],
              ["response", "service_tier"],
              ["model"],
-             ["response", "model"]
+             ["response", "model"],
+             ["id"],
+             ["response", "id"]
            ] ->
         %{state | capture: ""}
 
@@ -144,6 +154,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
         response_tier: nil,
         response_type: nil,
         response_model: nil,
+        response_id: nil,
         type: state.root_type,
         model: state.root_model
     }
@@ -154,13 +165,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
       | response_tier: nil,
         response_type: nil,
         response_model: nil,
+        response_id: nil,
         type: state.root_type,
         model: state.root_model
     }
 
   defp capture(state, byte) do
     key = capture_key(state, byte)
-    captured = append_bounded(state.capture, byte, @encoded_context_bytes)
+    limit = if value_path(state) in [["model"], ["response", "model"], ["id"], ["response", "id"]], do: @model_context_bytes, else: @encoded_context_bytes
+    captured = append_bounded(state.capture, byte, limit)
     state = %{state | key: key, capture: captured}
 
     case state.projection do
@@ -271,7 +284,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
   defp value_path(_state), do: nil
 
   defp tracked_key(frame, key)
-       when key in ["usage", "response", "type", "service_tier", "model"] do
+       when key in ["usage", "response", "type", "service_tier", "model", "id"] do
     if frame.path in [[], ["response"]] do
       if key in frame.seen,
         do: %{frame | key: nil},
@@ -295,14 +308,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
   end
 
   defp store_context(state, path) do
+    model_context? = path in [["model"], ["response", "model"], ["id"], ["response", "id"]]
+
     value =
       case state.capture && CodexPooler.JSON.decode(state.capture) do
-        {:ok, value} when is_binary(value) and byte_size(value) <= @context_bytes -> value
-        _other -> nil
+        {:ok, value} when is_binary(value) ->
+          if model_context?, do: Metadata.bounded_model_identifier(value), else: bounded_context(value)
+
+        _other ->
+          nil
       end
 
+    state = if model_context? and is_nil(state.capture), do: %{state | model_coverage_complete?: false}, else: state
     put_context(state, path, value)
   end
+
+  defp bounded_context(value) when byte_size(value) <= @context_bytes, do: value
+  defp bounded_context(_value), do: nil
 
   defp put_context(state, ["type"], value),
     do: %{state | type: value || state.response_type, root_type: value}
@@ -323,6 +345,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
 
   defp put_context(state, ["response", "model"], value),
     do: %{state | response_model: value, model: value || state.root_model}
+
+  defp put_context(state, ["id"], value), do: %{state | root_id: value}
+  defp put_context(state, ["response", "id"], value), do: %{state | response_id: value}
 
   defp put_context(state, _path, _value), do: state
 

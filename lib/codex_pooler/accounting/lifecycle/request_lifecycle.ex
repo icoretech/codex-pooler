@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     ClientRetry,
     LedgerEntry,
     Metadata,
+    ModelObservation,
     PreAttemptRelease,
     PricingResolution,
     Request,
@@ -311,6 +312,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   defp persist_retryable_attempt_failure(attempt, attrs, timestamp) do
+    usage = normalize_final_usage(Map.get(attrs, :usage, %{}), "failed")
+
     attempt
     |> Ecto.Changeset.change(%{
       status: Map.get(attrs, :attempt_status, "retryable_failed"),
@@ -321,6 +324,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       error_message: blank_to_nil(Map.get(attrs, :error_message)),
       latency_ms: Map.get(attrs, :latency_ms),
       usage_status: Map.get(attrs, :usage_status, @usage_unknown),
+      served_model: usage.served_model,
+      model_observation: usage.model_observation,
       response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :attempt_metadata, %{}))
     })
     |> Repo.update()
@@ -1042,6 +1047,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           latency_ms: Map.get(attrs, :latency_ms),
           usage_status: usage.status,
           served_model: usage.served_model,
+          model_observation: usage.model_observation,
           response_metadata:
             attrs
             |> Map.get(:attempt_metadata, %{})
@@ -1273,6 +1279,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         ),
       service_tier: attr(usage, :service_tier),
       served_model: Metadata.bounded_model_identifier(attr(usage, :served_model)),
+      model_observation: ModelObservation.normalize(attr(usage, :model_observation), Metadata.bounded_model_identifier(attr(usage, :served_model))),
       recorded_at: attr(usage, :recorded_at) || now()
     }
   end

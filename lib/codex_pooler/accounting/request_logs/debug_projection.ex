@@ -2,7 +2,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   @moduledoc false
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, ModelObservation, Request}
 
   alias CodexPooler.Accounting.RequestLogs.DebugProjection.{
     DownstreamDelivery,
@@ -234,6 +234,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     %{
       attempt_ref: attempt_ref(request_id, attempt.attempt_number),
       attempt_number: attempt.attempt_number,
+      upstream_model: attempt.upstream_model_id,
+      served_model: attempt.served_model,
+      model_observation: ModelObservation.normalize(attempt.model_observation, attempt.served_model),
       status: attempt.status,
       retryable: attempt.retryable,
       pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,

@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
+  alias CodexPooler.Gateway.Runtime.Streaming.ModelDeclarationObserver
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
@@ -1542,6 +1543,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           {:error,
            %{
              body: receive_body(receive_state),
+             response_usage: receive_model_usage(receive_state),
              reason: :upstream_websocket_receive_timeout,
              headers: state.headers,
              upstream_error_param: receive_state.terminal_upstream_error_param,
@@ -1594,6 +1596,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:error,
      %{
        body: receive_body(receive_state),
+       response_usage: receive_model_usage(receive_state),
        reason: :client_disconnected,
        headers: Map.get(state, :headers, []),
        upstream_error_param: receive_state.terminal_upstream_error_param,
@@ -1649,6 +1652,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:error,
      %{
        body: receive_body(receive_state),
+       response_usage: receive_model_usage(receive_state),
        reason: reason,
        headers: state.headers,
        upstream_error_param: receive_state.terminal_upstream_error_param,
@@ -1671,6 +1675,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:error,
        %{
          body: receive_body(receive_state),
+         response_usage: receive_model_usage(receive_state),
          reason: :upstream_websocket_pong_deadline,
          headers: state.headers,
          upstream_error_param: receive_state.terminal_upstream_error_param,
@@ -1746,6 +1751,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {{:error,
       %{
         body: receive_body(receive_state),
+        response_usage: receive_model_usage(receive_state),
         reason: reason,
         headers: Map.get(state, :headers, []),
         upstream_error_param: receive_state.terminal_upstream_error_param,
@@ -1774,7 +1780,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       %{
         body: terminal_body(receive_state),
         terminal: terminal,
-        response_usage: receive_state.response_usage,
+        response_usage: receive_model_usage(receive_state),
         status: 200,
         headers: Map.get(state, :headers, []),
         upstream_error_code: receive_state.terminal_upstream_error_code,
@@ -2441,21 +2447,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp maybe_put_response_id(%ReceiveState{} = receive_state, _decoded), do: receive_state
 
-  defp maybe_put_served_model(%ReceiveState{served_model: nil} = receive_state, %{} = decoded) do
-    served_model =
-      case Map.fetch(decoded, "type") do
-        {:ok, type} when type in @response_identity_event_types -> ResponseUsage.served_model(decoded)
-        :error -> ResponseUsage.served_model(decoded)
-        _typed_or_invalid -> nil
-      end
-
-    case served_model do
-      nil -> receive_state
-      model -> %{receive_state | served_model: model}
-    end
+  defp maybe_put_served_model(%ReceiveState{} = receive_state, %{} = decoded) do
+    observer = ModelDeclarationObserver.observe(receive_state.model_observer || ModelDeclarationObserver.new(), decoded)
+    %{receive_state | served_model: observer.first_model, model_observer: observer}
   end
 
-  defp maybe_put_served_model(%ReceiveState{} = receive_state, _decoded), do: receive_state
+  defp maybe_put_served_model(%ReceiveState{} = receive_state, _decoded),
+    do: %{receive_state | model_observer: ModelDeclarationObserver.partial(receive_state.model_observer || ModelDeclarationObserver.new())}
+
+  defp receive_model_usage(receive_state) do
+    usage = receive_state.response_usage || ResponseUsage.from_websocket_body(receive_body(receive_state))
+    ModelDeclarationObserver.put_usage(usage, receive_state.model_observer || ModelDeclarationObserver.new())
+  end
 
   defp bounded_response_id(response_id) when is_binary(response_id) do
     response_id = String.trim(response_id)

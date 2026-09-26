@@ -463,6 +463,9 @@ defmodule CodexPooler.Accounting do
   @spec list_request_logs(term(), keyword()) :: map()
   defdelegate list_request_logs(pool_or_id, opts \\ []), to: RequestLogs, as: :list
 
+  @spec model_declaration_history(CodexPooler.Accounts.Scope.t(), map(), keyword()) :: CodexPooler.Accounting.RequestLogs.ModelHistory.result()
+  defdelegate model_declaration_history(scope, params \\ %{}, opts \\ []), to: CodexPooler.Accounting.RequestLogs.ModelHistory, as: :for_scope
+
   @spec list_request_logs_for_scope(CodexPooler.Accounts.Scope.t(), keyword()) :: map()
   defdelegate list_request_logs_for_scope(scope, opts \\ []), to: RequestLogs, as: :list_for_scope
 

@@ -13,22 +13,24 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
           optional(:reasoning_tokens) => non_neg_integer(),
           optional(:total_tokens) => non_neg_integer(),
           optional(:service_tier) => String.t() | nil,
-          optional(:served_model) => String.t()
+          optional(:served_model) => String.t(),
+          optional(:model_observation) => map()
         }
 
   alias CodexPooler.Accounting.Metadata
+  alias CodexPooler.Gateway.Runtime.Streaming.ModelDeclarationObserver
   alias CodexPooler.ServiceTier
 
   @spec from_json(binary()) :: usage()
   def from_json(body) when is_binary(body) do
     case CodexPooler.JSON.decode(body) do
       {:ok, decoded} -> from_decoded(decoded)
-      {:error, _reason} -> %{status: "usage_unknown", source: "json_decode_failed"}
+      {:error, _reason} -> ModelDeclarationObserver.put_usage(%{status: "usage_unknown", source: "json_decode_failed"}, ModelDeclarationObserver.partial(ModelDeclarationObserver.new()))
     end
   end
 
   @spec from_decoded(term()) :: usage()
-  def from_decoded(decoded), do: usage_from_decoded(decoded)
+  def from_decoded(decoded), do: ModelDeclarationObserver.put_usage(usage_from_decoded(decoded), ModelDeclarationObserver.json(decoded))
 
   @doc "Extracts only the aggregate usage owned by a streamed response envelope."
   @spec from_stream_event(term()) :: usage()
@@ -107,7 +109,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   @spec from_sse(binary()) :: usage()
   def from_sse(body) when is_binary(body) do
     case CodexPooler.JSON.decode(body) do
-      {:ok, decoded} when is_map(decoded) -> from_stream_event(decoded)
+      {:ok, decoded} when is_map(decoded) -> ModelDeclarationObserver.put_usage(from_stream_event(decoded), ModelDeclarationObserver.observe(ModelDeclarationObserver.new(), decoded))
       _framed_or_incomplete -> decode_stream_body(body, "sse_usage_missing", false)
     end
   end
@@ -127,19 +129,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
         usage -> usage
       end
 
-    # The first response object of a stream declares the served model before
-    # any usage exists, so an interrupted stream still records it, and that
-    # first declaration is the one every transport keeps.
-    case Enum.find_value(records, &stream_record_served_model/1) do
-      nil -> usage
-      model -> Map.put(usage, :served_model, model)
-    end
+    observer = Enum.reduce(records, ModelDeclarationObserver.new(), &stream_record_model/2)
+    ModelDeclarationObserver.put_usage(usage, observer)
   end
 
-  defp stream_record_served_model({json, _event_type}) do
+  defp stream_record_model({json, event_type}, observer) do
     case CodexPooler.JSON.decode(json) do
-      {:ok, decoded} when is_map(decoded) -> served_model(decoded)
-      _malformed -> nil
+      {:ok, decoded} when is_map(decoded) -> ModelDeclarationObserver.observe(observer, decoded, event_type)
+      _malformed -> ModelDeclarationObserver.partial(observer)
     end
   end
 

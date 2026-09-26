@@ -20,7 +20,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   import Ecto.Query
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFact}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, ModelObservation, Request, RequestLogFact}
 
   alias CodexPooler.Accounting.RequestLogs.{
     CompactionBridgeProjection,
@@ -249,6 +249,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       requested_model: request.requested_model,
       upstream_model: latest_attempt_model(request_attempts, :upstream_model_id),
       served_model: latest_attempt_model(request_attempts, :served_model),
+      model_conflict_attempts: request_attempts |> Enum.filter(&ModelObservation.conflict?(&1.model_observation)) |> Enum.map(& &1.attempt_number),
       reasoning_effort: request.reasoning_effort,
       applied_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "applied_effort"),
       effective_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "effective_effort"),

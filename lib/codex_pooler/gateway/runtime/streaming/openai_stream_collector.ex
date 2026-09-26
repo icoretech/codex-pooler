@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, ResponseUsage}
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Gateway.Runtime.Streaming.ModelDeclarationObserver
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
@@ -157,8 +158,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
     if Metadata.json_content?(upstream_response) do
       usage =
         case CodexPooler.JSON.decode(body) do
-          {:ok, decoded} -> ResponseUsage.from_stream_event(decoded)
-          {:error, _reason} -> %{status: "usage_unknown", source: "json_decode_failed"}
+          {:ok, decoded} -> ModelDeclarationObserver.put_usage(ResponseUsage.from_stream_event(decoded), ModelDeclarationObserver.json(decoded))
+          {:error, _reason} -> ResponseUsage.from_json(body)
         end
 
       state |> Map.delete(:usage_observer) |> Map.put(:response_usage, usage)

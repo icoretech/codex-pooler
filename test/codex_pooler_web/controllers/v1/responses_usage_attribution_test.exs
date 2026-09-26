@@ -59,11 +59,19 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
         end
 
       terminal =
-        ~s({"type":"response.completed","response":{"id":"resp_usage_attribution","status":"completed","usage":#{usage},"output":[]}})
+        ~s({"type":"response.completed","response":{"id":"resp_usage_attribution","model":"model-a","status":"completed","usage":#{usage},"output":[]}})
 
       assert byte_size(terminal) > 65_536
 
-      upstream = start_upstream(FakeUpstream.sse_stream(["data: " <> terminal <> "\n\n"]))
+      upstream =
+        start_upstream(
+          FakeUpstream.sse_stream([
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_usage_attribution\",\"model\":\"model-a\"}}\n\n",
+            "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_usage_attribution\",\"model\":\"model-b\"}}\n\n",
+            "data: " <> terminal <> "\n\n"
+          ])
+        )
+
       setup = gateway_setup(upstream)
       session_key = Ecto.UUID.generate()
       conn = conn |> auth(setup)
@@ -96,6 +104,10 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
         assert request.retry_count == 0
         assert request.usage_status == "usage_known"
         assert attempt.usage_status == "usage_known"
+        assert attempt.served_model == "model-a"
+        assert attempt.model_observation["conflict"] == true
+        assert attempt.model_observation["first_conflicting_model"] == "model-b"
+        assert attempt.model_observation["terminal_model"] == "model-a"
 
         assert attempt.transport ==
                  if(unquote(transport) == :http, do: "http_sse", else: "websocket")

@@ -78,10 +78,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
   for terminal_type <- ["response.failed", "response.incomplete"] do
     test "#{terminal_type} preserves measured aggregates despite attribution" do
       terminal = terminal_frame(:response, @usage, unquote(terminal_type))
-      {setup, upstream, _result, _frames} = execute_frames([terminal])
+      {setup, upstream, _result, _frames} = execute_frames(model_progress() ++ [terminal])
       assert length(FakeUpstream.requests(upstream)) == 1
       assert_settlement(setup, "usage_known")
+      assert [attempt] = Repo.all(from a in Attempt, join: r in Request, on: a.request_id == r.id, where: r.pool_id == ^setup.pool.id)
+      assert attempt.served_model == "model-a"
+      assert attempt.model_observation["conflict"] == true
+      assert attempt.model_observation["first_conflicting_model"] == "model-b"
+      assert attempt.model_observation["terminal_status"] == String.replace_prefix(unquote(terminal_type), "response.", "")
+      assert attempt.model_observation["terminal_model"] == nil
     end
+  end
+
+  test "postvisible websocket interruption persists model disagreements before retained-body finalization" do
+    frames = model_progress() ++ [CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "synthetic output"})]
+    {setup, upstream, _result, _delivered} = execute_frames(frames, :interrupted)
+    assert FakeUpstream.count(upstream) == 1
+    assert [attempt] = Repo.all(from a in Attempt, join: r in Request, on: a.request_id == r.id, where: r.pool_id == ^setup.pool.id)
+    assert attempt.served_model == "model-a"
+    assert attempt.model_observation["conflict"] == true
+    assert attempt.model_observation["first_conflicting_model"] == "model-b"
+    assert attempt.model_observation["terminal_status"] == nil
+    assert attempt.model_observation["terminal_model"] == nil
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^attempt.request_id and l.entry_kind == "settlement"), :count) == 1
+  end
+
+  defp model_progress do
+    for model <- ["model-a", "model-b"], do: CodexPooler.JSON.encode!(%{"type" => "response.in_progress", "response" => %{"id" => "resp_synthetic_usage_123456", "model" => model}})
   end
 
   defp terminal_frame(envelope, usage, type \\ "response.completed") do
@@ -108,8 +131,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketUsageAttributionTest do
     end
   end
 
-  defp execute_frames(frames) do
-    upstream = start_upstream(FakeUpstream.websocket_text_frames(frames))
+  defp execute_frames(frames, outcome \\ :terminal) do
+    mode = if outcome == :interrupted, do: FakeUpstream.websocket_text_frames_then_abrupt_close(frames), else: FakeUpstream.websocket_text_frames(frames)
+    upstream = start_upstream(mode)
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 

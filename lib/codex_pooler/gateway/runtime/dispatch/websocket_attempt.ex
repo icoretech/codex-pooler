@@ -284,6 +284,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
              context.reserved.request,
              context.attempt,
              %{
+               usage: Map.get(response, :response_usage, %{}),
                last_error_code: code,
                error_message: Metadata.safe_reason(response.reason),
                latency_ms: elapsed_ms(started),
@@ -721,6 +722,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   defp retryable_websocket_response_context(context, response) do
     %ResponseContext{
       context: context,
+      response_usage: Map.get(response, :response_usage),
       response: %Req.Response{status: 200, headers: Map.get(response, :headers, [])},
       upstream_transport: :websocket,
       upstream_websocket_connection: Map.get(response, :upstream_websocket_connection)

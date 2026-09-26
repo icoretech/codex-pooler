@@ -365,6 +365,20 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
       "properties" => %{
         "attempt_ref" => nullable_string_property(),
         "attempt_number" => %{"type" => ["integer", "null"]},
+        "upstream_model" => nullable_string_property(),
+        "served_model" => nullable_string_property(),
+        "model_observation" => %{
+          "type" => ["object", "null"],
+          "additionalProperties" => false,
+          "properties" => %{
+            "version" => %{"const" => 1},
+            "coverage" => %{"type" => "string", "enum" => ["full", "partial"]},
+            "conflict" => %{"type" => ["boolean", "null"]},
+            "terminal_status" => nullable_string_property(),
+            "terminal_model" => nullable_string_property(),
+            "first_conflicting_model" => nullable_string_property()
+          }
+        },
         "status" => nullable_string_property(),
         "retryable" => %{"type" => ["boolean", "null"]},
         "upstream_status_code" => %{"type" => ["integer", "null"]},

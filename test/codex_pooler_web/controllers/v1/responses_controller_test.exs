@@ -4681,7 +4681,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert byte_size(retained_terminal) == RetainedBody.max_bytes()
 
-    assert ResponseUsage.from_sse(retained_terminal) == %{
+    assert Map.delete(ResponseUsage.from_sse(retained_terminal), :model_observation) == %{
              status: "usage_unknown",
              source: "sse_usage_missing"
            }

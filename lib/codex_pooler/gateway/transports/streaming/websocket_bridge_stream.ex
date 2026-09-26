@@ -81,6 +81,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           | {:rejected, 429, binary(), [{String.t(), String.t()}]}
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
   @type attempt_metadata :: %{
+          optional(:model_usage) => map(),
           upstream_websocket_connection: map() | nil,
           transport_failure: map() | nil
         }
@@ -157,6 +158,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           pending_count: 0,
           pending_bytes: 0,
           upstream_websocket_connection: nil,
+          model_usage: nil,
           transport_failure: nil,
           quota_rejection: nil,
           upstream_committed: false
@@ -863,6 +865,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       %{
         state
         | upstream_websocket_connection: connection || state.upstream_websocket_connection,
+          model_usage: model_usage(result),
           transport_failure: nonempty_map(transport_failure) || state.transport_failure
       },
       {status, result}
@@ -870,6 +873,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   defp put_submit_result_connection(state, _result), do: state
+
+  defp model_usage(%{response_usage: %{model_observation: %{"version" => 1}} = usage}), do: Map.take(usage, [:served_model, :model_observation])
+  defp model_usage(_result), do: nil
 
   defp quota_rejection?(%{quota_rejection: {429, _body, _headers}, upstream_committed: false}), do: true
   defp quota_rejection?(_state), do: false
@@ -1009,6 +1015,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       upstream_websocket_connection: state.upstream_websocket_connection,
       transport_failure: state.transport_failure
     }
+    |> then(fn metadata -> if state.model_usage, do: Map.put(metadata, :model_usage, state.model_usage), else: metadata end)
   end
 
   defp empty_attempt_metadata do

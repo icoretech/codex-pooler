@@ -61,8 +61,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       request_options: request_options
     } = context
 
-    usage = stream_usage(body, stream_state)
     attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+    usage = stream_usage(body, stream_state) |> merge_model_observation(attempt_metadata)
     upstream_websocket_connection = attempt_metadata.upstream_websocket_connection
     transports = resolved_transports(response_context, attempt_metadata)
 
@@ -132,6 +132,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       error_message: "upstream stream returned retryable first event #{code}",
       latency_ms: elapsed_ms(context.started),
       usage_status: ResponseUsage.from_sse(body)[:status] || "usage_unknown",
+      usage: first_event_usage(body, response_context),
       attempt_metadata:
         first_event_attempt_metadata(
           response_context,
@@ -216,7 +217,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
-        stream_usage(body, nil),
+        first_event_usage(body, response_context),
         SettlementAttrs.partial_stream_failure(
           context,
           response.status,
@@ -296,7 +297,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
-        stream_usage(body, stream_state),
+        stream_usage(body, stream_state) |> merge_model_observation(websocket_attempt_metadata),
         SettlementAttrs.partial_stream_failure(
           context,
           failure_response_status(reason, response.status),
@@ -772,12 +773,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
 
+  defp first_event_usage(_body, %ResponseContext{response_usage: %{} = usage}), do: usage
+  defp first_event_usage(body, %ResponseContext{upstream_transport: :websocket}), do: Map.delete(ResponseUsage.from_sse(body), :model_observation)
+  defp first_event_usage(body, _context), do: ResponseUsage.from_sse(body)
+
   defp stream_usage(_body, %{response_usage: %{} = usage}), do: usage
 
   defp stream_usage(_body, %{usage_observer: %{} = usage_state}),
     do: StreamUsageObserver.result(usage_state)
 
   defp stream_usage(body, _stream_state), do: ResponseUsage.from_sse(body)
+
+  defp merge_model_observation(usage, %{model_usage: %{} = model_usage}), do: Map.merge(usage, model_usage)
+  defp merge_model_observation(usage, _metadata), do: usage
 
   defp merge_usage_observation(metadata, %{usage_observer: %{} = observer}) do
     observation =

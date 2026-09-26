@@ -100,6 +100,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :requested_model,
         :upstream_model,
         :served_model,
+        :model_conflict_attempts,
         :transport,
         :status,
         :usage_status,

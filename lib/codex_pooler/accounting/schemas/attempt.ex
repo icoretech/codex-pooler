@@ -15,6 +15,7 @@ defmodule CodexPooler.Accounting.Attempt do
     field :model_id, :binary_id
     field :upstream_model_id, :string
     field :served_model, :string
+    field :model_observation, :map
     field :transport, :string
     field :owner_instance_id, :string
     field :owner_instance_boot_id, :string

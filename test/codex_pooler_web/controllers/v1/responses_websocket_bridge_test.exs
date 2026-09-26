@@ -1489,7 +1489,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert byte_size(retained_suffix) == RetainedBody.max_bytes()
     refute retained_suffix =~ ~s("usage")
 
-    assert ResponseUsage.from_sse(retained_suffix) == %{
+    assert Map.delete(ResponseUsage.from_sse(retained_suffix), :model_observation) == %{
              status: "usage_unknown",
              source: "sse_usage_missing"
            }

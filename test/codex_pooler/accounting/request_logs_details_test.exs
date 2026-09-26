@@ -610,10 +610,13 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
                  :attempt_ref,
                  :final,
                  :latency_ms,
+                 :model_observation,
                  :network_error_code,
                  :pool_upstream_assignment_id,
                  :retryable,
+                 :served_model,
                  :status,
+                 :upstream_model,
                  :upstream_status_code
                ]
            end)

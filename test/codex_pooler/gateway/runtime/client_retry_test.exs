@@ -133,7 +133,7 @@ defmodule CodexPooler.Gateway.Runtime.ClientRetryTest do
 
     assert {:error, %{status: 502, code: "upstream_request_failed"}} =
              Finalization.finalize_failed_websocket_response(context, %{
-               body: "",
+               body: "data: {\"type\":\"response.created\",\"response\":{\"model\":\"model-old-owner\"}}\n\n",
                headers: [],
                reason: :upstream_websocket_closed_before_terminal,
                native_client_retry_observation: materialized.native_client_retry_observation,
@@ -153,6 +153,8 @@ defmodule CodexPooler.Gateway.Runtime.ClientRetryTest do
 
     assert attempt_id == attempt.id
     assert settled.attempt_number == 1
+    assert settled.served_model == "model-old-owner"
+    assert settled.model_observation == nil
     assert settled.replay_generation == 0
     assert Repo.get!(Accounting.Request, predecessor_before.id) == predecessor_before
 

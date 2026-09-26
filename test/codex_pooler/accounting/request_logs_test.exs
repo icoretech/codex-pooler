@@ -2259,6 +2259,9 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert [attempt_debug] = log.debug.attempts
 
     assert attempt_debug == %{
+             upstream_model: "upstream-gpt-6-luna",
+             served_model: nil,
+             model_observation: nil,
              attempt_ref: stable_attempt_ref(request.id, 1),
              attempt_number: 1,
              status: "failed",
@@ -2659,6 +2662,9 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     assert log.debug.attempts == [
              %{
+               upstream_model: "upstream-gpt-6-luna",
+               served_model: nil,
+               model_observation: nil,
                attempt_ref: stable_attempt_ref(request.id, 1),
                attempt_number: 1,
                status: "failed",

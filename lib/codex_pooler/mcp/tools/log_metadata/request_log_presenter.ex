@@ -39,6 +39,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         requested_model: log.requested_model,
         upstream_model: log.upstream_model,
         served_model: log.served_model,
+        model_conflict_attempts: Map.get(log, :model_conflict_attempts, []),
         transport: log.transport,
         status: log.status,
         usage_status: log.usage_status,
@@ -107,7 +108,20 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   @spec detail_text(map()) :: String.t()
   def detail_text(%{"status" => "ok", "item" => item}) do
-    ReadableText.detail("request log", detail_text_row(item), detail_text_fields())
+    summary = ReadableText.detail("request log", detail_text_row(item), detail_text_fields())
+    attempts = get_in(item, ["debug", "attempts"]) || []
+
+    rows =
+      Enum.map(attempts, fn attempt ->
+        observation = attempt["model_observation"] || %{}
+
+        attempt
+        |> Map.take(~w(attempt_number upstream_model served_model))
+        |> Map.merge(Map.take(observation, ~w(conflict first_conflicting_model terminal_model terminal_status coverage)))
+        |> Map.put("coverage", observation["coverage"] || "uncollected")
+      end)
+
+    summary <> "\n" <> ReadableText.list("attempt model declarations", rows, ~w(attempt_number upstream_model served_model first_conflicting_model terminal_model terminal_status coverage conflict))
   end
 
   def detail_text(%{"status" => "not_found"}), do: ReadableText.not_found("request log")
@@ -141,6 +155,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       "latency_ms"
     ])
     |> Map.put("pool", pool_text(item))
+    |> Map.put("model_conflict_attempts", Enum.join(Map.get(item, "model_conflict_attempts", []), ","))
     |> Map.put("retries", Map.get(item, "retry_count") || 0)
     |> maybe_put_continuity_denial_text(Map.get(item, "errors"))
     |> maybe_put_debug_text(Map.get(item, "debug"))
@@ -169,6 +184,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       {"status", "status"},
       {"requested_model", "model"},
       {"served_model", "served_model"},
+      {"model_conflict_attempts", "model_conflict_attempts"},
       {"transport", "transport"},
       {"usage_status", "usage"},
       {"latency_ms", "latency_ms"},

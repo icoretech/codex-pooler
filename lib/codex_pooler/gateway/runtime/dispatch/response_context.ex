@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ResponseContext do
   defstruct [
     :context,
     :response,
+    :response_usage,
     upstream_transport: nil,
     upstream_websocket_connection: nil
   ]
@@ -13,6 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ResponseContext do
   @type t :: %__MODULE__{
           context: SelectedCandidateContext.t(),
           response: Req.Response.t(),
+          response_usage: map() | nil,
           upstream_transport: :websocket | nil,
           upstream_websocket_connection: map() | nil
         }

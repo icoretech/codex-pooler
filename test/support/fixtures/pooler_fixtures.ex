@@ -518,6 +518,7 @@ defmodule CodexPooler.PoolerFixtures do
         upstream_identity_id: assignment.upstream_identity_id,
         upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-gpt-6-luna"),
         served_model: Map.get(attrs, :served_model),
+        model_observation: Map.get(attrs, :model_observation),
         transport: Map.get(attrs, :transport, request.transport),
         status: Map.get(attrs, :status, "succeeded"),
         started_at: now(),

@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
 
   alias __MODULE__.Delivery
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
+  alias CodexPooler.Gateway.Runtime.Streaming.ModelDeclarationObserver
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
@@ -42,6 +43,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :request_caller_monitor,
     :native_client_retry_observation,
     delivery: %Delivery{},
+    model_observer: nil,
     assignment_advertised?: false,
     native_metadata_emitted?: false,
     downstream_output_started?: false,
@@ -69,6 +71,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           response_id: String.t() | nil,
           response_usage: ResponseUsage.usage() | nil,
           served_model: String.t() | nil,
+          model_observer: ModelDeclarationObserver.t() | nil,
           terminal_upstream_error_code: String.t() | nil,
           terminal_upstream_error_param: String.t() | nil,
           termination_source: atom() | nil,

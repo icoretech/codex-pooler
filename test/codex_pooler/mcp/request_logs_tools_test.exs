@@ -1451,6 +1451,9 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert_ref_prefix(attempt_debug["attempt_ref"], "attempt_")
 
     assert anonymize_refs(attempt_debug) == %{
+             "upstream_model" => "upstream-gpt-6-luna",
+             "served_model" => nil,
+             "model_observation" => nil,
              "attempt_ref" => :attempt_ref,
              "attempt_number" => 1,
              "status" => "failed",
@@ -2632,6 +2635,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     attempt_fixture(request, assignment, %{
       upstream_model_id: "gpt-6-astra",
       served_model: "gpt-6-luna",
+      model_observation: %{"version" => 1, "coverage" => "full", "conflict" => true, "first_conflicting_model" => "model-other", "terminal_model" => "gpt-6-luna", "terminal_status" => "completed"},
       latency_ms: 120
     })
 
@@ -2648,6 +2652,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert item["requested_model"] == "gpt-6-astra"
     assert item["upstream_model"] == "gpt-6-astra"
     assert item["served_model"] == "gpt-6-luna"
+    assert item["model_conflict_attempts"] == [1]
 
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text =~ "gpt-6-luna"
@@ -2663,9 +2668,13 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(detail)
     assert detail["structuredContent"]["item"]["served_model"] == "gpt-6-luna"
     assert detail["structuredContent"]["item"]["upstream_model"] == "gpt-6-astra"
+    assert [observed_attempt] = detail["structuredContent"]["item"]["debug"]["attempts"]
+    assert observed_attempt["model_observation"]["first_conflicting_model"] == "model-other"
+    assert observed_attempt["model_observation"]["conflict"] == true
     assert [%{"type" => "text", "text" => detail_text}] = detail["content"]
     assert detail_text =~ "gpt-6-luna"
     assert detail_text =~ "gpt-6-astra"
+    assert detail_text =~ "first_conflicting_model=model-other"
   end
 
   defp attempt_with_latency(request, assignment, latency_ms, response_metadata \\ %{}) do

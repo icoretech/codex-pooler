@@ -695,10 +695,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
   test "completed bridge hands off connection metadata exactly once" do
     connection = connection_metadata()
+    model_usage = %{served_model: "model-a", model_observation: %{"version" => 1, "coverage" => "full", "conflict" => true, "first_conflicting_model" => "model-b", "terminal_model" => "model-a", "terminal_status" => "completed"}}
 
     stream =
       start_armed(fn ->
-        {:ok, %{upstream_websocket_connection: Map.put(connection, :ignored, "sentinel")}}
+        {:ok, %{upstream_websocket_connection: Map.put(connection, :ignored, "sentinel"), response_usage: Map.put(model_usage, :total_tokens, 123)}}
       end)
 
     ref = stream.ref
@@ -717,6 +718,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {^ref, :done}, @detection_timeout_ms
 
     assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             model_usage: model_usage,
              upstream_websocket_connection: connection,
              transport_failure: nil
            }

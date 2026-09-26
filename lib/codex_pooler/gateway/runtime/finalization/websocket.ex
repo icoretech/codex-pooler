@@ -1037,7 +1037,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
            attempt,
-           ResponseUsage.from_websocket_body(""),
+           disconnected_model_usage(finalization),
            SettlementAttrs.partial_stream_failure(
              context,
              499,
@@ -1226,12 +1226,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     if RequestOptions.connection_bound_compaction?(context.request_options) do
       finalize_failed_after_health(
         %{context | allow_retry?: false},
-        %{body: "", reason: reason, started: started},
+        finalization,
         code,
         metadata
       )
     else
       case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
+             usage: response_usage(finalization, ""),
              last_error_code: code,
              error_message: Metadata.safe_reason(reason),
              latency_ms: elapsed_ms(started),
@@ -1359,7 +1360,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
        when status in ["usage_known", "usage_unknown"],
        do: usage
 
-  defp response_usage(_finalization, body), do: ResponseUsage.from_websocket_body(body)
+  # A retained body from an older owner may have lost intermediate events.
+  # It can still supply legacy usage/first-model facts, never collection provenance.
+  defp response_usage(_finalization, body), do: Map.delete(ResponseUsage.from_websocket_body(body), :model_observation)
+
+  defp disconnected_model_usage(finalization) do
+    %{status: "usage_unknown", source: "websocket_usage_missing"}
+    |> Map.merge(Map.take(response_usage(finalization, ""), [:served_model, :model_observation]))
+  end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
 
