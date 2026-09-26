@@ -1349,6 +1349,74 @@ body {
   padding-inline: calc(0.25rem * 2);
 }
 
+/* Request explorer: six paired facts, aligned to a shared two-line rhythm.
+   This table uses status icons; the other ledgers keep their own status rails. */
+.admin-request-explorer.table {
+  --request-log-half-gap: 0.4375rem;
+  --request-log-edge: 0.875rem;
+  table-layout: fixed;
+}
+
+.admin-request-explorer .request-log-time-column { width: 9.3125rem; }
+.admin-request-explorer .request-log-model-column { width: 10.875rem; }
+.admin-request-explorer .request-log-attribution-column { width: 9.625rem; }
+.admin-request-explorer .request-log-tokens-column { width: 11.5rem; }
+.admin-request-explorer .request-log-cost-column { width: 5.3125rem; }
+
+.admin-request-explorer.table > thead > tr > th {
+  height: 2.125rem;
+  padding: 0.375rem var(--request-log-half-gap);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+}
+
+.admin-request-explorer.table > tbody > tr > td {
+  padding: 0.375rem var(--request-log-half-gap);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+@media (width >= 64rem) {
+  .admin-request-explorer.table :is(th, td):first-child {
+    padding-left: var(--request-log-edge);
+  }
+
+  .admin-request-explorer.table :is(th, td):last-child {
+    padding-right: var(--request-log-edge);
+  }
+
+  .admin-request-explorer.table > tbody > tr:not([data-role="request-log-failure"]) {
+    height: 3.25rem;
+  }
+}
+
+.admin-request-explorer .request-log-lines > * {
+  min-height: 1rem;
+  line-height: 1rem;
+}
+
+@media (width < 64rem) {
+  .admin-request-explorer.admin-ledger-table > tbody > tr {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) 4.5rem;
+    row-gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .admin-request-explorer.table > tbody > tr > td {
+    padding: 0;
+  }
+}
+
+@media (40rem <= width < 64rem) {
+  .admin-request-explorer.admin-ledger-table[data-ledger-dense] > tbody > tr {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 5.5rem;
+  }
+}
+
 /* Center compact action labels by the font's letters rather than its leading. */
 .admin-control-label {
   text-box: trim-both cap alphabetic;
