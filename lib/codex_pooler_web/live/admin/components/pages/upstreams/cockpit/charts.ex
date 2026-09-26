@@ -88,6 +88,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
             <SavedResetComponents.saved_reset_expiration_table
               id="cockpit-saved-reset-expiration"
               saved_resets={@cockpit.saved_resets}
+              calendar_path={~p"/admin/upstreams/#{@cockpit.identity.id}/saved-reset-expirations.ics"}
               datetime_preferences={@datetime_preferences}
               empty_label="No expiration dates reported for the available saved resets yet."
             />

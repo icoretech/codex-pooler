@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:get, "/admin/system"},
                {:get, "/admin/upstreams"},
                {:get, "/admin/upstreams/:id"},
+               {:get, "/admin/upstreams/:id/saved-reset-expirations.ics"},
                {:get, "/api/codex/usage"},
                {:get, "/backend-api/codex/models"},
                {:get, "/backend-api/codex/responses"},

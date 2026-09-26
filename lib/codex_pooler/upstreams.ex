@@ -79,6 +79,30 @@ defmodule CodexPooler.Upstreams do
   def list_visible_upstream_identities(scope, opts \\ [])
 
   def list_visible_upstream_identities(%Scope{} = scope, opts) when is_list(opts) do
+    scope
+    |> visible_upstream_identities_query(opts)
+    |> Repo.all()
+  end
+
+  def list_visible_upstream_identities(_scope, _opts), do: []
+
+  @spec get_visible_upstream_identity(Scope.t(), term()) :: UpstreamIdentity.t() | nil
+  def get_visible_upstream_identity(%Scope{} = scope, identity_id) do
+    case Ecto.UUID.cast(identity_id) do
+      {:ok, id} ->
+        scope
+        |> visible_upstream_identities_query([])
+        |> where([identity], identity.id == ^id)
+        |> Repo.one()
+
+      :error ->
+        nil
+    end
+  end
+
+  def get_visible_upstream_identity(_scope, _identity_id), do: nil
+
+  defp visible_upstream_identities_query(scope, opts) do
     visible_pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
 
     selected_pool_ids =
@@ -90,26 +114,22 @@ defmodule CodexPooler.Upstreams do
     pool_ids = Enum.filter(visible_pool_ids, &(&1 in selected_pool_ids))
     include_unassigned? = Keyword.get(opts, :include_unassigned, true) and Pools.owner?(scope)
 
-    Repo.all(
-      from identity in UpstreamIdentity,
-        left_join: assignment in PoolUpstreamAssignment,
-        on:
-          assignment.upstream_identity_id == identity.id and
-            assignment.status != ^@assignment_deleted,
-        where:
-          assignment.pool_id in ^pool_ids or
-            (^include_unassigned? and is_nil(assignment.id)),
-        where: identity.status != ^@deleted,
-        distinct: true,
-        order_by: [
-          asc: identity.account_label,
-          asc: identity.chatgpt_account_id,
-          asc: identity.created_at
-        ]
-    )
+    from identity in UpstreamIdentity,
+      left_join: assignment in PoolUpstreamAssignment,
+      on:
+        assignment.upstream_identity_id == identity.id and
+          assignment.status != ^@assignment_deleted,
+      where:
+        assignment.pool_id in ^pool_ids or
+          (^include_unassigned? and is_nil(assignment.id)),
+      where: identity.status != ^@deleted,
+      distinct: true,
+      order_by: [
+        asc: identity.account_label,
+        asc: identity.chatgpt_account_id,
+        asc: identity.created_at
+      ]
   end
-
-  def list_visible_upstream_identities(_scope, _opts), do: []
 
   @spec get_upstream_identity(term()) :: UpstreamIdentity.t() | nil
   def get_upstream_identity(id) when is_binary(id), do: Repo.get(UpstreamIdentity, id)

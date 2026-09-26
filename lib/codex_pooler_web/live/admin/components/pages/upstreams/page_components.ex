@@ -815,6 +815,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               <SavedResetComponents.saved_reset_expiration_table
                 id="saved-reset-expiration"
                 saved_resets={@account.saved_resets}
+                calendar_path={~p"/admin/upstreams/#{@account.identity.id}/saved-reset-expirations.ics"}
                 datetime_preferences={@datetime_preferences}
                 empty_label="No expiration dates reported for the available saved resets yet."
               />

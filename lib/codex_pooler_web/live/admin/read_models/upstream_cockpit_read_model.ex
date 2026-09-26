@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPoolerWeb.Admin.SavedResetCalendar
   alias CodexPoolerWeb.Admin.UpstreamAccountActions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
@@ -121,6 +122,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:reactivate) => action(),
           required(:refresh_token) => action(),
           required(:redeem_saved_reset) => action(),
+          required(:download_reset_calendar) => action(),
           required(:replace_auth_json) => action(),
           required(:oauth_relink) => action(),
           required(:reinvite) => action(),
@@ -809,6 +811,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           "token refresh is unavailable"
         ),
       redeem_saved_reset: redeem_saved_reset,
+      download_reset_calendar: action(status != "deleted" and SavedResetCalendar.available?(account.identity), "no upcoming banked reset expirations are available"),
       replace_auth_json: action(recovery_eligible?, "credential replacement is not needed"),
       oauth_relink:
         action(

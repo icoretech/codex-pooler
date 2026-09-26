@@ -143,6 +143,19 @@ defmodule CodexPoolerWeb.UserAuth do
     end
   end
 
+  @spec require_authenticated_password_current(Plug.Conn.t(), keyword()) :: Plug.Conn.t()
+  def require_authenticated_password_current(conn, opts) do
+    conn = require_authenticated_user(conn, opts)
+
+    if not conn.halted and password_change_required?(conn.assigns.current_scope.user) do
+      conn
+      |> redirect(to: ~p"/password/change-required")
+      |> halt()
+    else
+      conn
+    end
+  end
+
   def request_metadata(conn) do
     Map.merge(
       %{

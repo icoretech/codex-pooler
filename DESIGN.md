@@ -915,6 +915,10 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 
 ### Saved-reset badge and meter
 
+Future expiration countdowns in the saved-reset bank dialog and upstream cockpit are native download links. Keep their existing clock icon, purple type, alignment, countdown text and stable ids; add hover underline, keyboard focus and a tooltip/accessibility label explaining that the download includes all upcoming expirations for that upstream. Both surfaces use the shared expiration component and the same authenticated `.ics` route. Expired, due-now and unknown timestamps remain plain text. Clicking a countdown starts a file download without submitting policy changes or queuing redemption.
+
+The cockpit's Actions rail also exposes **Download reset calendar**, using the existing action-row treatment and calendar icon. It downloads the same complete upstream calendar; when no upcoming expirations are available it remains visible as a disabled action with the reason in its tooltip.
+
 - **Source:** `saved_reset_count_badge/1` and `saved_reset_meter/1` in
   [`saved_reset_meter.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/saved_reset_meter.ex)
 - **Purpose:** the banked-reset economy: how many resets an account holds and

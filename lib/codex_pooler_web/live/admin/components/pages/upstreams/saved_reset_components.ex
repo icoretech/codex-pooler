@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   attr :datetime_preferences, :map, required: true
   attr :empty_label, :string, default: "Expiration dates not reported"
   attr :now, :any, default: nil
+  attr :calendar_path, :string, default: nil
 
   def saved_reset_expiration_table(assigns) do
     now = assigns.now || DateTime.utc_now()
@@ -58,7 +59,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
               {row.time_label}
             </span>
           </p>
+          <.link
+            :if={@calendar_path && row.expires_at && !row.expired?}
+            href={@calendar_path}
+            id={"#{@id}-time-left-#{row.index}"}
+            data-role="saved-reset-expiration-time-left"
+            class="inline-flex shrink-0 items-center gap-1 rounded-field text-xs font-medium leading-4 tabular-nums text-(--color-reset-bank) hover:underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            title="Download all upcoming banked reset expirations (.ics)"
+            aria-label={"Download all upcoming banked reset expirations (.ics); this reset expires #{row.title}"}
+          >
+            <.icon name="hero-clock" class="size-3 shrink-0" />
+            <span>{row.time_left_label}</span>
+          </.link>
           <p
+            :if={!@calendar_path || !row.expires_at || row.expired?}
             id={"#{@id}-time-left-#{row.index}"}
             data-role="saved-reset-expiration-time-left"
             class={[

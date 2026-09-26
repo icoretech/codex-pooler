@@ -277,6 +277,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           </div>
         </div>
         <.rail_action
+          id={"cockpit-download-reset-calendar-#{@cockpit.identity.id}"}
+          icon="hero-calendar-days"
+          label="Download reset calendar"
+          action={@cockpit.actions.download_reset_calendar}
+          href={~p"/admin/upstreams/#{@cockpit.identity.id}/saved-reset-expirations.ics"}
+        />
+        <.rail_action
           id={"cockpit-rename-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-pencil-square"
           label="Rename"
@@ -303,13 +310,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   attr :icon, :string, required: true
   attr :label, :string, required: true
   attr :action, :map, required: true
+  attr :href, :string, default: nil
   attr :variant, :atom, default: :neutral, values: [:neutral, :danger]
   attr :rest, :global, include: ~w(phx-click phx-value-id phx-value-pool-id navigate)
 
   defp rail_action(assigns) do
-    if assigns.rest[:navigate] do
+    if assigns.action.available? && (assigns.href || assigns.rest[:navigate]) do
       ~H"""
-      <.link id={@id} class={rail_action_class(@variant, @action.available?)} {@rest}>
+      <.link id={@id} href={@href} class={rail_action_class(@variant, @action.available?)} {@rest}>
         <.icon name={@icon} class="size-4 shrink-0" />
         <span class="min-w-0 truncate">{@label}</span>
       </.link>

@@ -2014,6 +2014,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert missing_assignment_cockpit.flags.missing_assignments? == true
   end
 
+  @tag :saved_reset_calendar
+  test "calendar action is unavailable when the reported bank only has expired dates", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "calendar-expired", name: "Sample Pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Sample expired bank",
+        identity_metadata: %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "available_expires_at" => [DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.to_iso8601()]
+          }
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    assert has_element?(view, "#upstream-actions button#cockpit-download-reset-calendar-#{identity.id}[disabled][title='no upcoming banked reset expirations are available']", "Download reset calendar")
+    refute has_element?(view, "a[href='/admin/upstreams/#{identity.id}/saved-reset-expirations.ics']")
+  end
+
+  @tag :saved_reset_calendar
   @tag :saved_reset_cockpit
   @tag :relative_countdown_contract
   @tag :saved_reset_redemption_cause
@@ -2120,6 +2142,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
     assert cockpit.saved_resets.label == "2 saved resets"
     assert cockpit.saved_resets.available? == true
+    assert cockpit.actions.download_reset_calendar.available? == true
 
     assert cockpit.saved_resets.available_expirations == [
              %{
@@ -2139,6 +2162,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     meter_selector = "#upstream-quota-saved-reset-meter"
+
+    assert has_element?(view, "#upstream-actions a#cockpit-download-reset-calendar-#{identity.id}[href='/admin/upstreams/#{identity.id}/saved-reset-expirations.ics']", "Download reset calendar")
 
     assert has_element?(view, "#{meter_selector}[data-role='upstream-saved-reset-meter']")
     assert has_element?(view, "#{meter_selector}-bar[aria-label='2 saved resets']")
@@ -2198,6 +2223,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#cockpit-saved-reset-expiration-life-1")
     assert has_element?(view, "#cockpit-saved-reset-expiration-held-0", "held 8d")
     assert has_element?(view, "#cockpit-saved-reset-expiration-held-1", "held 2d")
+
+    for index <- [0, 1] do
+      assert has_element?(view, "a#cockpit-saved-reset-expiration-time-left-#{index}[href='/admin/upstreams/#{identity.id}/saved-reset-expirations.ics'][title='Download all upcoming banked reset expirations (.ics)']")
+    end
 
     assert has_element?(
              view,

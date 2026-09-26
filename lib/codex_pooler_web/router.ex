@@ -164,6 +164,12 @@ defmodule CodexPoolerWeb.Router do
     get "/files/:file_id/content", V1.FilesController, :content
   end
 
+  scope "/admin", CodexPoolerWeb.Admin do
+    pipe_through [:browser, :require_authenticated_password_current]
+
+    get "/upstreams/:id/saved-reset-expirations.ics", UpstreamCalendarController, :download
+  end
+
   scope "/", CodexPoolerWeb do
     pipe_through [:browser, :require_authenticated_user]
 

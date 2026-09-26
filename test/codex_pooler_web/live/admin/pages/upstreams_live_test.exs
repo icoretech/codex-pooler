@@ -2225,6 +2225,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#saved-reset-expiration-held-0", "held 2d")
     assert has_element?(view, "#saved-reset-expiration-time-left-0 .hero-clock")
 
+    for index <- [0, 1] do
+      assert has_element?(view, "a#saved-reset-expiration-time-left-#{index}[href='/admin/upstreams/#{active_identity.id}/saved-reset-expirations.ics'][title='Download all upcoming banked reset expirations (.ics)']")
+    end
+
     send(view.pid, :reload_upstreams_from_events)
     _ = :sys.get_state(view.pid)
 
@@ -2252,6 +2256,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#saved-reset-policy-dialog")
     assert has_element?(view, "#saved-reset-expiration-date-0", legacy_expiration_label)
     assert has_element?(view, "#saved-reset-expiration-first-seen-0", "not recorded")
+    assert has_element?(view, "a#saved-reset-expiration-time-left-0[href='/admin/upstreams/#{legacy_identity.id}/saved-reset-expirations.ics']")
 
     view
     |> element("#saved-reset-policy-cancel")
