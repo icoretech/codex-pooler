@@ -54,6 +54,28 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   # (findings#232 rows 232-275 and 232-277). The anchored shapes below are
   # certified on that path (`V1BridgedAnchorSupport`).
   describe "Responses continuation and input-reference behavior" do
+    for forwarding <- [:unset, nil, false] do
+      @tag forwarding: forwarding
+      test "v1 Responses streams over HTTP with forwarding #{inspect(forwarding)}", %{conn: conn, forwarding: forwarding} do
+        CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+
+        case forwarding do
+          :unset -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+          value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+        end
+
+        upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_disabled_bridge", "object" => "response", "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}}))
+        setup = gateway_setup(upstream)
+        response = conn |> auth(setup) |> post("/v1/responses", %{"model" => setup.model.exposed_model_id, "stream" => true, "input" => "synthetic fixture"})
+
+        assert response.status == 200
+        assert [content_type] = get_resp_header(response, "content-type")
+        assert content_type =~ "text/event-stream"
+        assert [%{method: "POST", path: "/backend-api/codex/responses"}] = FakeUpstream.requests(upstream)
+        assert [%Attempt{status: "succeeded"}] = Repo.all(Attempt)
+      end
+    end
+
     test "v1 Responses forwards stateless programmatic replay in order for collected responses",
          %{
            conn: conn

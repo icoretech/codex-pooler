@@ -509,12 +509,14 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
   describe "websocket owner forwarding topology config" do
     test "defaults disabled when release env is absent and app env is unset" do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+
       with_websocket_owner_forwarding_env(nil, fn ->
         Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
         refute OperationalSettings.parse_websocket_owner_forwarding_env!()
-        refute OperationalSettings.websocket_owner_forwarding_enabled?()
-        refute Gateway.websocket_owner_forwarding_enabled?()
+        assert OperationalSettings.websocket_owner_forwarding_enabled?() === false
+        assert Gateway.websocket_owner_forwarding_enabled?() === false
 
         assert Gateway.require_websocket_owner_forwarding_enabled() ==
                  {:error, :owner_forwarding_disabled}
@@ -542,6 +544,14 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
           assert Gateway.require_websocket_owner_forwarding_enabled() == :ok
         end)
       end
+    end
+
+    test "explicit nil app config disables forwarding with a boolean result" do
+      with_websocket_owner_forwarding_app_env(nil, fn ->
+        assert OperationalSettings.websocket_owner_forwarding_enabled?() === false
+        assert Gateway.websocket_owner_forwarding_enabled?() === false
+        assert Gateway.require_websocket_owner_forwarding_enabled() == {:error, :owner_forwarding_disabled}
+      end)
     end
 
     test "parses disabled release env aliases" do

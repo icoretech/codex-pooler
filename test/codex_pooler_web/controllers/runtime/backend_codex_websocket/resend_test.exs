@@ -148,12 +148,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   end
 
   test "established native websocket moves a quota-rejected full-history turn to another account" do
-    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
-    end)
 
     # provenance: observed 2026-09-20 native pre-visible quota refusal; identities and content synthetic
     rejection =

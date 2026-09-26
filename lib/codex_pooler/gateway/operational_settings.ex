@@ -236,7 +236,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
 
   @spec websocket_owner_forwarding_enabled?() :: boolean()
   def websocket_owner_forwarding_enabled? do
-    Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+    Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled, false) == true
   end
 
   @spec parse_websocket_owner_forwarding_env!() :: boolean()
