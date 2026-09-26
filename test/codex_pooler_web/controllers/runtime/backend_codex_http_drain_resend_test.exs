@@ -105,7 +105,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDrainResendTest do
     assert_receive {:fake_upstream_chunk_barrier, 2, upstream_pid, ^release_ref},
                    @await_timeout_ms
 
-    await_registered_stream(stream_registry)
+    stream_entry = await_registered_stream(stream_registry)
+    :ok = WebsocketRolloutDrainSupport.await_visible_http_turn!(stream_entry, @await_timeout_ms)
 
     {cut, summary} =
       WebsocketRolloutDrainSupport.drain_http_request(
@@ -117,6 +118,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDrainResendTest do
     assert %{result: :ok, http_streams_seen: 1} = summary
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
     assert cut.status == 200
+    assert cut.resp_body =~ "visible before the rollout drain"
 
     # The predecessor is the row's exact shape: cut mid-relay, after output the
     # client has already recorded into its history.

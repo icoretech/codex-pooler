@@ -132,6 +132,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
                    @await_timeout_ms
 
     stream_entry = await_registered_stream(stream_registry)
+    :ok = WebsocketRolloutDrainSupport.await_visible_http_turn!(stream_entry, @await_timeout_ms)
 
     {response, summary} =
       WebsocketRolloutDrainSupport.drain_http_request(

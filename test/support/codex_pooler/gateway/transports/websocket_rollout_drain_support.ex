@@ -1,9 +1,11 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Repo
 
   # The real owner shutdown path can spend the transport's one-second close
   # boundary before its drain call returns. Keep the injected budget small
@@ -531,6 +533,32 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
         end
       }
     ]
+  end
+
+  @doc "Waits for a sessioned HTTP stream to reach visible output before testing a post-output drain."
+  @spec await_visible_http_turn!(DeferredStreamRegistry.drain_entry(), pos_integer()) :: :ok
+  def await_visible_http_turn!(%{request_id: request_id, pid: pid}, timeout_ms) do
+    await_visible_http_turn(request_id, pid, System.monotonic_time(:millisecond) + timeout_ms)
+  end
+
+  defp await_visible_http_turn(request_id, pid, deadline_ms) do
+    # An upstream write and deferred-stream registration both precede the
+    # relay's visibility mark. Only the exact turn's persisted mark proves
+    # this scenario has passed its pre-output phase.
+    case Repo.get_by(CodexTurn, request_id: request_id) do
+      %CodexTurn{status: "in_progress", first_visible_output_at: %DateTime{}} ->
+        :ok
+
+      _not_yet_visible ->
+        if not Process.alive?(pid) or System.monotonic_time(:millisecond) >= deadline_ms do
+          raise "HTTP stream did not reach visible output before drain"
+        end
+
+        receive do
+        after
+          5 -> await_visible_http_turn(request_id, pid, deadline_ms)
+        end
+    end
   end
 
   @doc "Drives a held HTTP request through the cutoff, then observes real settlement."
