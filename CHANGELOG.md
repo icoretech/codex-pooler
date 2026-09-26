@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.7...codex-pooler-v0.9.8) (2026-09-26)
+
+
+### Features
+
+* **accounting:** retain per-attempt model declaration evidence ([ccca798](https://github.com/icoretech/codex-pooler/commit/ccca7983573ef4dc24f57e0bf21097a796c96701))
+* **admin:** add Lens model identity history ([b1fb3d4](https://github.com/icoretech/codex-pooler/commit/b1fb3d44afd44b01b9a0b35ee91909d653ef7cdb))
+* **admin:** export banked reset expirations as iCalendar ([a16e8c2](https://github.com/icoretech/codex-pooler/commit/a16e8c25b660eac34feb250b8847b12a94ca666d))
+* **admin:** restructure request logs with token composition ([882e8cb](https://github.com/icoretech/codex-pooler/commit/882e8cb6132d520d3660ebba8ed4d37dd06dc390))
+
+
+### Bug Fixes
+
+* **compat:** forward validated Responses access programs ([93051fd](https://github.com/icoretech/codex-pooler/commit/93051fde900f1ff7e31ad82a81c111794d066f54))
+* **dev:** install locked frontend assets before server startup ([ea7c884](https://github.com/icoretech/codex-pooler/commit/ea7c88404832b1d70f9bb4f6fbee4deee13a3439))
+* **files:** pin presigned uploads to validated public addresses ([909a868](https://github.com/icoretech/codex-pooler/commit/909a86885f6330eea6aa7161f94a5bc3ab615658))
+
+
+### Tests
+
+* **accounting:** acquire maintenance locks before rebuilding usage buckets ([424791f](https://github.com/icoretech/codex-pooler/commit/424791f7223d721767fefc6d192bbeb21770537b))
+* **streaming:** await visible HTTP output before rollout drain ([ba9cd40](https://github.com/icoretech/codex-pooler/commit/ba9cd407ce40f7f357859c89fe82000eaa424c78))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency phoenix to v1.8.15 ([#452](https://github.com/icoretech/codex-pooler/issues/452)) ([470193b](https://github.com/icoretech/codex-pooler/commit/470193be40b15bf5a5f81db14b3d608dabda3094))
+* **deps:** update helm release codex-pooler to v0.9.1 ([#451](https://github.com/icoretech/codex-pooler/issues/451)) ([4774eb6](https://github.com/icoretech/codex-pooler/commit/4774eb6e2c9c7f7d637e6eea3a0d1883dbaeea57))
+
 ## [0.9.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.6...codex-pooler-v0.9.7) (2026-09-26)
 
 
