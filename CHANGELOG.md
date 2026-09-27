@@ -1,5 +1,102 @@
 # Changelog
 
+## [0.10.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.7...codex-pooler-v0.10.0) (2026-09-27)
+
+
+### Features
+
+* **accounting:** retain per-attempt model declaration evidence ([ccca798](https://github.com/icoretech/codex-pooler/commit/ccca7983573ef4dc24f57e0bf21097a796c96701))
+* **admin:** add Lens model identity history ([b1fb3d4](https://github.com/icoretech/codex-pooler/commit/b1fb3d44afd44b01b9a0b35ee91909d653ef7cdb))
+* **admin:** export banked reset expirations as iCalendar ([a16e8c2](https://github.com/icoretech/codex-pooler/commit/a16e8c25b660eac34feb250b8847b12a94ca666d))
+* **admin:** group request log errors and model warnings ([1f2793b](https://github.com/icoretech/codex-pooler/commit/1f2793bd949e252e675e3cee555b1f9629e86b54))
+* **admin:** pair upstream names with colored plan labels ([cef39d1](https://github.com/icoretech/codex-pooler/commit/cef39d1689d31741e143de54daab3ebee0dccf7e))
+* **admin:** render normalized client logos in request logs ([d182a44](https://github.com/icoretech/codex-pooler/commit/d182a44d7ce5486343c1e11b821daee2d2252008))
+* **admin:** restructure request logs with token composition ([882e8cb](https://github.com/icoretech/codex-pooler/commit/882e8cb6132d520d3660ebba8ed4d37dd06dc390))
+* **upstreams:** permanently delete accounts after pool removal ([04d514f](https://github.com/icoretech/codex-pooler/commit/04d514fb784d85e181a6b2ff886fdc6febe007f7))
+
+
+### Bug Fixes
+
+* **access:** preserve terminal API key lifecycle and deletion ordering ([2710086](https://github.com/icoretech/codex-pooler/commit/271008602648f64b7062a1767d93065e740d6bba))
+* **access:** reject policy updates on revoked API keys ([68f76ca](https://github.com/icoretech/codex-pooler/commit/68f76ca4f4976a9aabb5a13faa4d9e926bf71f7d))
+* **accounting:** normalize history buckets and reject malformed log selectors ([a28b59d](https://github.com/icoretech/codex-pooler/commit/a28b59d2445807978ff02b7a14918af9b678f66b))
+* **accounting:** preserve provider model absence across bridged responses ([180f3c1](https://github.com/icoretech/codex-pooler/commit/180f3c1c6de10694d72e86539467f38754113987))
+* **accounting:** publish rollup coverage with current database evidence ([0ce33de](https://github.com/icoretech/codex-pooler/commit/0ce33de78639e438deef5a949f7734357f83e1a9))
+* **accounting:** record repeated metadata operations with unique correlations ([420a719](https://github.com/icoretech/codex-pooler/commit/420a719c414cc1bee165aedf4374df8a324dee1d))
+* **accounting:** refuse replay with detached upstream references ([57ab895](https://github.com/icoretech/codex-pooler/commit/57ab895b76f33a7f4ae911d6644a1506d4b1444f))
+* **admin:** clarify and align the token breakdown legend ([4b93495](https://github.com/icoretech/codex-pooler/commit/4b934959d18da44d068ddf9c4f85422066161bc8))
+* **admin:** correct history filters deletion actions and calendar styling ([cf7ee3d](https://github.com/icoretech/codex-pooler/commit/cf7ee3d8bec9a792cb893a159188af01e691863a))
+* **admin:** interpret expiry and log dates in operator timezone ([b0df55d](https://github.com/icoretech/codex-pooler/commit/b0df55d7b63a82237d36e9a02df612b0bd589bd1))
+* **admin:** restore complete request log timestamps ([53af8ca](https://github.com/icoretech/codex-pooler/commit/53af8cab7bb07e9bfbeaf3aa5db80bc7f2f2b1fc))
+* **admin:** retain authorized Lens updates and refresh pause countdowns ([3dbfe34](https://github.com/icoretech/codex-pooler/commit/3dbfe34e312a85f0fb30875d585c1c1b310b7bcb))
+* **alerts:** page manual evaluation and expire orphaned root uniqueness ([7967fbf](https://github.com/icoretech/codex-pooler/commit/7967fbf4211b6e6570fc8c9b25d935133005ea3d))
+* **alerts:** persist paginated evaluation fanout across every active rule ([ddb09cd](https://github.com/icoretech/codex-pooler/commit/ddb09cd8ee8bbc0ceb392d037465ce33d3ea527d))
+* **compat:** forward validated Responses access programs ([93051fd](https://github.com/icoretech/codex-pooler/commit/93051fde900f1ff7e31ad82a81c111794d066f54))
+* **compat:** normalize terminal errors and bound file transfer deadlines ([49ec631](https://github.com/icoretech/codex-pooler/commit/49ec6313657dbc806425e15a76209f6478296f7d))
+* **compat:** preserve validation coordinates and reject invalid carried options ([bb12c3e](https://github.com/icoretech/codex-pooler/commit/bb12c3e7d638cca5bed4dcb7c629fe5ce807677b))
+* **database:** skip usage derivation for deleted API keys ([924e7cd](https://github.com/icoretech/codex-pooler/commit/924e7cdef3cfc713cbf4c8bbc070a2868c6b2809))
+* **dev:** explain interrupted startup recovery and discover fixture receipts ([dc73a13](https://github.com/icoretech/codex-pooler/commit/dc73a1314a4c7446f5ef4bd875759b2b656352c7))
+* **dev:** install locked frontend assets before server startup ([ea7c884](https://github.com/icoretech/codex-pooler/commit/ea7c88404832b1d70f9bb4f6fbee4deee13a3439))
+* **dev:** preserve fixture ownership and recover failed key publication ([0aa3396](https://github.com/icoretech/codex-pooler/commit/0aa339611c905a9e3d8ce541d911c3d97decfe0f))
+* **diagnostics:** retain replay reasons and partial HTTP tool classifications ([ff8a482](https://github.com/icoretech/codex-pooler/commit/ff8a4822ded50fb9973c6d0083ac1773fe4d4386))
+* **files:** pin presigned uploads to validated public addresses ([909a868](https://github.com/icoretech/codex-pooler/commit/909a86885f6330eea6aa7161f94a5bc3ab615658))
+* **files:** return upload body errors and use passive forward proxies ([423647a](https://github.com/icoretech/codex-pooler/commit/423647aaadf23b7f1a463530847d2c9e1b0ebcfa))
+* **gateway:** admit mailbox continuations after compaction ([c44b924](https://github.com/icoretech/codex-pooler/commit/c44b924b94595a5b19c72f4deaafbeb4bc84cf12))
+* **gateway:** classify database conflicts and catalog rejection reasons ([4f57c76](https://github.com/icoretech/codex-pooler/commit/4f57c76579819526d1dcdf05176bb0085394d828))
+* **gateway:** fence aliases and bound session cleanup with database time ([ba553d2](https://github.com/icoretech/codex-pooler/commit/ba553d280771d39e399792fa35e132957fe1f71e))
+* **gateway:** record upstream socket closure after caller cancellation ([c0e36c0](https://github.com/icoretech/codex-pooler/commit/c0e36c0219dad4946fe38e8aeda97d52adad6b26))
+* **gateway:** retain retirement index eligibility in generic plans ([82eae2a](https://github.com/icoretech/codex-pooler/commit/82eae2a56109143e6e7318cf1e5081d42fd5a497))
+* **gateway:** tolerate non-object continuation metadata ([13b0a79](https://github.com/icoretech/codex-pooler/commit/13b0a795d6f9e7c8ab472839168afaa64e85b29b))
+* **gateway:** use database time for file affinity checks ([30dbeb6](https://github.com/icoretech/codex-pooler/commit/30dbeb664d6e6b67f5445022672a5462e959491b))
+* **ingress:** authenticate body methods before parsing backend requests ([6c9ddec](https://github.com/icoretech/codex-pooler/commit/6c9ddecdcb039655c85cee92e91ab87d31268077))
+* **ingress:** authenticate transcription before parsing and reject invalid proxy depth ([129ea10](https://github.com/icoretech/codex-pooler/commit/129ea101a5201444fdc12a766d206734ea638876))
+* **lifecycle:** bound deletion work and publish invalidations with the commit ([3a0aede](https://github.com/icoretech/codex-pooler/commit/3a0aede4477ff3253d5ec9cb243159d32cf9cdf3))
+* **mcp:** bound log pagination and validate nested output schemas ([22ee5d0](https://github.com/icoretech/codex-pooler/commit/22ee5d06a160f996bd89111f5f35a98515b3e30d))
+* **platform:** preserve migration connection options and bound advisory waits ([43551ad](https://github.com/icoretech/codex-pooler/commit/43551ade57fec0ee5e8fcb755bcdc46579abfd0a))
+* **quotas:** advance cleanup past retained expired-window markers ([459eb25](https://github.com/icoretech/codex-pooler/commit/459eb25fe96a99f1fb327786f30c521dfb6ad201))
+* **quotas:** continue bounded retention scans through durable jobs ([1e97fb2](https://github.com/icoretech/codex-pooler/commit/1e97fb210b5ffd523c13d002d53444a523300dec))
+* **release:** gate image aliases on verified commits and registry versions ([b807c9b](https://github.com/icoretech/codex-pooler/commit/b807c9bb9ef1b7d861a55214b60e70f31a1452d3))
+* **routing:** scope quota denials and reset probe exemptions ([ff6aa59](https://github.com/icoretech/codex-pooler/commit/ff6aa592fca87fb12b02513fb733db79c13e3f43))
+* **streaming:** preserve incomplete tool recovery and terminal prefixes ([1d97668](https://github.com/icoretech/codex-pooler/commit/1d9766869bcdd3cdcd32277a575d98ab1422e5ec))
+* **test:** require nonempty partition results and isolate dev fixtures ([a76410b](https://github.com/icoretech/codex-pooler/commit/a76410b3a392164db83bc612b90b07fa0539f35c))
+* **upstreams:** fence deletion races and preserve cleanup visibility ([964991f](https://github.com/icoretech/codex-pooler/commit/964991f4021d8d02411b925c0ec6a26812c7d163))
+* **upstreams:** load refresh policy before claiming a database connection ([9f7f618](https://github.com/icoretech/codex-pooler/commit/9f7f6181733f456c5d70fdfa5d414c0001694d69))
+* **websocket:** fence retry submissions and drain accepted startup work ([4040f52](https://github.com/icoretech/codex-pooler/commit/4040f52c2ba7cccaade4acb73fbe4e17faa373fc))
+* **websocket:** preserve response idle deadlines across keepalive frames ([01699c2](https://github.com/icoretech/codex-pooler/commit/01699c24240ec38edbdaffd0ea7ea6d144c263ba))
+* **websocket:** retain abandonment fences and report actual drain failures ([9c10399](https://github.com/icoretech/codex-pooler/commit/9c103992862deec0471e8acf6e77018bcfb8d185))
+* **websocket:** retain delivered terminals through cleanup and owner retries ([5475b91](https://github.com/icoretech/codex-pooler/commit/5475b910e2fff5bc8b999a53ce3913943d1c1e9f))
+
+
+### Tests
+
+* **accounting:** acquire maintenance locks before rebuilding usage buckets ([424791f](https://github.com/icoretech/codex-pooler/commit/424791f7223d721767fefc6d192bbeb21770537b))
+* cancel stalled fixture connections and batch independent setup ([75d85e8](https://github.com/icoretech/codex-pooler/commit/75d85e83d76190fd13c571649e30bffe33c53397))
+* **compat:** pin regression categories and routes per feature ([d6eddc9](https://github.com/icoretech/codex-pooler/commit/d6eddc9b258a42cbb81dd8b7597e55c59c31e416))
+* create active gateway fixtures without redundant transitions ([1b257ea](https://github.com/icoretech/codex-pooler/commit/1b257eab3333052d9ca29788d2fcbbdd0b74d3be))
+* **db:** retain execution history after upstream assignment deletion ([352b2e2](https://github.com/icoretech/codex-pooler/commit/352b2e2e0f724654ec092143924bbc372aec743a))
+* **events:** stop the bridge before its replacement listener ([934738a](https://github.com/icoretech/codex-pooler/commit/934738a587fcc20f2be0317857df0abe8fedc12a))
+* isolate database defaults and environment-sensitive fixtures ([c2dbee2](https://github.com/icoretech/codex-pooler/commit/c2dbee25d8907c7c482edba9a4f30fc39ae45503))
+* **release:** exercise registry authentication and run asset contracts ([1fc922a](https://github.com/icoretech/codex-pooler/commit/1fc922aec5365f07667fda0a7f1a89535007753c))
+* reuse the compiled duration guard in isolated subprocesses ([fb1d8cc](https://github.com/icoretech/codex-pooler/commit/fb1d8cc585bf82bd32aca79001a993a0f70f81c6))
+* **runtime:** own database fences and shutdown receipt lifetimes ([97dff17](https://github.com/icoretech/codex-pooler/commit/97dff17fcd6108baf159941131b0bf05046ced99))
+* **runtime:** restore model evidence and durable lifecycle assertions ([cca24f3](https://github.com/icoretech/codex-pooler/commit/cca24f31110f9f39d4d0a27bdc0a5716b5719d71))
+* **runtime:** synchronize HTTP retirement and refresh cleanup plan statistics ([7f8c565](https://github.com/icoretech/codex-pooler/commit/7f8c565fe73d1d75c0c1b7e9ad2c589a8fd00b37))
+* **runtime:** verify cleanup ownership and settlement wait boundaries ([e84b81a](https://github.com/icoretech/codex-pooler/commit/e84b81af055b5593c8a7660b4cf5b601ae5e1558))
+* select product and tooling profiles before loading modules ([2985621](https://github.com/icoretech/codex-pooler/commit/29856211c1f3f511daeade935e3614f442dca748))
+* **streaming:** await visible HTTP output before rollout drain ([ba9cd40](https://github.com/icoretech/codex-pooler/commit/ba9cd407ce40f7f357859c89fe82000eaa424c78))
+* verify committed state before module fixtures ([6d6e0c5](https://github.com/icoretech/codex-pooler/commit/6d6e0c596d8c319a50721dd7bac864b02b3ce716))
+* verify socket cleanup and replay ordering with explicit state ([8ade937](https://github.com/icoretech/codex-pooler/commit/8ade93753409a6690bf4b9dc9ef464393e546134))
+* **websocket:** reuse peers with per-case runtime cleanup ([8e5a542](https://github.com/icoretech/codex-pooler/commit/8e5a5426ea1690ebf52d42dc46a45fdc1b862e52))
+
+
+### Miscellaneous Chores
+
+* **deps:** record hpax Mix build metadata ([88f203f](https://github.com/icoretech/codex-pooler/commit/88f203fe882127f8c1608bf5f081587e27ab3363))
+* **deps:** update dependency phoenix to v1.8.15 ([#452](https://github.com/icoretech/codex-pooler/issues/452)) ([470193b](https://github.com/icoretech/codex-pooler/commit/470193be40b15bf5a5f81db14b3d608dabda3094))
+* **deps:** update helm release codex-pooler to v0.9.1 ([#451](https://github.com/icoretech/codex-pooler/issues/451)) ([4774eb6](https://github.com/icoretech/codex-pooler/commit/4774eb6e2c9c7f7d637e6eea3a0d1883dbaeea57))
+* **deps:** update helm release codex-pooler to v0.9.2 ([#453](https://github.com/icoretech/codex-pooler/issues/453)) ([1669bf8](https://github.com/icoretech/codex-pooler/commit/1669bf8c8609047e19bb1a69a018d35c78eb6624))
+* release 0.10.0 ([fda8dca](https://github.com/icoretech/codex-pooler/commit/fda8dca0d9d02ea453f939fb3aa5a02e725db229))
+
 ## [0.9.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.6...codex-pooler-v0.9.7) (2026-09-26)
 
 
