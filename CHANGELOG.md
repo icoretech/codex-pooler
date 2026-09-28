@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.10.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.2...codex-pooler-v0.10.3) (2026-09-28)
+
+
+### Features
+
+* **admin:** pair source and destination paths in request logs ([24c3a69](https://github.com/icoretech/codex-pooler/commit/24c3a694e88a571eb7253f051808f17e1768f5b7))
+
+
+### Bug Fixes
+
+* **admin:** reclaim request log space for endpoint details ([6d9e56b](https://github.com/icoretech/codex-pooler/commit/6d9e56b77dd5e8d9a110c909b049e24bea5e2963))
+* **files:** route native image edits to bridged file assignments ([0e3e9f3](https://github.com/icoretech/codex-pooler/commit/0e3e9f3a129528b84bdbf5dd3e3295bca27287e8))
+* **files:** route native image edits to bridged file assignments ([3567cfe](https://github.com/icoretech/codex-pooler/commit/3567cfe028e0c16396720b86a14c802f50711ea0))
+* **gateway:** place Flex refusal before generic failure handling ([cd14c93](https://github.com/icoretech/codex-pooler/commit/cd14c93a67581450c3e40fc1a3b9bdfb4ee1bc45))
+* **gateway:** preserve native numeric reasoning budgets ([a229d30](https://github.com/icoretech/codex-pooler/commit/a229d30ae3fc5fb00fe4848be7deb5949d174a88))
+* **gateway:** preserve native numeric reasoning budgets ([70b4f35](https://github.com/icoretech/codex-pooler/commit/70b4f35417065a980060561ecc0dcedcf309a141))
+* **gateway:** preserve terminal Flex capacity refusals ([9cab2a4](https://github.com/icoretech/codex-pooler/commit/9cab2a4b8795c8822bfadd13177581627ba9d9d4))
+* **gateway:** preserve terminal Flex capacity refusals ([ca4e37f](https://github.com/icoretech/codex-pooler/commit/ca4e37f8dc59f0ccda7c948d7aca040978fc973d))
+* **gateway:** preserve upstream Retry-After deadlines ([4824351](https://github.com/icoretech/codex-pooler/commit/482435186179237abdf2dba1d3f292d4fd0e4ce7))
+* **gateway:** preserve upstream Retry-After deadlines ([3b9c4f8](https://github.com/icoretech/codex-pooler/commit/3b9c4f88e8f999353ac693e29d6c9e48530d0e50))
+
+
+### Tests
+
+* **compaction:** preserve rebuilt multipart user history ([5978601](https://github.com/icoretech/codex-pooler/commit/597860145c828c9abe0bdf73f8112106860d7279))
+* **compaction:** preserve rebuilt multipart user history ([848b6c9](https://github.com/icoretech/codex-pooler/commit/848b6c9a0d5d62229c4dba066c2ee04c6aee4ec7))
+* **compat:** record numeric effort image affinity and retry contracts ([0c6bbc5](https://github.com/icoretech/codex-pooler/commit/0c6bbc5f9a4df274fcbad14e2be027071077bd41))
+* **compat:** record numeric effort image affinity and retry contracts ([1927580](https://github.com/icoretech/codex-pooler/commit/1927580d73eda986f420336164ba87bec328fcad))
+* **gateway:** preserve expanded native tool metadata and schemas ([676d913](https://github.com/icoretech/codex-pooler/commit/676d9136d988d610653ba533381a62f13ea1bb7d))
+* **gateway:** preserve expanded native tool metadata and schemas ([a0835d1](https://github.com/icoretech/codex-pooler/commit/a0835d1d78d387015716544de28eda82ea4543eb))
+* **upstreams:** cover Pro Max import and quota evidence ([d458103](https://github.com/icoretech/codex-pooler/commit/d4581037574492438b49be752b3c066b9fb38768))
+* **upstreams:** cover Pro Max import and quota evidence ([39a97be](https://github.com/icoretech/codex-pooler/commit/39a97be88f4e9a68ed286687f677374f6674a1dc))
+* **websocket:** cover prewarm accounting across serving modes ([00e25e9](https://github.com/icoretech/codex-pooler/commit/00e25e9d6d80f89c53c09b5ef79b5ad28146b2ac))
+* **websocket:** cover prewarm accounting across serving modes ([65fd26b](https://github.com/icoretech/codex-pooler/commit/65fd26bdc72f2680671d666ca2397d9930d06b22))
+
+
+### Miscellaneous Chores
+
+* merge published Codex compatibility fixes ([1c36a4e](https://github.com/icoretech/codex-pooler/commit/1c36a4efbb96e401fc71d6f76901f72eecc877a1))
+
 ## [0.10.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.1...codex-pooler-v0.10.2) (2026-09-28)
 
 
