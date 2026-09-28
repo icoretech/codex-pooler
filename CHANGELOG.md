@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.10.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.0...codex-pooler-v0.10.1) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **gateway:** Pool request compression and its savings controls are removed. Accepted tool-output text is no longer minified or summarized by the gateway.
+
+### Features
+
+* **gateway:** remove tool-output request compression ([f339715](https://github.com/icoretech/codex-pooler/commit/f3397150e908245dc74143f8b38f65dc8e7fd3be))
+* **tokenizer:** enable o200k counting for GPT-6 models ([6f4964b](https://github.com/icoretech/codex-pooler/commit/6f4964be2f4d5b1f70bea85dafbb1f3a98491020))
+
+
+### Bug Fixes
+
+* **admin:** keep compression savings visible in request logs ([9ad73d5](https://github.com/icoretech/codex-pooler/commit/9ad73d5abda5227847363216ab200feadb431a9b))
+* **catalog:** extend verified decoding to Codex 0.158.0 ([ce6fd96](https://github.com/icoretech/codex-pooler/commit/ce6fd965bb1c499c1d6f1a797050f81021c38a8b))
+* **compression:** bound nested JSON and command inspection ([0df3a70](https://github.com/icoretech/codex-pooler/commit/0df3a70866942be44795f6093b45191a2832eee0))
+* **compression:** bound planning by JSON value count ([b54309c](https://github.com/icoretech/codex-pooler/commit/b54309cd30c13c4f6805df565911f49aeec9f530))
+* **compression:** classify commands by their executed program ([91372d6](https://github.com/icoretech/codex-pooler/commit/91372d6a49b8cb694b17052d5b4093d64f50dd1c))
+* **compression:** classify the program that produces the final output ([ed4d314](https://github.com/icoretech/codex-pooler/commit/ed4d3147c5b36d313295630ef04550c97a4fdfd3))
+* **compression:** index diff hunks in constant time ([43b9129](https://github.com/icoretech/codex-pooler/commit/43b912991168ca51afb8b45f740243239604485a))
+* **compression:** keep rewrites faithful and bound their cost ([fcd5cf6](https://github.com/icoretech/codex-pooler/commit/fcd5cf62a0848348c6af04d684743835cf8bc04e))
+* **compression:** keep the compressed prefix stable past the limits ([e57178e](https://github.com/icoretech/codex-pooler/commit/e57178e67469b5449ca987fd103bb4c52dc4cd5a))
+* **compression:** retain annotations for selected diff lines ([4d23de3](https://github.com/icoretech/codex-pooler/commit/4d23de320402c99fed8b8f2a5d74748582164f40))
+* **compression:** retain complete search context runs ([405cbfa](https://github.com/icoretech/codex-pooler/commit/405cbfa9a0734d221ac85a0422ec5a4c47658ce9))
+* **compression:** split non-git unified diffs into their file sections ([0d28a55](https://github.com/icoretech/codex-pooler/commit/0d28a5529ab745a6444607e499f3a24d3669c523))
+* **compression:** treat sort --files0-from as a source, not a filter ([d5f8e9d](https://github.com/icoretech/codex-pooler/commit/d5f8e9d6081217fd64b3ba93d605488b5d165f32))
+* **deps:** update dependency apexcharts to v7.6.1 ([9dbd103](https://github.com/icoretech/codex-pooler/commit/9dbd103109442556db498bad0238a14f7431f255))
+* **gateway:** recover websocket turns after instance restarts ([cd5a9d8](https://github.com/icoretech/codex-pooler/commit/cd5a9d800331905a6ef15e192c196afcec85ddea))
+
+
+### Tests
+
+* **compression:** align runtime contract with supported inputs ([9dad190](https://github.com/icoretech/codex-pooler/commit/9dad190a4a8c6d62103f22b6a0ba2668df63b4a6))
+* **compression:** measure planner reductions in the worker ([7284f17](https://github.com/icoretech/codex-pooler/commit/7284f1722e1c3fe01c9466064b64d6ba0259bfb1))
+* **gateway:** include preparation metadata in replay fixture ([219f1a2](https://github.com/icoretech/codex-pooler/commit/219f1a2a0a9e3f2adb63c91ba6e99170370c4ab0))
+
+
+### Miscellaneous Chores
+
+* **deps:** lock file maintenance ([4c43c2c](https://github.com/icoretech/codex-pooler/commit/4c43c2c155f7db41e2e60be50d4cc90bb6ad7615))
+* **deps:** update dependency openai/codex to v0.158.0 ([e43d4ba](https://github.com/icoretech/codex-pooler/commit/e43d4ba8f7d16875d8e4e5a6f74eda7e83e3febc))
+* **deps:** update helm release codex-pooler to v0.9.3 ([#455](https://github.com/icoretech/codex-pooler/issues/455)) ([bb0a345](https://github.com/icoretech/codex-pooler/commit/bb0a3457b3ee862bf2b15129933387f0a05bf544))
+* **deps:** update helm release codex-pooler to v0.9.4 ([9dacf4f](https://github.com/icoretech/codex-pooler/commit/9dacf4f3fbbbad26ad154c439e17756271fb7a9a))
+
 ## [0.10.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.9.7...codex-pooler-v0.10.0) (2026-09-27)
 
 
