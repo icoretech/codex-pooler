@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.1...codex-pooler-v0.10.2) (2026-09-28)
+
+
+### Features
+
+* **pools:** add audio transcription permission ([8798196](https://github.com/icoretech/codex-pooler/commit/8798196d5130c969452de75999131f9bd9347bf4))
+
+
+### Bug Fixes
+
+* **audio:** return plain-text transcription responses ([192cfad](https://github.com/icoretech/codex-pooler/commit/192cfadf483fed8f4ed9af1699539a3db5a6b63a))
+
 ## [0.10.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.0...codex-pooler-v0.10.1) (2026-09-28)
 
 
