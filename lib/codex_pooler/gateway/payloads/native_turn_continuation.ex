@@ -96,6 +96,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   # result -- does not answer.
   @final_compaction_item_types ["compaction", "compaction_summary"]
 
+  # `codex-rs/prompts/templates/compact/summary_prefix.md` followed by the
+  # newline `compact.rs` joins it to the summary with, verbatim.
+  @inline_summary_prefix "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n"
+
   @anchor_domain "native_turn_compaction_anchor_v1"
   @progress_domain "native_turn_user_progress_v1"
   @pivot_domain "native_turn_progress_pivot_v1"
@@ -257,8 +261,9 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
   The compaction output item is the pivot, because remote compaction replaces
   the session history with the retained items followed by that item
-  (`compact_remote_v2.rs:510`, `compact_remote_history.rs:118`). Everything that
-  matters is therefore in the segment AFTER the last such item:
+  (`compact_remote_v2.rs:510`, `compact_remote_history.rs:118`). A local inline
+  compaction's summary message is the same pivot (`inline_compaction_summary?/1`).
+  Everything that matters is therefore in the segment AFTER the last such item:
 
     * a tool result there -> `:tool_continuation`. A previous request of this
       turn produced the call.
@@ -631,7 +636,26 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   defp normalize_request_kind(_kind), do: nil
 
   defp compaction_item?(%{"type" => type}) when type in @compaction_item_types, do: true
-  defp compaction_item?(_item), do: false
+  defp compaction_item?(item), do: inline_compaction_summary?(item)
+
+  # A LOCAL inline compaction leaves no compaction item: it replaces the history
+  # with the earlier user messages followed by the summary as a user message
+  # that starts with the client's `SUMMARY_PREFIX` line, and it is the client's
+  # own test for that message (`compact.rs` `build_compacted_history` and
+  # `is_summary_message`, Codex 0.158). That message is the pivot a remote
+  # compaction item would be, so the continuation of the compacted turn reads
+  # `{:post_compaction_resume, anchor}` instead of taking the bare claim its
+  # turn's opener or summarisation request already holds.
+  defp inline_compaction_summary?(%{"role" => "user", "content" => content} = item) do
+    Map.get(item, "type", "message") == "message" and
+      case content do
+        [%{"type" => "input_text", "text" => text} | _rest] when is_binary(text) -> String.starts_with?(text, @inline_summary_prefix)
+        text when is_binary(text) -> String.starts_with?(text, @inline_summary_prefix)
+        _other -> false
+      end
+  end
+
+  defp inline_compaction_summary?(_item), do: false
 
   defp last_compaction_index(input) do
     input

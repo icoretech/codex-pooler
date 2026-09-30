@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeHttpTurnIdentity, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeHttpTurnIdentity, RequestOptions, WebsocketTurnIdentity}
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -917,7 +917,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
               {"turn", [output, summary], true},
               {"turn", [summary, output, summary], true},
               {"turn", [summary, %{"type" => "message", "role" => "user", "content" => "synthetic"}], false},
-              {"compaction", [summary, output], false},
+              {"compaction", [summary, output], :inline_compaction},
               {nil, [summary, output], false}
             ] do
           payload =
@@ -937,10 +937,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                      fn _ -> :ok end
                    )
 
-          assert prepared.request_options.continuity.request_claim_key != prepared.turn_claim_key ==
-                   distinct?
+          # A declared compaction without a compaction trigger is a local inline
+          # compaction's summarisation request: neither the turn's bare claim
+          # nor a tool continuation's, but its own compaction-domain claim.
+          if distinct? == :inline_compaction do
+            assert prepared.request_options.continuity.request_claim_key ==
+                     WebsocketTurnIdentity.compaction_claim_key(prepared.semantic_turn_key, prepared.payload)
+          else
+            assert prepared.request_options.continuity.request_claim_key != prepared.turn_claim_key ==
+                     distinct?
+          end
 
-          if distinct? do
+          if distinct? == true do
             assert {:ok, direct} =
                      WebsocketCodec.prepare_frame(
                        CodexPooler.JSON.encode!(payload),
@@ -1100,7 +1108,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                  fn _frame -> :ok end
                )
 
+      # Without a compaction trigger the declared compaction is not bridged: it
+      # is a local inline compaction's summarisation request, which takes the
+      # payload-scoped compaction claim native HTTP gives it rather than the
+      # bare claim the turn's opener holds.
       assert explicit_compaction_prepared.request_options.continuity.request_claim_key ==
+               WebsocketTurnIdentity.compaction_claim_key(
+                 explicit_compaction_prepared.semantic_turn_key,
+                 explicit_compaction_prepared.payload
+               )
+
+      refute explicit_compaction_prepared.request_options.continuity.request_claim_key ==
                explicit_compaction_prepared.turn_claim_key
     end
 

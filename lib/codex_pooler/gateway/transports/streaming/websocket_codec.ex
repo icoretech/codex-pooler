@@ -1213,10 +1213,33 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
           _unknown -> WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
         end
 
+      # The summarisation request of a local inline compaction: an ordinary
+      # Responses frame declaring `request_kind: "compaction"` under its turn's
+      # own `turn_id` (Codex 0.158 `compact.rs` `run_inline_auto_compact_task`).
+      # The bare claim belongs to the turn's opener, which a mid-turn
+      # compaction follows and a pre-turn one precedes, so it takes the
+      # payload-scoped compaction claim native HTTP gives the same request.
+      inline_compaction_request?(prepared.endpoint, payload, request_options) ->
+        WebsocketTurnIdentity.compaction_claim_key(semantic_turn_key, payload)
+
       true ->
         prepared.turn_claim_key
     end
   end
+
+  defp inline_compaction_request?(
+         "/backend-api/codex/responses",
+         payload,
+         %RequestOptions{
+           native_compaction_admission: nil,
+           transport: %{transport: "websocket"},
+           payload_context: %{compaction_trigger_bridge?: false},
+           openai_compatibility: %{public_openai_responses_stream: false}
+         } = options
+       ),
+       do: NativeTurnContinuation.compaction_request?(payload, options)
+
+  defp inline_compaction_request?(_endpoint, _payload, %RequestOptions{}), do: false
 
   defp full_history_native_compaction?(
          "/backend-api/codex/responses/compact",

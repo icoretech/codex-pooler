@@ -17,6 +17,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
   @compact "/backend-api/codex/responses/compact"
   @turn_key :crypto.hash(:sha256, "p88-steered-turn")
   @other_turn_key :crypto.hash(:sha256, "p88-other-turn")
+  # provenance: codex-rs/prompts/templates/compact/summary_prefix.md at rust-v0.158.0-alpha.2, plus the joining newline.
+  @inline_summary_prefix "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n"
 
   describe "canonical_document/2" do
     test "reads the body document, the header copy, and prefers the body" do
@@ -353,6 +355,52 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
              }) == :opening
     end
 
+    # A local inline compaction (Codex 0.158 `compact.rs`) leaves no compaction
+    # item: the replacement history is the earlier user messages then the
+    # summary as a user message starting with `SUMMARY_PREFIX` and a newline.
+    test "a local inline compaction's summary message is the pivot a compaction item is" do
+      summary = inline_summary("the worker was asked to finish")
+      mailbox = %{"type" => "agent_message", "author" => "/root/worker", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "done"}]}
+
+      assert {:post_compaction_resume, anchor} = NativeTurnContinuation.turn_role(%{"input" => [user_message("task"), summary]})
+
+      # Mailbox input and delivered output after the summary keep the resume
+      # and its anchor; the retained user messages before it do not matter.
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [user_message("older"), user_message("task"), summary, mailbox, assistant_message("partial")]})
+
+      assert {:post_compaction_resume, other} = NativeTurnContinuation.turn_role(%{"input" => [user_message("task"), inline_summary("another summary")]})
+      refute other == anchor
+
+      # A new user message after it opens a turn, a tool result continues one.
+      assert NativeTurnContinuation.turn_role(%{"input" => [summary, user_message("next")]}) == :opening
+
+      assert NativeTurnContinuation.turn_role(%{"input" => [summary, %{"type" => "function_call_output", "call_id" => "c1", "output" => "ok"}]}) ==
+               :tool_continuation
+    end
+
+    test "the summarisation request itself and look-alike messages are not inline compaction pivots" do
+      prompt = user_message("You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary.")
+      output = %{"type" => "function_call_output", "call_id" => "c1", "output" => "ok"}
+
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message("task"), output, prompt]}) == :tool_continuation
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message("task"), prompt]}) == :opening
+
+      # Without its newline, quoted mid-text, or from the assistant, the prefix is not the summary.
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message(String.trim_trailing(@inline_summary_prefix))]}) == :opening
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message("quote: " <> @inline_summary_prefix <> "x")]}) == :opening
+      assert NativeTurnContinuation.turn_role(%{"input" => [assistant_message(@inline_summary_prefix <> "x")]}) == :opening
+    end
+
+    test "the inline summary is the progress pivot too" do
+      summary = inline_summary("s")
+
+      assert NativeTurnContinuation.turn_position(%{"input" => [user_message("a"), summary]}) ==
+               NativeTurnContinuation.turn_position(%{"input" => [summary]})
+
+      assert {<<_::256>>, 1} = NativeTurnContinuation.turn_position(%{"input" => [user_message("a"), summary, user_message("b")]})
+    end
+
     test "a payload with no list input fails CLOSED, to the turn's own claim" do
       assert NativeTurnContinuation.turn_role(%{}) == :opening
       assert NativeTurnContinuation.turn_role(%{"input" => "text"}) == :opening
@@ -617,6 +665,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
         put_in(options.transport.forwarded_metadata_headers, headers)
     end
   end
+
+  defp inline_summary(text), do: user_message(@inline_summary_prefix <> text)
 
   defp user_message(text),
     do: %{
