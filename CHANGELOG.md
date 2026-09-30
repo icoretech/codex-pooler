@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.6...codex-pooler-v0.10.7) (2026-09-30)
+
+
+### Bug Fixes
+
+* **accounting:** recover ended executions from durable proof ([bc8f927](https://github.com/icoretech/codex-pooler/commit/bc8f9273c5998c7ec12d7cb98bb260a9bc699d94))
+* **gateway:** admit verified native mailbox continuations ([ae254bb](https://github.com/icoretech/codex-pooler/commit/ae254bbde4c428a61a17f4ce11e818687cc199c2))
+* **gateway:** preserve reasoning replay and anchored mailbox recovery ([b0224ac](https://github.com/icoretech/codex-pooler/commit/b0224ac96a5cb115fda00e5e26bab7b102de1dc9))
+* **pricing:** refresh image rates and isolate native image costing ([0e97b34](https://github.com/icoretech/codex-pooler/commit/0e97b34605f5e5dd3eea88386f7e235f7ab90f2c))
+
 ## [0.10.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.5...codex-pooler-v0.10.6) (2026-09-30)
 
 
