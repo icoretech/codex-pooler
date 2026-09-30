@@ -140,6 +140,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuationTest do
       original = opener()
       output = commentary("first")
       candidate = append(original, [output, mailbox("first")])
+      {turn, request, attempt} = opener_predecessor(original, output, output, "http_sse")
+
+      # A call the stream opened and never completed was never run by the client.
+      open = update_in(attempt.response_metadata["native_http_resume_progress"], &Map.put(&1, "open_tool_call", true))
+      assert ClientRetry.verified_mailbox_continuation?(turn, request, open, witness(candidate), nil)
+
       {turn, request, extra} = opener_predecessor(original, output, reasoning("extra"), "http_sse")
       refute ClientRetry.verified_mailbox_continuation?(turn, request, extra, witness(candidate), nil)
 

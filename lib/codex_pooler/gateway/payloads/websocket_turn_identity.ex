@@ -585,7 +585,8 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   re-serializes each item from its own model, so the item it resends differs
   from the one it was pushed only in what that model does not keep: the item's
   `status`, a content part's `annotations` and `logprobs`, and fields it never
-  had or writes as `null` (a reasoning item's `content`). The identity drops
+  had or writes as `null` (a reasoning item's `content`, which it also omits
+  when no part of it is `reasoning_text`). The identity drops
   exactly those and binds everything else under a keyed digest, the house
   12-character shape, so a receipt can carry it without carrying content.
   `:error` for anything that is not an item map.
@@ -695,12 +696,22 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   defp completed_item_identity(item) do
     item
     |> Map.drop(["status", "internal_chat_message_metadata_passthrough"])
+    |> without_unkept_reasoning_content()
     |> Map.new(fn
       {"content", parts} when is_list(parts) -> {"content", Enum.map(parts, &completed_item_part/1)}
       {key, value} -> {key, without_nulls(value)}
     end)
     |> without_nulls()
   end
+
+  # The client keeps a reasoning item's `content` only when it holds a
+  # `reasoning_text` part and writes nothing otherwise, so a provider item
+  # pushed with `"content": []` comes back without the field.
+  defp without_unkept_reasoning_content(%{"type" => "reasoning", "content" => parts} = item) when is_list(parts) do
+    if Enum.any?(parts, &match?(%{"type" => "reasoning_text"}, &1)), do: item, else: Map.delete(item, "content")
+  end
+
+  defp without_unkept_reasoning_content(item), do: item
 
   defp completed_item_part(%{} = part), do: part |> Map.drop(["annotations", "logprobs"]) |> without_nulls()
   defp completed_item_part(part), do: without_nulls(part)

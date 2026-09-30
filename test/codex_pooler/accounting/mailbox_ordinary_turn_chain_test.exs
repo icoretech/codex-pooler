@@ -105,6 +105,19 @@ defmodule CodexPooler.Accounting.MailboxOrdinaryTurnChainTest do
     assert_refused!(fixture, append(fixture.payload, [output, mailbox(1)]), "websocket", :terminal_predecessor)
   end
 
+  # A call the stream opened and never completed was never run by the client.
+  test "an HTTP opener cut with a client-side call still open admits one mailbox continuation", %{fixture: fixture} do
+    original = admit!(fixture, fixture.payload, "http_sse")
+    output = commentary("first")
+    cut!(fixture, original, output, open_tool_call: true)
+    candidate = append(fixture.payload, [output, mailbox(1)])
+    assert_refused!(fixture, candidate, "websocket", :authorization_changed)
+    assert_refused!(fixture, append(fixture.payload, [commentary("changed"), mailbox(1)]), "http_sse", :terminal_predecessor)
+    successor = admit!(fixture, candidate, "http_sse")
+    assert_edge!(original, successor)
+    assert_refused!(fixture, candidate, "http_sse", :active_predecessor)
+  end
+
   test "an HTTP opener without recorded progress keeps the fence", %{fixture: fixture} do
     original = admit!(fixture, fixture.payload, "http_sse")
     output = commentary("first")

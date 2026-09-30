@@ -2493,6 +2493,42 @@ defmodule CodexPooler.Accounting.ClientRetry do
       end)
   end
 
+  # The client stops reading after a reasoning or commentary item once mailbox
+  # input is pending and sends its next request on a new connection, while the
+  # connection it left can stay open: the Pooler then pushes the rest of the
+  # response and settles it as delivered. The resend still carries only the
+  # leading items the client handled, then the mail, so the receipt must name
+  # those items first, in order.
+  def verified_mailbox_continuation?(
+        %CodexTurn{status: "succeeded", transport_kind: "websocket", final_attempt_id: attempt_id, completed_at: %DateTime{}},
+        %Request{status: "succeeded", transport: "websocket", endpoint: "/backend-api/codex/responses", completed_at: %DateTime{}} = request,
+        %Attempt{
+          id: attempt_id,
+          status: "succeeded",
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{
+            "downstream_delivery" => %{
+              "outcome" => "delivered",
+              "terminal_class" => "response.completed",
+              "completed_items" => count,
+              "completed_item_digests" => [_first | _rest] = digests
+            }
+          }
+        },
+        %OriginalWitness{version: 1, auth_epoch: epoch, mailbox: candidates},
+        successor
+      )
+      when is_binary(attempt_id) and is_integer(count) and is_list(candidates) do
+    length(digests) == count and original_witness_eligible?(request) and request.native_client_retry_auth_epoch == epoch and
+      Enum.any?(candidates, fn candidate ->
+        mailbox_witness_matches?(request, candidate.prefix) and
+          mailbox_ending_matches?(successor, candidate) and
+          match?(%{items: [_item | _more]}, candidate) and List.starts_with?(digests, candidate.items)
+      end)
+  end
+
   def verified_mailbox_continuation?(_turn, _request, _attempt, _witness, _successor), do: false
 
   defp mailbox_witness_matches?(%Request{transport: "websocket", native_client_retry_digest: digest}, %{websocket: candidates}),
@@ -2525,22 +2561,19 @@ defmodule CodexPooler.Accounting.ClientRetry do
        ),
        do: items == digests and verified_completed_item_resend?(turn, request, attempt, [candidate])
 
-  # A client-side call the stream opened and never completed is outside what
-  # the progress digest proves, so it keeps the fence on the exact and
-  # delivered-items proofs whatever came before it. The upstream bounded
-  # prefix receipt keeps its own rule.
+  # A client-side call the stream opened and never completed does not bar the
+  # continuation: the client runs a call only once its `output_item.done`
+  # arrives, which was never delivered, and a resend that names every
+  # completed item and ends on mail carries no call. A client that had the
+  # call would resend it with its output, which is no mailbox continuation.
   defp mailbox_output_matches?(%CodexTurn{transport_kind: "http_sse"}, %Request{transport: "http_sse"}, %Attempt{transport: "http_sse", response_metadata: metadata}, %{http_progress: candidates, items: items}) do
     recorded = metadata["native_http_resume_progress"]
 
-    (not open_tool_call?(recorded) and
-       (Enum.any?(candidates, &exact_http_mailbox_progress?(recorded, &1)) or delivered_item_digests?(recorded, items))) or
+    Enum.any?(candidates, &exact_http_mailbox_progress?(recorded, &1)) or delivered_item_digests?(recorded, items) or
       http_mailbox_prefix?(metadata["native_http_mailbox_prefix"], items)
   end
 
   defp mailbox_output_matches?(_turn, _request, _attempt, _candidate), do: false
-
-  defp open_tool_call?(%{"open_tool_call" => _open}), do: true
-  defp open_tool_call?(_recorded), do: false
 
   defp exact_http_mailbox_progress?(recorded, expected) do
     case {recorded, expected} do

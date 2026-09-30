@@ -532,7 +532,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # compaction billed but never completed by its client is resent under its
   # compaction claim, which binds the window the client advances after every
   # compaction it completes (`ClientRetry.verified_unreceived_compaction?/3`,
-  # findings#206 row 206-330).
+  # findings#206 row 206-330). A websocket resume or turn opener the client
+  # stopped reading for mailbox input, whose left connection still took the
+  # rest of the response, is resent with its leading delivered items and the
+  # mail (`ClientRetry.verified_mailbox_continuation?/5`).
   defp undelivered_completion(request, scope, now) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
@@ -550,6 +553,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   defp resend_claim_scope?(_scope, :unreceived_compaction), do: true
   defp resend_claim_scope?(%{semantic_claim?: true}, _shape), do: true
   defp resend_claim_scope?(_scope, :identical_resend), do: true
+  defp resend_claim_scope?(_scope, :mailbox_continuation), do: true
   defp resend_claim_scope?(_scope, _shape), do: false
 
   # A compaction the client never read is resent after the client's stream
@@ -566,6 +570,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       ClientRetry.verified_undelivered_completion?(turn, request, attempt) -> :undelivered_completion
       ClientRetry.verified_undelivered_partial_output?(turn, request, attempt) -> :undelivered_partial_output
       completed_item_resend?(turn, request, attempt, scope) -> :completed_item_resend
+      mailbox_continuation?(request, scope) -> :mailbox_continuation
       true -> nil
     end
   end
