@@ -5,11 +5,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Accounting.NativeHttpToolObservation
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
+
+  @completed_item_digest_limit 8
 
   @type state :: map()
   @type source :: :http | :websocket_bridge
@@ -288,10 +291,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   def native_http_tool_started?(_state), do: false
 
   @spec native_http_progress_metadata(state()) :: map()
-  def native_http_progress_metadata(%{native_http_progress: progress}) do
+  def native_http_progress_metadata(%{native_http_progress: progress} = state) do
     case ClientRetry.native_http_progress_metadata(progress) do
       %{"output_item_done_count" => count} = metadata when count > 0 ->
-        %{"native_http_resume_progress" => metadata, "native_http_mailbox_prefix" => ClientRetry.native_http_mailbox_prefix_metadata(progress)}
+        %{
+          "native_http_resume_progress" => metadata |> put_item_digests(state) |> put_open_tool_call(state),
+          "native_http_mailbox_prefix" => ClientRetry.native_http_mailbox_prefix_metadata(progress)
+        }
 
       _empty ->
         %{}
@@ -312,20 +318,52 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         } = state
       )
       when is_list(pending) do
-    progress =
-      Enum.reduce_while(pending, progress, fn item, progress ->
-        case ClientRetry.observe_native_http_output_item(progress, item) do
-          %ClientRetry.NativeHttpProgress{} = next -> {:cont, next}
-          nil -> {:halt, nil}
-        end
+    {progress, open_calls, item_digests} =
+      Enum.reduce(pending, {progress, Map.get(state, :native_http_open_tool_calls, %{}), Map.get(state, :native_http_item_digests, [])}, fn
+        {:done, item}, {progress, open_calls, item_digests} ->
+          {ClientRetry.observe_native_http_output_item(progress, item), Map.delete(open_calls, Map.get(item, "id")), put_item_digest(item_digests, item)}
+
+        {:opened, item}, {progress, open_calls, item_digests} ->
+          {progress, Map.put(open_calls, open_call_key(item), true), item_digests}
       end)
 
     state
     |> Map.put(:native_http_progress, progress)
+    |> Map.put(:native_http_open_tool_calls, open_calls)
+    |> Map.put(:native_http_item_digests, item_digests)
     |> Map.delete(:native_http_pending_output_items)
   end
 
   def commit_native_http_progress(state), do: state
+
+  # The released client resends a delivered item as its own model re-serializes
+  # it, without the fields the exact progress digest still binds (findings#232
+  # row 232-232), so the bounded completed-item identities the websocket receipt
+  # carries are recorded beside it. An item without one ends the list.
+  defp put_item_digest(item_digests, item) when is_list(item_digests) and length(item_digests) < @completed_item_digest_limit do
+    case WebsocketTurnIdentity.completed_item_digest(item) do
+      {:ok, digest} -> item_digests ++ [digest]
+      :error -> :unproved
+    end
+  end
+
+  defp put_item_digest(_item_digests, _item), do: :unproved
+
+  # A delivered call item whose `output_item.done` was never delivered is
+  # outside what the progress digest proves. An opened call without an id can
+  # never be matched to its completion and stays open.
+  defp put_open_tool_call(metadata, %{native_http_open_tool_calls: open_calls}) when map_size(open_calls) > 0,
+    do: Map.put(metadata, "open_tool_call", true)
+
+  defp put_open_tool_call(metadata, _state), do: metadata
+
+  defp put_item_digests(%{"output_item_done_count" => count} = metadata, %{native_http_item_digests: [_first | _rest] = digests}) when length(digests) == count,
+    do: Map.put(metadata, "item_digests", digests)
+
+  defp put_item_digests(metadata, _state), do: metadata
+
+  defp open_call_key(%{"id" => id}) when is_binary(id), do: id
+  defp open_call_key(_item), do: make_ref()
 
   @spec bridge_commitment_metadata(state()) :: map()
   def bridge_commitment_metadata(%{bridge_committed?: value}) when is_boolean(value),
@@ -454,13 +492,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp stage_native_http_progress(%{native_http_progress: _progress} = state, blocks) do
-    pending =
-      Enum.flat_map(blocks, fn block ->
-        case block do
-          %{event_type: "response.output_item.done", decoded: %{"item" => %{} = item}} -> [item]
-          _other -> []
-        end
-      end)
+    pending = Enum.flat_map(blocks, &pending_output_item/1)
 
     if pending == [] do
       state
@@ -470,6 +502,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp stage_native_http_progress(state, _blocks), do: state
+
+  defp pending_output_item(%{event_type: "response.output_item.done", decoded: %{"item" => %{} = item}}), do: [{:done, item}]
+
+  defp pending_output_item(%{event_type: "response.output_item.added", decoded: %{"item" => %{"type" => "" <> type} = item}}),
+    do: if(String.ends_with?(type, "_call"), do: [{:opened, item}], else: [])
+
+  defp pending_output_item(_block), do: []
 
   defp observe_native_http_tool_blocks(%{native_http_tool_observation: observation} = state, blocks, oversized?) do
     observation = if oversized?, do: NativeHttpToolObservation.poison(observation), else: observation

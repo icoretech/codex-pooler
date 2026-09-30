@@ -2672,11 +2672,13 @@ defmodule CodexPooler.CompatibilityMatrix do
         "identical_post_compaction_resume",
         "identical_or_rebuilt_resend_of_a_resume_after_a_local_compaction",
         "identical_served_mailbox_resume_continuation",
+        "ordinary_turn_mailbox_resend_naming_a_call_the_stream_never_completed",
         "identical_prewarm_or_memory_sharing_the_turn_id"
       ],
       served: [
         "post_compaction_resume_retry_advanced_by_exact_delivered_output",
         "post_compaction_resume_advanced_by_delivered_output_and_new_addressed_mailbox_input",
+        "ordinary_turn_opener_advanced_by_delivered_output_and_new_addressed_mailbox_input",
         "resend_after_a_zero_output_provider_failure",
         "retry_while_the_predecessor_is_unfinished",
         "prewarm_sharing_the_turn_id",

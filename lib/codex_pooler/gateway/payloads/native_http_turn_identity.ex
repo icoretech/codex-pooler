@@ -380,6 +380,9 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # predecessor, whichever shape the websocket resend itself was admitted for.
   # The grown-resend candidates of both variants ride along: after a cut that
   # pushed completed items the fallback carries them appended (row 232-232).
+  # So do the mailbox candidates: an opener cut after a commentary or reasoning
+  # item is resent under this same claim with that item and the newly
+  # addressed mail appended (`NativeMailboxContinuation`).
   defp native_client_retry_witness(identity, %{"input" => input} = payload, request_options, :opening)
        when is_list(input) do
     frame = Map.put(payload, "type", "response.create")
@@ -397,7 +400,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
              Enum.uniq(variant_digests ++ List.flatten(tail_digests)) -- [digest],
              List.flatten(grown)
            ) do
-      witness
+      NativeMailboxContinuation.attach(witness, identity.semantic_turn_key, payload, request_options)
     else
       _unavailable -> nil
     end

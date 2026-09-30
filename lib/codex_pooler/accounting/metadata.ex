@@ -592,17 +592,14 @@ defmodule CodexPooler.Accounting.Metadata do
 
   defp sanitize_native_client_retry_authority_loss(_value), do: %{}
 
-  defp sanitize_native_http_resume_progress(
-         %{
-           "version" => 1,
-           "output_item_done_count" => count,
-           "digest" => digest
-         } = value
-       )
-       when map_size(value) == 3 and is_integer(count) and count in 0..65_535 and
-              is_binary(digest) and byte_size(digest) == 43 do
-    case Base.url_decode64(digest, padding: false) do
-      {:ok, decoded} when byte_size(decoded) == 32 -> value
+  defp sanitize_native_http_resume_progress(%{"version" => 1, "output_item_done_count" => count, "digest" => digest} = value)
+       when is_integer(count) and count in 0..65_535 and is_binary(digest) and byte_size(digest) == 43 do
+    extras = Map.drop(value, ["version", "output_item_done_count", "digest"])
+
+    with {:ok, decoded} when byte_size(decoded) == 32 <- Base.url_decode64(digest, padding: false),
+         true <- Enum.all?(extras, &native_http_progress_extra?/1) do
+      value
+    else
       _invalid -> %{}
     end
   end
@@ -615,6 +612,15 @@ defmodule CodexPooler.Accounting.Metadata do
   end
 
   defp sanitize_native_http_mailbox_prefix(_value), do: %{}
+
+  # Beside the exact progress digest, an ordinary turn records whether a call
+  # item was left open and the bounded completed-item identities it delivered.
+  defp native_http_progress_extra?({"open_tool_call", true}), do: true
+
+  defp native_http_progress_extra?({"item_digests", [_first | _rest] = digests}),
+    do: length(digests) <= 8 and Enum.all?(digests, &(is_binary(&1) and &1 =~ ~r/\A[0-9a-f]{12}\z/))
+
+  defp native_http_progress_extra?(_extra), do: false
 
   # The opaque progress digest a native HTTP opening request records
   # (`NativeTurnContinuation.turn_progress/1`, findings#206 row 206-403), and

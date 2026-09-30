@@ -1116,6 +1116,140 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert FakeUpstream.count(upstream) == 4
   end
 
+  # An ordinary turn is cut the same way: the opener streams a commentary
+  # message, mail addressed to the agent arrives, and the released client
+  # resends the turn under the same bare turn claim with that message -- as its
+  # own model re-serializes it, without `status` or `annotations` -- and the
+  # mail appended.
+  @tag mailbox_http_source: true
+  test "an HTTP opener interrupted after commentary accepts new mailbox input once", %{conn: conn} do
+    delivered = commentary_item("msg_mailbox_opener", status: true)
+    event = %{"type" => "response.output_item.done", "item" => delivered}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_mailbox_session"}),
+          FakeUpstream.sse_stream([{"response.output_item.done", event}, {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "not delivered"}}], done: false),
+          stream_success_sse(),
+          stream_success_sse()
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+    assert json_response(post_turn(conn, setup, session, "turn_mailbox_session"), 200)
+    payload = mailbox_turn_payload(setup, native_text_input("ordinary mailbox turn"))
+    cut_http_turn!(setup, session, payload, [{"response.output_item.done", event}])
+
+    continuation = Map.update!(payload, "input", &(&1 ++ [commentary_item("msg_mailbox_opener"), mailbox_item()]))
+    changed = put_in(continuation, ["input", Elixir.Access.at(-2), "content", Elixir.Access.at(0), "text"], "changed")
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(post_native(setup, session, changed), 409)
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(post_native(setup, session, Map.update!(payload, "input", &(&1 ++ [mailbox_item()]))), 409)
+    assert response(post_native(setup, session, continuation), 200) =~ "response.completed"
+
+    assert [_session_turn, %Request{status: "failed", last_error_code: "client_disconnected"} = opener, %Request{status: "succeeded"} = successor] = pool_requests(setup)
+    assert opener.request_metadata["native_http_claim_arm"] == "opening"
+    assert successor.request_metadata["client_resend"]["predecessor_request_id"] == opener.id
+    assert %Attempt{response_metadata: %{"native_http_resume_progress" => %{"output_item_done_count" => 1, "item_digests" => [_digest]} = progress}} = Repo.get_by!(Attempt, request_id: opener.id)
+    refute Map.has_key?(progress, "open_tool_call")
+    assert FakeUpstream.count(upstream) == 3
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id in ^[opener.id, successor.id] and l.entry_kind == "settlement"), :count, :id) == 2
+
+    # An identical resend of the served continuation is chained to it.
+    assert response(post_native(setup, session, continuation), 200) =~ "response.completed"
+    assert [_session_turn, _opener, previous, retry] = pool_requests(setup)
+    assert previous.id == successor.id
+    assert_linked!(previous, retry)
+    assert FakeUpstream.count(upstream) == 4
+  end
+
+  # The client runs a call only once its `output_item.done` arrives: a call the
+  # stream opened and never completed was never run, and the resend that names
+  # the delivered items and ends on mail is the continuation.
+  test "an HTTP opener cut while a client-side call was streaming accepts its mailbox resend once", %{conn: conn} do
+    delivered = commentary_item("msg_mailbox_partial_tool")
+    call = %{"type" => "function_call", "id" => "fc_mailbox_partial", "call_id" => "call_mailbox_partial", "name" => "shell", "arguments" => ""}
+    done = %{"type" => "response.output_item.done", "output_index" => 0, "item" => delivered}
+    added = %{"type" => "response.output_item.added", "output_index" => 1, "item" => call}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_mailbox_session"}),
+          FakeUpstream.sse_stream(
+            [
+              {"response.output_item.done", done},
+              {"response.output_item.added", added},
+              {"response.function_call_arguments.delta", %{"type" => "response.function_call_arguments.delta", "item_id" => "fc_mailbox_partial", "output_index" => 1, "delta" => "{\"cmd\""}}
+            ],
+            done: false
+          ),
+          stream_success_sse(),
+          stream_success_sse()
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+    assert json_response(post_turn(conn, setup, session, "turn_mailbox_session"), 200)
+    payload = mailbox_turn_payload(setup, native_text_input("ordinary mailbox turn"))
+    cut_http_turn!(setup, session, payload, [{"response.output_item.done", done}, {"response.output_item.added", added}])
+
+    continuation = Map.update!(payload, "input", &(&1 ++ [delivered, mailbox_item()]))
+    with_call = Map.update!(payload, "input", &(&1 ++ [delivered, Map.put(call, "arguments", "{}"), mailbox_item()]))
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(post_native(setup, session, with_call), 409)
+    assert response(post_native(setup, session, continuation), 200) =~ "response.completed"
+    assert [_session_turn, %Request{status: "failed", last_error_code: "client_disconnected"} = opener, %Request{status: "succeeded"} = successor] = pool_requests(setup)
+    assert successor.request_metadata["client_resend"]["predecessor_request_id"] == opener.id
+    assert %Attempt{response_metadata: %{"native_http_resume_progress" => %{"open_tool_call" => true}}} = Repo.get_by!(Attempt, request_id: opener.id)
+    assert FakeUpstream.count(upstream) == 3
+
+    # An identical resend of the served continuation is chained to it.
+    assert response(post_native(setup, session, continuation), 200) =~ "response.completed"
+    assert [_session_turn, _opener, previous, retry] = pool_requests(setup)
+    assert previous.id == successor.id
+    assert_linked!(previous, retry)
+    assert FakeUpstream.count(upstream) == 4
+  end
+
+  # A tool continuation is claimed by its whole payload, so its grown mailbox
+  # resend never meets its predecessor: it is served as the next request.
+  test "an HTTP tool continuation interrupted after commentary is served its mailbox resend", %{conn: conn} do
+    delivered = commentary_item("msg_mailbox_tool_continuation")
+    event = %{"type" => "response.output_item.done", "item" => delivered}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_mailbox_session"}),
+          FakeUpstream.sse_stream([{"response.output_item.done", event}, {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "not delivered"}}], done: false),
+          stream_success_sse()
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+    assert json_response(post_turn(conn, setup, session, "turn_mailbox_session"), 200)
+
+    input =
+      native_text_input("ordinary mailbox turn") ++
+        [
+          %{"type" => "function_call", "call_id" => "call_mailbox_continuation", "name" => "shell", "arguments" => "{}"},
+          %{"type" => "function_call_output", "call_id" => "call_mailbox_continuation", "output" => "ok"}
+        ]
+
+    payload = mailbox_turn_payload(setup, input)
+    cut_http_turn!(setup, session, payload, [{"response.output_item.done", event}])
+
+    continuation = Map.update!(payload, "input", &(&1 ++ [delivered, mailbox_item()]))
+    assert response(post_native(setup, session, continuation), 200) =~ "response.completed"
+    assert [_session_turn, %Request{status: "failed", request_metadata: %{"native_http_claim_arm" => "tool_continuation"}}, %Request{status: "succeeded"} = successor] = pool_requests(setup)
+    refute Map.has_key?(successor.request_metadata, "client_resend")
+    assert FakeUpstream.count(upstream) == 3
+  end
+
   test "a post-compaction retry advanced by delivered output is served once", %{conn: conn} do
     delivered_item = Map.put(trailing_item(:assistant), "id", "msg_resume_progress")
 
@@ -1945,6 +2079,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     |> then(&if where == :header, do: put_req_header(&1, @metadata_header, document), else: &1)
     |> post(Keyword.get(opts, :path, "/backend-api/codex/responses"), payload)
   end
+
+  defp mailbox_turn_payload(setup, input) do
+    metadata = turn_metadata(@turn_id) |> CodexPooler.JSON.decode!() |> Map.put("agent_name", "/root") |> CodexPooler.JSON.encode!()
+    setup |> turn_payload(input: input, stream: true) |> put_body_document(metadata)
+  end
+
+  # Streams `payload` through the gateway and drops the client right after the
+  # SSE frames of `events` were written (the test adapter returns the whole
+  # body written so far).
+  defp cut_http_turn!(setup, session, payload, events) do
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    options = RequestOptions.build(%{codex_session: pool_session!(setup, session), upstream_endpoint: "/backend-api/codex/responses", transport: "http_sse"}, "/backend-api/codex/responses", payload) |> RequestOptions.capture_api_key_runtime_epoch(auth)
+    assert {:ok, %{stream: stream}} = Gateway.execute(auth, "/backend-api/codex/responses", payload, options)
+    stream_conn = build_conn() |> put_resp_content_type("text/event-stream") |> send_chunked(200)
+    {adapter, adapter_payload} = stream_conn.adapter
+    closing = %{adapter: adapter, payload: adapter_payload, close_after: Enum.map_join(events, &sse_frame/1), closed?: false}
+    assert {:ok, _closed} = stream.(%{stream_conn | adapter: {ClosingAdapter, closing}})
+  end
+
+  defp sse_frame({name, event}), do: "event: #{name}\ndata: " <> CodexPooler.JSON.encode!(event) <> "\n\n"
+
+  defp post_native(setup, session, body) do
+    build_conn()
+    |> put_req_header("authorization", setup.authorization)
+    |> put_req_header(@session_header, session)
+    |> put_req_header("content-type", "application/json")
+    |> post("/backend-api/codex/responses", CodexPooler.JSON.encode!(body))
+  end
+
+  defp commentary_item(id, opts \\ []) do
+    part = %{"type" => "output_text", "text" => "checking the workers"}
+    part = if Keyword.get(opts, :status), do: Map.merge(part, %{"annotations" => [], "logprobs" => []}), else: part
+    item = %{"type" => "message", "id" => id, "role" => "assistant", "phase" => "commentary", "content" => [part]}
+    if Keyword.get(opts, :status), do: Map.put(item, "status", "completed"), else: item
+  end
+
+  defp mailbox_item,
+    do: %{"type" => "agent_message", "author" => "/root/worker", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "synthetic update"}]}
 
   defp put_body_document(payload, document),
     do: Map.put(payload, "client_metadata", %{@metadata_header => document})

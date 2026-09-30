@@ -430,6 +430,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
       request.status == "succeeded" ->
         undelivered_completion(request, scope, now)
 
+      native_http_tool_scope?(request, scope) and request.last_error_code == "client_disconnected" ->
+        admit_native_http_mailbox_continuation(request, scope, now)
+
       native_http_tool_scope?(request, scope) ->
         admit_native_http_partial_tool(request, scope, now)
 
@@ -501,6 +504,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     else
       {:error, :retry_expired} = error -> error
       _unsafe -> {:error, :terminal_predecessor}
+    end
+  end
+
+  # An ordinary native HTTP request the client left after the Pooler delivered
+  # completed items, resent with exactly those items and newly addressed
+  # mailbox input appended (`ClientRetry.verified_mailbox_continuation?/5`).
+  # Only an opener shares its claim with such a resend; a tool continuation's
+  # grown resend derives another payload-scoped claim and never reaches here.
+  defp admit_native_http_mailbox_continuation(request, scope, now) do
+    cond do
+      request.status != "failed" -> {:error, :terminal_predecessor}
+      live_turn?(request.id) or live_attempt?(request.id) -> {:error, :active_predecessor}
+      entitlement?(request.id) -> {:error, :entitlement_present}
+      not mailbox_continuation?(request, scope) -> {:error, :terminal_predecessor}
+      true -> with :ok <- validate_retry_window(request, request.id |> lock_turn() |> lock_final_attempt(request.id), now, scope), do: {:ok, :mailbox_continuation}
     end
   end
 
@@ -673,15 +691,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     end
   end
 
-  defp mailbox_continuation?(request, %{resume_claim?: true} = scope) do
+  # A resume after compaction, or an ordinary turn opener under its bare claim.
+  defp mailbox_continuation?(request, %{resume_claim?: true} = scope), do: verified_mailbox_continuation?(request, scope)
+  defp mailbox_continuation?(request, %{semantic_claim?: true} = scope), do: verified_mailbox_continuation?(request, scope)
+  defp mailbox_continuation?(_request, _scope), do: false
+
+  defp verified_mailbox_continuation?(request, scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
     match?(%CodexTurn{codex_session_id: session_id} when session_id == scope.codex_session_id, turn) and
       ClientRetry.verified_mailbox_continuation?(turn, request, attempt, Map.get(scope, :native_client_retry_witness), Map.get(scope, :mailbox_successor))
   end
-
-  defp mailbox_continuation?(_request, _scope), do: false
 
   defp completed_item_resend?(%Request{} = request, scope) do
     turn = lock_turn(request.id)

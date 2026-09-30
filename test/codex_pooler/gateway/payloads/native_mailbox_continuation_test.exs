@@ -114,6 +114,64 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuationTest do
     assert witness(append(payload(), too_many_runs)).mailbox == []
   end
 
+  describe "ordinary turn opener" do
+    test "a cut opener qualifies on either transport, including re-serialized HTTP items" do
+      original = opener()
+      output = commentary("first")
+      candidate = append(original, [output, mailbox("first")])
+      witness = witness(candidate)
+
+      assert length(witness.mailbox) == 1
+
+      for transport <- ["websocket", "http_sse"] do
+        {turn, request, attempt} = opener_predecessor(original, output, output, transport)
+        assert ClientRetry.verified_mailbox_continuation?(turn, request, attempt, witness, nil)
+      end
+
+      delivered = Map.merge(output, %{"status" => "completed", "content" => [%{"type" => "output_text", "text" => "synthetic commentary first", "annotations" => [], "logprobs" => []}]})
+      {turn, request, attempt} = opener_predecessor(original, delivered, delivered, "http_sse")
+      assert ClientRetry.verified_mailbox_continuation?(turn, request, attempt, witness, nil)
+
+      without_items = update_in(attempt.response_metadata["native_http_resume_progress"], &Map.delete(&1, "item_digests"))
+      refute ClientRetry.verified_mailbox_continuation?(turn, request, without_items, witness, nil)
+    end
+
+    test "final answers, extra delivered items and tool continuations stay fenced" do
+      original = opener()
+      output = commentary("first")
+      candidate = append(original, [output, mailbox("first")])
+      {turn, request, extra} = opener_predecessor(original, output, reasoning("extra"), "http_sse")
+      refute ClientRetry.verified_mailbox_continuation?(turn, request, extra, witness(candidate), nil)
+
+      assert witness(append(original, [Map.put(output, "phase", "final_answer"), mailbox("first")])).mailbox == []
+
+      call = [%{"type" => "function_call", "call_id" => "call_1", "name" => "shell", "arguments" => "{}"}, %{"type" => "function_call_output", "call_id" => "call_1", "output" => "ok"}]
+      assert witness(append(original, call ++ [output, mailbox("first")])).mailbox == []
+    end
+
+    test "mail addressed before the latest user message is never a boundary" do
+      earlier = append(opener(), [reasoning("old"), mailbox("old"), %{"type" => "message", "role" => "user", "content" => "next turn"}])
+      assert witness(earlier).mailbox == []
+      assert length(witness(append(earlier, [commentary("first"), mailbox("first")])).mailbox) == 1
+    end
+  end
+
+  # `delivered` is what the stream pushed; `more` is delivered after it, so
+  # `output == more` records exactly one item.
+  defp opener_predecessor(payload, delivered, more, transport) do
+    {turn, request, attempt} = predecessor(payload, delivered, transport)
+    {:ok, digest} = WebsocketTurnIdentity.replay_claim_digest(@semantic, payload)
+    items = if more == delivered, do: [delivered], else: [delivered, more]
+    digests = Enum.map(items, fn item -> item |> WebsocketTurnIdentity.completed_item_digest() |> elem(1) end)
+    progress = items |> Enum.reduce(ClientRetry.new_native_http_progress(), &ClientRetry.observe_native_http_output_item(&2, &1)) |> ClientRetry.native_http_progress_metadata()
+    metadata = if transport == "http_sse", do: %{"native_http_claim_arm" => "opening"}, else: %{}
+    attempt = put_in(attempt.response_metadata["native_http_resume_progress"], Map.put(progress, "item_digests", digests))
+    {turn, %{request | native_client_retry_digest: digest, request_metadata: metadata}, attempt}
+  end
+
+  defp opener, do: Map.update!(payload(), "input", &Enum.take(&1, 1))
+  defp commentary(id), do: %{"type" => "message", "id" => "msg_" <> id, "role" => "assistant", "phase" => "commentary", "content" => [%{"type" => "output_text", "text" => "synthetic commentary " <> id}]}
+
   defp witness(payload, options \\ options()) do
     ClientRetry.original_witness!(:crypto.hash(:sha256, "current request"), 1)
     |> NativeMailboxContinuation.attach(@semantic, payload, options)

@@ -755,6 +755,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         replay_claim_digest: attr(opts, :replay_claim_digest),
         replay_claim_alternates: witness_alternates(attr(opts, :native_client_retry_witness)),
         grown_resend_candidates: witness_grown(attr(opts, :native_client_retry_witness)),
+        mailbox_witness: attr(opts, :native_client_retry_witness),
         anchor_present?: retry_anchor(opts, retry_policy),
         after_locks: attr(opts, :after_locks),
         owner_idle_validated?: attr(opts, :owner_idle_validated?) == true,

@@ -938,7 +938,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          semantic_turn_digest: semantic_turn_digest,
          replay_claim_digest: replay_claim_digest,
          replay_claim_alternates: witness_alternates(prepared.native_client_retry_witness),
-         grown_resend_candidates: witness_grown(prepared.native_client_retry_witness)
+         grown_resend_candidates: witness_grown(prepared.native_client_retry_witness),
+         mailbox_witness: prepared.native_client_retry_witness
        }}
     end
   end
@@ -1216,6 +1217,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       replay_claim_digest: context.replay_claim_digest,
       replay_claim_alternates: context.replay_claim_alternates,
       grown_resend_candidates: Map.get(context, :grown_resend_candidates, []),
+      mailbox_witness: Map.get(context, :mailbox_witness),
       anchor_present?: not is_nil(context.request_options.continuity.previous_response_id)
     }
 

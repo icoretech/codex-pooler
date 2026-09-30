@@ -704,6 +704,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
              :reclaim_owner_validated?,
              reclaim_owner_valid?(session, owner_lease, input, db_now)
            ),
+         input <- Map.put(input, :mailbox_continuation?, mailbox_continuation_resend?(turn, request, attempt, input)),
          :ok <- validate_no_turn_claim_successor(request, input),
          {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input),
          {:ok, tail} <- lock_chain_tail(session, request, %{request: request, turn: turn, attempt: attempt}, lineage, input, db_now) do
@@ -822,7 +823,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
          true <- request.correlation_id == claim,
          true <- chain_node_scoped?(request, original, turn, session, input),
          nil <- lock_entitlement(request.id),
-         :ok <- validate_retry_lifecycle(turn, request, attempt),
+         :ok <- validate_chain_node_lifecycle(turn, request, attempt, next_id, input),
          :ok <- validate_chain_tail_window(next_id, request, attempt, db_now) do
       if next_id,
         do: walk_chain(session, original, request, next_id, input, db_now, depth + 1),
@@ -832,6 +833,20 @@ defmodule CodexPooler.Accounting.ClientRetry do
       _refused -> {:error, :successor_claimed}
     end
   end
+
+  # A resend proved as a mailbox continuation of the original holds every later
+  # node to the same proof: the node stopped after the output this resend
+  # carries, and ended at its own successor's witness or at this resend. No
+  # other retry shape may stand in for it.
+  defp validate_chain_node_lifecycle(turn, request, attempt, next_id, %{mailbox_continuation?: true, mailbox_witness: %OriginalWitness{} = witness}) do
+    successor = if next_id, do: lock_request!(next_id)
+
+    if verified_mailbox_continuation?(turn, request, attempt, witness, successor),
+      do: :ok,
+      else: {:error, :terminal_predecessor}
+  end
+
+  defp validate_chain_node_lifecycle(turn, request, attempt, _next_id, _input), do: validate_retry_lifecycle(turn, request, attempt)
 
   # Only the node the resend chains onto is held to the retry window.
   defp validate_chain_tail_window(nil, request, attempt, db_now),
@@ -1522,7 +1537,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
          :ok <- maybe_validate_owner_idle(session, owner_lease, input, db_now),
          :ok <- validate_policy_lineage(lineage, request.id, input),
          :ok <- validate_no_entitlement(entitlement),
-         :ok <- validate_retry_lifecycle_for_policy(turn, request, attempt, input, witness_match) do
+         :ok <- validate_retry_lifecycle_for_policy(turn, request, attempt, input, put_mailbox_successor(witness_match, lineage, request.id)) do
       window =
         if input[:retry_policy] == :native_compaction,
           do: @compaction_retry_window_seconds,
@@ -1564,9 +1579,11 @@ defmodule CodexPooler.Accounting.ClientRetry do
         {:ok, :exact}
 
       {:error, :payload_mismatch} = mismatch ->
-        case grown_witness_candidates(request, Map.get(input, :grown_resend_candidates, [])) do
-          [] -> mismatch
-          candidates -> {:ok, {:grown, candidates}}
+        case {grown_witness_candidates(request, Map.get(input, :grown_resend_candidates, [])), mailbox_witness_match(request, input)} do
+          {[], nil} -> mismatch
+          {[], mailbox} -> {:ok, mailbox}
+          {candidates, nil} -> {:ok, {:grown, candidates}}
+          {candidates, {:mailbox, witness}} -> {:ok, {:grown_or_mailbox, candidates, witness}}
         end
 
       {:error, _reason} = error ->
@@ -1574,8 +1591,52 @@ defmodule CodexPooler.Accounting.ClientRetry do
     end
   end
 
+  # A turn opener's mailbox continuation (`NativeMailboxContinuation`) reaches
+  # the owner's preflight under the bare turn claim the opener holds: one of its
+  # candidates must start at the witness the opener stored. Its trailing mail
+  # can also read as grown-resend items, so both proofs are tried.
+  defp mailbox_witness_match(request, %{mailbox_witness: %OriginalWitness{mailbox: [_first | _rest] = candidates} = witness}) do
+    if original_witness_eligible?(request) and Enum.any?(candidates, &mailbox_witness_matches?(request, &1.prefix)),
+      do: {:mailbox, witness}
+  end
+
+  defp mailbox_witness_match(_request, _input), do: nil
+
+  # A mailbox edge must end at the successor already chained onto the request.
+  defp put_mailbox_successor({:mailbox, witness}, lineage, request_id), do: {:mailbox, witness, chained_successor(lineage, request_id)}
+
+  defp put_mailbox_successor({:grown_or_mailbox, candidates, witness}, lineage, request_id),
+    do: {:grown_or_mailbox, candidates, witness, chained_successor(lineage, request_id)}
+
+  defp put_mailbox_successor(witness_match, _lineage, _request_id), do: witness_match
+
+  defp chained_successor(%RequestClientRetryLink{predecessor_request_id: request_id, successor_request_id: successor_id}, request_id), do: lock_request!(successor_id)
+  defp chained_successor(_lineage, _request_id), do: nil
+
+  # Whether the resend is admitted as a mailbox continuation rather than a
+  # grown resend, which holds the rest of the chain to the same proof.
+  defp mailbox_continuation_resend?(turn, request, attempt, input) do
+    case validate_policy_witness(request, input) do
+      {:ok, {:mailbox, _witness}} -> true
+      {:ok, {:grown_or_mailbox, candidates, _witness}} -> not verified_completed_item_resend?(turn, request, attempt, candidates)
+      _other -> false
+    end
+  end
+
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{retry_policy: :native_compaction}, _witness_match) do
     with {:ok, _shape} <- compaction_resend_shape(turn, request, attempt), do: :ok
+  end
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input, {:mailbox, witness, successor}) do
+    if verified_mailbox_continuation?(turn, request, attempt, witness, successor),
+      do: :ok,
+      else: {:error, :terminal_predecessor}
+  end
+
+  defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input, {:grown_or_mailbox, candidates, witness, successor}) do
+    if verified_completed_item_resend?(turn, request, attempt, candidates) or verified_mailbox_continuation?(turn, request, attempt, witness, successor),
+      do: :ok,
+      else: {:error, :terminal_predecessor}
   end
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input, {:grown, candidates}) do
@@ -2414,7 +2475,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   def verified_completed_item_resend?(_turn, _request, _attempt, _candidates), do: false
 
-  @doc "Verifies a stopped resume followed by its delivered output and new addressed mailbox input. Candidates are transient, never persisted."
+  @doc "Verifies a stopped resume or turn opener followed by its delivered output and new addressed mailbox input. Candidates are transient, never persisted."
   @spec verified_mailbox_continuation?(term(), term(), term(), term(), term()) :: boolean()
   def verified_mailbox_continuation?(
         %CodexTurn{status: "interrupted", error_code: "client_disconnected", final_attempt_id: attempt_id, completed_at: %DateTime{}} = turn,
@@ -2440,6 +2501,12 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp mailbox_witness_matches?(%Request{transport: "http_sse", native_client_retry_digest: digest, request_metadata: %{"native_http_claim_arm" => "post_compaction_resume"}}, %{http: expected}),
     do: secure_compare(digest, expected)
 
+  # A native HTTP opener stores the digest of its body as the websocket frame
+  # it mirrors (`NativeHttpTurnIdentity`, findings#232 row 232-231), so its
+  # prefix is named by the websocket witnesses.
+  defp mailbox_witness_matches?(%Request{transport: "http_sse", native_client_retry_digest: digest, request_metadata: %{"native_http_claim_arm" => "opening"}}, %{websocket: candidates}),
+    do: Enum.any?(candidates, &secure_compare(digest, &1))
+
   defp mailbox_witness_matches?(_request, _witnesses), do: false
 
   defp mailbox_ending_matches?(nil, %{current?: current?}), do: current?
@@ -2458,12 +2525,22 @@ defmodule CodexPooler.Accounting.ClientRetry do
        ),
        do: items == digests and verified_completed_item_resend?(turn, request, attempt, [candidate])
 
+  # A client-side call the stream opened and never completed is outside what
+  # the progress digest proves, so it keeps the fence on the exact and
+  # delivered-items proofs whatever came before it. The upstream bounded
+  # prefix receipt keeps its own rule.
   defp mailbox_output_matches?(%CodexTurn{transport_kind: "http_sse"}, %Request{transport: "http_sse"}, %Attempt{transport: "http_sse", response_metadata: metadata}, %{http_progress: candidates, items: items}) do
-    Enum.any?(candidates, &exact_http_mailbox_progress?(metadata["native_http_resume_progress"], &1)) or
+    recorded = metadata["native_http_resume_progress"]
+
+    (not open_tool_call?(recorded) and
+       (Enum.any?(candidates, &exact_http_mailbox_progress?(recorded, &1)) or delivered_item_digests?(recorded, items))) or
       http_mailbox_prefix?(metadata["native_http_mailbox_prefix"], items)
   end
 
   defp mailbox_output_matches?(_turn, _request, _attempt, _candidate), do: false
+
+  defp open_tool_call?(%{"open_tool_call" => _open}), do: true
+  defp open_tool_call?(_recorded), do: false
 
   defp exact_http_mailbox_progress?(recorded, expected) do
     case {recorded, expected} do
@@ -2478,6 +2555,17 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   defp http_mailbox_prefix?(_recorded, _items), do: false
+
+  # The released client resends a delivered item re-serialized by its own
+  # model, without fields the exact digest binds (findings#232 row 232-232).
+  # Every delivered item must then carry the normalized completed-item
+  # identity the resend names, in order, and nothing may have been delivered
+  # past them.
+  defp delivered_item_digests?(%{"version" => 1, "output_item_done_count" => count, "item_digests" => [_first | _rest] = digests}, [_item | _more] = items)
+       when count == length(items) and length(digests) == count,
+       do: digests |> Enum.zip(items) |> Enum.all?(fn {digest, item} -> secure_compare(digest, item) end)
+
+  defp delivered_item_digests?(_recorded, _items), do: false
 
   defp latest_attempt?(%Attempt{} = attempt) do
     not Repo.exists?(

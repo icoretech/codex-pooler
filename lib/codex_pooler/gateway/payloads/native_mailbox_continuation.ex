@@ -14,6 +14,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
   # a separate key would bypass old pods during a rolling deployment. Instead
   # seal the candidate prefix, delivered output and mailbox boundary for the
   # accounting chain to verify against its actual predecessor and successor.
+  #
+  # The same cut happens inside an ordinary turn: the opener streams a
+  # commentary or reasoning item, mailbox input arrives, and the client resends
+  # the turn under its bare `codex-turn:` claim with that item and the mail
+  # appended. Only the opener shares its claim with such a resend; a tool
+  # continuation is named by its whole payload, so its grown resend never meets
+  # its predecessor. Mail addressed before the latest user message belongs to
+  # an earlier turn and is never a candidate boundary.
   @spec attach(OriginalWitness.t(), <<_::256>>, map(), RequestOptions.t()) :: OriginalWitness.t()
   def attach(%OriginalWitness{} = witness, semantic_key, payload, options) do
     %{witness | mailbox: candidates(semantic_key, payload, options)}
@@ -22,7 +30,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
   defp candidates(semantic_key, %{"input" => input} = payload, options) when is_list(input) do
     with nil <- Map.get(payload, "previous_response_id"),
          "turn" <- NativeTurnContinuation.request_kind(payload, options),
-         {:post_compaction_resume, _anchor} <- NativeTurnContinuation.turn_role(payload),
+         true <- mailbox_role?(NativeTurnContinuation.turn_role(payload)),
          %{"agent_name" => agent} when is_binary(agent) and byte_size(agent) in 1..256 <-
            payload |> NativeTurnContinuation.canonical_document(options) |> NativeTurnContinuation.canonical_metadata_map(),
          runs when length(runs) <= @max_mailbox_runs <- mailbox_runs(input, agent) do
@@ -33,6 +41,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
   end
 
   defp candidates(_semantic_key, _payload, _options), do: []
+
+  defp mailbox_role?({:post_compaction_resume, _anchor}), do: true
+  defp mailbox_role?(:opening), do: true
+  defp mailbox_role?(_role), do: false
 
   defp build_candidates(semantic_key, payload, input, runs) do
     ranges = Enum.flat_map(runs, &candidate_ranges(input, &1))
@@ -70,7 +82,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
     |> Enum.with_index()
     |> Enum.reduce([], fn {item, index}, runs ->
       cond do
-        compaction?(item) -> []
+        compaction?(item) or user_message?(item) -> []
         incoming?(item, agent) -> extend_run(runs, index)
         true -> runs
       end
@@ -80,6 +92,9 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
 
   defp compaction?(%{"type" => type}), do: type in ["compaction", "compaction_summary", "context_compaction"]
   defp compaction?(_item), do: false
+
+  defp user_message?(%{"role" => "user"} = item), do: Map.get(item, "type", "message") == "message"
+  defp user_message?(_item), do: false
 
   defp extend_run([{start, index} | rest], index), do: [{start, index + 1} | rest]
   defp extend_run(runs, index), do: [{index, index + 1} | runs]

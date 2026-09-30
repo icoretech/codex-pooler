@@ -170,6 +170,21 @@ defmodule CodexPooler.Accounting.MetadataTest do
                  "native_http_resume_progress" => %{}
                }
       end
+
+      # An ordinary turn adds the open-call flag and bounded item identities.
+      extended = Map.merge(progress, %{"open_tool_call" => true, "item_digests" => ["0123456789ab", "ba9876543210"]})
+      assert Accounting.sanitize_metadata(%{"native_http_resume_progress" => extended}) == %{"native_http_resume_progress" => extended}
+
+      for invalid <- [
+            Map.put(progress, "open_tool_call", false),
+            Map.put(progress, "item_digests", []),
+            Map.put(progress, "item_digests", ["0123456789AB"]),
+            Map.put(progress, "item_digests", ["private item text"]),
+            Map.put(progress, "item_digests", List.duplicate("0123456789ab", 9)),
+            Map.merge(Map.delete(progress, "digest"), %{"open_tool_call" => true})
+          ] do
+        assert Accounting.sanitize_metadata(%{"native_http_resume_progress" => invalid}) == %{"native_http_resume_progress" => %{}}
+      end
     end
 
     # findings#206 rows 206-403 and 206-412: the turn progress a native request
