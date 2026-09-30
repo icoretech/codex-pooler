@@ -397,6 +397,60 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInlineCompactionMailboxTest do
     end
   end
 
+  # S6: a sub-agent's turn compacted remotely (`/compact`), then its resume cut
+  # right after a reasoning item by mail from a peer sub-agent. The provider's
+  # reasoning item carries fields the client's closed reasoning model drops, so
+  # the client resends the item without them (production incident 2026-09-28
+  # 14:35, HTTP SSE after a restart cut the websockets).
+  @tag slow: "drives a remote compaction, a cut resume and a peer mailbox resend through the HTTP route"
+  test "S6 HTTP: a resume cut after reasoning by a peer's mail after a remote compaction is served as one successor" do
+    thread = unique("thread-s6")
+    turn = unique("turn-s6")
+    users = Enum.map(1..4, &user_message("request #{&1} of this thread"))
+    history = users ++ [%{"type" => "compaction", "encrypted_content" => "synthetic-pivot"}]
+    done = %{"type" => "response.output_item.done", "output_index" => 0, "item" => provider_reasoning_item("rs_s6_reasoning")}
+    call = %{"type" => "custom_tool_call", "id" => "ctc_s6", "status" => "in_progress", "call_id" => "call_s6", "name" => "apply_patch", "input" => ""}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_s6_compact", "object" => "response.compaction", "output" => history, "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}}),
+          FakeUpstream.sse_stream([{"response.output_item.done", done}, {"response.output_item.added", %{"type" => "response.output_item.added", "output_index" => 1, "item" => call}}], done: false),
+          completed_sse("resp_s6_successor", [final_answer("done")]),
+          # Serves the identical resend of the successor.
+          completed_sse("resp_s6_wrong", [])
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = unique("codex-session-s6")
+
+    compaction = setup |> http_body(users ++ [%{"type" => "compaction_trigger"}], metadata(thread, turn, 1, {:remote_compaction, "mid_turn"}, "/root/worker_a")) |> Map.delete("stream")
+    assert json_response(post_http(setup, session, compaction, @endpoint_path <> "/compact"), 200)["object"] == "response.compaction"
+
+    resume = http_body(setup, history, metadata(thread, turn, 2, :turn, "/root/worker_a"))
+    cut_http_turn!(setup, session, resume, [{"response.output_item.done", done}])
+
+    mail = mailbox_item("/root/worker_b", 1, "/root/worker_a")
+    resend = append(resume, [reasoning_item("rs_s6_reasoning"), mail])
+
+    # A resend without the delivered item stays a duplicate.
+    assert_http_duplicate!(setup, upstream, session, append(resume, [mail]))
+
+    assert response(post_http(setup, session, resend), 200) =~ "response.completed"
+
+    assert [compaction_row, cut_row, successor] = settled_pool_requests!(setup, 3)
+    assert {claim_prefix(cut_row), cut_row.request_metadata["native_http_claim_arm"]} == {"codex-resume:", "post_compaction_resume"}
+    assert {cut_row.status, cut_row.last_error_code} == {"failed", "client_disconnected"}
+    assert {successor.status, claim_prefix(successor)} == {"succeeded", "codex-request-retry:"}
+    assert_edge!(cut_row, successor)
+    assert %Attempt{response_metadata: %{"native_http_resume_progress" => %{"output_item_done_count" => 1}}} = Repo.get_by!(Attempt, request_id: cut_row.id)
+    assert_one_settlement_each!([compaction_row, cut_row, successor])
+    assert FakeUpstream.count(upstream) == 3
+
+    assert_http_chained!(setup, upstream, session, resend, successor)
+  end
+
   # -- native HTTP -----------------------------------------------------------
 
   defp post_http(setup, session, body, path \\ @endpoint_path) do
@@ -617,6 +671,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInlineCompactionMailboxTest do
         document
         |> Map.put("request_kind", "compaction")
         |> Map.put("compaction", %{"trigger" => "auto", "reason" => "context_limit", "implementation" => "responses", "phase" => phase, "strategy" => "memento"})
+
+      {:remote_compaction, phase} ->
+        document
+        |> Map.put("request_kind", "compaction")
+        |> Map.put("compaction", %{"trigger" => "auto", "reason" => "context_limit", "implementation" => "responses_compact", "phase" => phase})
     end
     |> CodexPooler.JSON.encode!()
   end
@@ -627,6 +686,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexInlineCompactionMailboxTest do
   defp function_call(call_id), do: %{"type" => "function_call", "call_id" => call_id, "name" => "shell", "arguments" => "{}"}
   defp function_output(call_id), do: %{"type" => "function_call_output", "call_id" => call_id, "output" => "ok"}
   defp reasoning_item(id), do: %{"type" => "reasoning", "id" => id, "summary" => [], "encrypted_content" => "synthetic-reasoning"}
+
+  # A reasoning item as the provider may push it: fields the client's closed
+  # reasoning model drops, so it resends `reasoning_item/1`.
+  defp provider_reasoning_item(id), do: Map.merge(reasoning_item(id), %{"status" => "completed", "content" => [], "provider_field" => "synthetic"})
 
   # As the provider streams it (`status: true`), or as the client resends it:
   # without the item's `status` and the part's `annotations` and `logprobs`.

@@ -150,6 +150,43 @@ defmodule CodexPooler.Accounting.MailboxDeliveredPredecessorTest do
     assert counts(fixture) == %{requests: 2, attempts: 1, turns: 1, links: 1, settlements: 1}
   end
 
+  # The provider may add fields to a pushed reasoning item or to its summary
+  # parts that the client's closed reasoning model drops: the resend of a
+  # delivered reasoning item then carried none of them. Binding them left every
+  # resend of a resume cut for mail from a peer refused `terminal_predecessor`.
+  for {predecessor_transport, successor_transport} <- [{"http_sse", "http_sse"}, {"websocket", "websocket"}, {"websocket", "http_sse"}] do
+    test "a #{predecessor_transport} resume cut after a reasoning item with provider-only fields admits the #{successor_transport} peer mail continuation once", %{fixture: fixture} do
+      original = admit!(fixture, fixture.payload, unquote(predecessor_transport))
+      cut!(fixture, original, provider_reasoning("first"), open_tool_call: unquote(predecessor_transport) == "http_sse")
+
+      client = client_reasoning("first")
+      candidate = append(fixture.payload, [client, peer_mailbox(1)])
+      assert_refused!(fixture, append(fixture.payload, [Map.put(client, "encrypted_content", "synthetic-changed"), peer_mailbox(1)]), :terminal_predecessor)
+      assert_http_refused!(fixture, append(fixture.payload, [Map.put(client, "id", "rs_changed"), peer_mailbox(1)]), :terminal_predecessor)
+
+      successor = admit!(fixture, candidate, unquote(successor_transport))
+      assert_edge!(original, successor)
+      assert_http_refused!(fixture, candidate, :active_predecessor)
+      assert_refused!(fixture, candidate, :active_predecessor)
+      assert counts(fixture) == %{requests: 2, attempts: 1, turns: 1, links: 1, settlements: 1}
+    end
+  end
+
+  test "a reasoning item's identity binds only the fields the client resends" do
+    {:ok, client} = WebsocketTurnIdentity.completed_item_digest(client_reasoning("first"))
+    assert {:ok, ^client} = WebsocketTurnIdentity.completed_item_digest(provider_reasoning("first"))
+
+    for changed <- [%{"id" => "rs_changed"}, %{"encrypted_content" => "synthetic-changed"}, %{"summary" => [%{"type" => "summary_text", "text" => "changed"}]}] do
+      refute {:ok, client} == WebsocketTurnIdentity.completed_item_digest(Map.merge(client_reasoning("first"), changed))
+    end
+
+    {:ok, with_text} = WebsocketTurnIdentity.completed_item_digest(Map.put(client_reasoning("first"), "content", [%{"type" => "reasoning_text", "text" => "synthetic"}]))
+    assert {:ok, ^with_text} = WebsocketTurnIdentity.completed_item_digest(Map.put(provider_reasoning("first"), "content", [%{"type" => "reasoning_text", "text" => "synthetic", "provider_part_field" => 1}]))
+
+    message = Map.put(commentary("first"), "provider_field", "synthetic")
+    refute WebsocketTurnIdentity.completed_item_digest(message) == WebsocketTurnIdentity.completed_item_digest(commentary("first"))
+  end
+
   test "reasoning text stays bound in a completed item's identity" do
     item = reasoning("first")
     {:ok, bare} = WebsocketTurnIdentity.completed_item_digest(item)
@@ -311,6 +348,16 @@ defmodule CodexPooler.Accounting.MailboxDeliveredPredecessorTest do
   defp append(payload, items), do: Map.update!(payload, "input", &(&1 ++ items))
   defp reasoning(id), do: %{"type" => "reasoning", "id" => "rs_" <> id, "summary" => [], "encrypted_content" => "synthetic-reasoning-" <> id}
   defp commentary(id), do: %{"type" => "message", "role" => "assistant", "phase" => "commentary", "id" => "msg_" <> id, "content" => [%{"type" => "output_text", "text" => "synthetic note " <> id}]}
+  defp client_reasoning(id), do: %{reasoning(id) | "summary" => [%{"type" => "summary_text", "text" => "synthetic summary " <> id}]}
+
+  defp provider_reasoning(id) do
+    client_reasoning(id)
+    |> Map.merge(%{"status" => "completed", "content" => [], "provider_field" => "synthetic"})
+    |> Map.update!("summary", fn parts -> Enum.map(parts, &Map.put(&1, "provider_part_field", "synthetic")) end)
+  end
+
+  defp peer_mailbox(id), do: %{mailbox(id) | "author" => "/root/worker_b"}
+
   defp mailbox(id), do: %{"type" => "agent_message", "author" => "/root", "recipient" => "/root/worker", "content" => [%{"type" => "input_text", "text" => "synthetic update #{id}"}]}
 
   defp db_now do

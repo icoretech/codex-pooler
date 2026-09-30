@@ -589,6 +589,10 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   when no part of it is `reasoning_text`). The identity drops
   exactly those and binds everything else under a keyed digest, the house
   12-character shape, so a receipt can carry it without carrying content.
+  A reasoning item is the exception: the client's model of it is closed
+  (`id`, `summary`, `content`, `encrypted_content`), so any other field the
+  provider adds never comes back, and its identity binds only those fields.
+  The provider-sealed `encrypted_content` and the item `id` still name it.
   `:error` for anything that is not an item map.
   """
   @spec completed_item_digest(term()) :: {:ok, String.t()} | :error
@@ -695,6 +699,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
   defp completed_item_identity(item) do
     item
+    |> kept_reasoning_fields()
     |> Map.drop(["status", "internal_chat_message_metadata_passthrough"])
     |> without_unkept_reasoning_content()
     |> Map.new(fn
@@ -703,6 +708,25 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end)
     |> without_nulls()
   end
+
+  # The client deserializes a reasoning item into a closed model and resends
+  # only its fields, each summary or content part as `type` and `text`: a field
+  # the provider adds to the pushed item or to one of its parts never comes
+  # back, so binding it made every resend of a delivered reasoning item
+  # unrecognizable.
+  defp kept_reasoning_fields(%{"type" => "reasoning"} = item) do
+    item
+    |> Map.take(["type", "id", "summary", "content", "encrypted_content"])
+    |> Map.new(fn
+      {key, parts} when key in ["summary", "content"] and is_list(parts) -> {key, Enum.map(parts, &kept_reasoning_part/1)}
+      field -> field
+    end)
+  end
+
+  defp kept_reasoning_fields(item), do: item
+
+  defp kept_reasoning_part(%{} = part), do: Map.take(part, ["type", "text"])
+  defp kept_reasoning_part(part), do: part
 
   # The client keeps a reasoning item's `content` only when it holds a
   # `reasoning_text` part and writes nothing otherwise, so a provider item
