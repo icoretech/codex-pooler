@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.4...codex-pooler-v0.10.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **dev:** refresh locked website dependencies before startup ([4ffb5c0](https://github.com/icoretech/codex-pooler/commit/4ffb5c0b81208d9e42b0dac43009384cf458c367))
+* **gateway:** admit interrupted HTTP mailbox output prefixes ([01e24fe](https://github.com/icoretech/codex-pooler/commit/01e24fe8bf0707ad2a9f57f6deb11028878de8b8))
+* **ingress:** explain recovery from request body limits ([7fe452e](https://github.com/icoretech/codex-pooler/commit/7fe452eed00c31ab49bb528d02465424c007584f))
+* **ingress:** raise default JSON body budgets to 128 and 256 MiB ([353c08b](https://github.com/icoretech/codex-pooler/commit/353c08b2ffa0e753fae362064625bbb1ea7fa6b6))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.10.2 ([#472](https://github.com/icoretech/codex-pooler/issues/472)) ([5165383](https://github.com/icoretech/codex-pooler/commit/5165383c30f5ab9c52388b66ade73113536e1ba6))
+
 ## [0.10.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.3...codex-pooler-v0.10.4) (2026-09-30)
 
 
