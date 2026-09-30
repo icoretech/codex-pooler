@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.5...codex-pooler-v0.10.6) (2026-09-30)
+
+
+### Bug Fixes
+
+* **gateway:** fence HTTP mailbox successors before predecessor settlement ([27baf8a](https://github.com/icoretech/codex-pooler/commit/27baf8ab7b436380039906d70ba13d2d00703c05))
+
 ## [0.10.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.4...codex-pooler-v0.10.5) (2026-09-30)
 
 
