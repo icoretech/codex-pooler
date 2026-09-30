@@ -28,7 +28,7 @@ config :codex_pooler,
 
 config :codex_pooler, CodexPooler.Upstreams.CodexClientIdentity,
   # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  default_client_version: "0.159.1"
+  default_client_version: "0.159.2"
 
 jobs_schedule = [
   %{
