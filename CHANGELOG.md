@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.10.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.7...codex-pooler-v0.10.8) (2026-10-03)
+
+
+### Features
+
+* **gateway:** log native mailbox refusal proof stages ([cc34606](https://github.com/icoretech/codex-pooler/commit/cc346062c46f262326575e998a3a2c8534da6a30))
+* **gateway:** preserve trusted session expiry provenance ([d662e46](https://github.com/icoretech/codex-pooler/commit/d662e46f3b7d4277dfe5e1fd196e3e96c3a3e4c9))
+* **gateway:** route usable provider credits before banked resets ([8f45545](https://github.com/icoretech/codex-pooler/commit/8f45545aae0e6bfd46712c41afc83f4384774b82))
+
+
+### Bug Fixes
+
+* **accounting:** authorize verified native content-filter retries ([3287258](https://github.com/icoretech/codex-pooler/commit/3287258646efdb7da97bc4a90b24bf38525d4346))
+* **accounting:** distinguish admission discovery and auth projection types ([8e09665](https://github.com/icoretech/codex-pooler/commit/8e09665d90ec22c3a59f4b94edc4388212a973be))
+* **accounting:** preserve transactions for ordinary reservations ([be2ee7e](https://github.com/icoretech/codex-pooler/commit/be2ee7e226f5a73e8a7a628b4eb29c4a9b5ce5a7))
+* **compat:** preserve named function tool choices in Lite mode ([bced495](https://github.com/icoretech/codex-pooler/commit/bced49555cf8bc819eedfd47390da5bc21def8fc))
+* **deps:** update pending dependencies and refresh lockfiles ([3fa5043](https://github.com/icoretech/codex-pooler/commit/3fa504318c6b88e5383a71dd4ed69830641187ba))
+* **gateway:** match serialized commentary replay identities ([9f2882c](https://github.com/icoretech/codex-pooler/commit/9f2882c674225cac92aa85d7dd6f10d527031f8b))
+* **gateway:** prelock complete mailbox session chains ([e92bcb4](https://github.com/icoretech/codex-pooler/commit/e92bcb48bbc14a24f53b40cbf4c24aeb7651002b))
+* **gateway:** preserve fatal quota errors from HTTP compaction ([c2e279e](https://github.com/icoretech/codex-pooler/commit/c2e279ef43da97a23193960410720a9bc375085a))
+* **gateway:** preserve SQL-only cleanup transaction semantics ([bf1e28f](https://github.com/icoretech/codex-pooler/commit/bf1e28f83787815d92c6129ac043a1d620dcf00e))
+* **gateway:** resume verified mailboxes after session lease expiry ([eac53bb](https://github.com/icoretech/codex-pooler/commit/eac53bbf39eace9ed12d2345982780a96c50c57e))
+* **gateway:** retire successful processed control tasks ([e70d859](https://github.com/icoretech/codex-pooler/commit/e70d8592cb11c563c548b230064573b9fd4aeca5))
+* **gateway:** stop expired owner generations before settlement ([170e5fd](https://github.com/icoretech/codex-pooler/commit/170e5fdcdb853e3bc4cb49eda5e909a6c3bed39c))
+* **quota:** preserve idle primary window display across refresh ([5ec1e04](https://github.com/icoretech/codex-pooler/commit/5ec1e04b0547ea62a270f4c9d278fb438c67ea74))
+* **test:** fence peer lease checks and isolate background writers ([8369c6a](https://github.com/icoretech/codex-pooler/commit/8369c6a01cbb68c197a7595b3671b0995bb960a9))
+
+
+### Tests
+
+* **catalog:** preserve current-client representation boundaries ([7bbd8cd](https://github.com/icoretech/codex-pooler/commit/7bbd8cd4802c77060b49da646f39b14606ca008f))
+* **dev:** provide persisted capacity in websocket fixtures ([869e0de](https://github.com/icoretech/codex-pooler/commit/869e0de3a2edeca40077ef62f59e146cb9ea59a3))
+* **gateway:** cover native continuation transport and session contracts ([a535a83](https://github.com/icoretech/codex-pooler/commit/a535a83a20ba274b9bf3401cde395275df872330))
+* **gateway:** hold alias row until lock wait is observed ([313418e](https://github.com/icoretech/codex-pooler/commit/313418eddcc0142823581f585b13746d9689e592))
+* **gateway:** persist accounting scope for transport fixtures ([ba22b5f](https://github.com/icoretech/codex-pooler/commit/ba22b5f8849fd51198410f317e2379f2aa61a3a0))
+* **gateway:** verify mailbox lease lifecycle across nodes ([6c09102](https://github.com/icoretech/codex-pooler/commit/6c091025cc632461fe104e7517c8ed3989cf7da8))
+* **jobs:** monitor deletion deadline tracer atomically ([68182a4](https://github.com/icoretech/codex-pooler/commit/68182a431f56993f1244ee72b95f075c97ad7603))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency openai/codex to v0.160.0 ([#488](https://github.com/icoretech/codex-pooler/issues/488)) ([8075e23](https://github.com/icoretech/codex-pooler/commit/8075e235a347f8724680984c29afdb0647dfec54))
+* **deps:** update ghcr.io/icoretech/codex-docker docker tag to v0.160.0 ([#489](https://github.com/icoretech/codex-pooler/issues/489)) ([1eee7c1](https://github.com/icoretech/codex-pooler/commit/1eee7c1959a81864e6332280afd32666f0f6d325))
+
 ## [0.10.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.6...codex-pooler-v0.10.7) (2026-09-30)
 
 
