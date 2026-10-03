@@ -37,7 +37,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
-  alias CodexPooler.Gateway.Persistence.CodexTurn
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Repo
 
@@ -720,11 +720,50 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
-    match?(%CodexTurn{codex_session_id: session_id} when session_id == scope.codex_session_id, turn) and
+    mailbox_session_matches?(turn, scope) and
       ClientRetry.verified_mailbox_continuation?(turn, request, attempt, Map.get(scope, :native_client_retry_witness), Map.get(scope, :mailbox_successor))
   end
 
   defp mailbox_continuation?(_request, _scope), do: false
+
+  # A mailbox continuation stays inside the predecessor's codex session. The
+  # one exception is a session the start path already closed because its
+  # owner lease lapsed while the client was waiting for its subagents: the
+  # resend then lands in the replacement session of the same pool, API key
+  # and session key, opened after the close. The mailbox witness, ending and
+  # output checks still apply in full.
+  defp mailbox_session_matches?(%CodexTurn{codex_session_id: session_id}, %{codex_session_id: session_id}) when is_binary(session_id),
+    do: true
+
+  defp mailbox_session_matches?(%CodexTurn{codex_session_id: previous_id}, %{codex_session_id: current_id, pool_id: pool_id, api_key_id: api_key_id})
+       when is_binary(previous_id) and is_binary(current_id) do
+    sessions = Repo.all(from(session in CodexSession, where: session.id in ^[previous_id, current_id]))
+
+    with %CodexSession{} = previous <- Enum.find(sessions, &(&1.id == previous_id)),
+         %CodexSession{} = current <- Enum.find(sessions, &(&1.id == current_id)) do
+      replacement_session?(previous, current, pool_id, api_key_id)
+    else
+      _missing -> false
+    end
+  end
+
+  defp mailbox_session_matches?(_turn, _scope), do: false
+
+  defp replacement_session?(
+         %CodexSession{closed_at: %DateTime{} = closed_at} = previous,
+         %CodexSession{created_at: %DateTime{} = created_at} = current,
+         pool_id,
+         api_key_id
+       ) do
+    previous.status == CodexSession.closed_status() and CodexSession.reconnectable?(current) and
+      previous.pool_id == pool_id and current.pool_id == pool_id and
+      previous.api_key_id == api_key_id and current.api_key_id == api_key_id and
+      is_binary(previous.session_key) and is_binary(current.session_key) and
+      String.downcase(previous.session_key) == String.downcase(current.session_key) and
+      DateTime.compare(created_at, closed_at) != :lt
+  end
+
+  defp replacement_session?(_previous, _current, _pool_id, _api_key_id), do: false
 
   defp admit_mailbox_predecessor(request, scope, now) do
     cond do
