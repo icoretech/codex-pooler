@@ -81,6 +81,8 @@ defmodule CodexPooler.Gateway.Payloads.ToolSchemaLowering do
 
   defp lower_schema_key(acc, "enum", value) when is_list(value), do: Map.put(acc, "enum", value)
 
+  defp lower_schema_key(acc, "encrypted", true), do: Map.put(acc, "encrypted", true)
+
   defp lower_schema_key(acc, "required", value) when is_list(value) do
     if Enum.all?(value, &is_binary/1), do: Map.put(acc, "required", value), else: acc
   end
