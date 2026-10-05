@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.10.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.8...codex-pooler-v0.10.9) (2026-10-05)
+
+
+### Bug Fixes
+
+* **gateway:** add correlated public Responses tool completion validation ([9d1350b](https://github.com/icoretech/codex-pooler/commit/9d1350b4d9f5c8ab2b299e5aa2f6efe3f14e93c6))
+* **gateway:** admit preserved metadata in sequence state types ([67dd635](https://github.com/icoretech/codex-pooler/commit/67dd635876db5206f19dcceb8b69261d2fcd97bb))
+* **gateway:** guard accepted legacy Responses success terminals ([956ffbd](https://github.com/icoretech/codex-pooler/commit/956ffbdd32697a45a0b1bc06739189737095fc87))
+* **gateway:** preserve native continuation and distinct tool outputs ([83e9371](https://github.com/icoretech/codex-pooler/commit/83e937151b3b6b1af4fe5b8049eba350f1594a42))
+* **gateway:** reject incomplete public Responses tools on SSE ([aa6e82e](https://github.com/icoretech/codex-pooler/commit/aa6e82edb3169bc6f94fdd6b7a0e8a04ac0bcd2f))
+* **gateway:** reject incomplete public Responses tools on websocket ([dafb4f9](https://github.com/icoretech/codex-pooler/commit/dafb4f9c787cd5540d86d66c09195bbef95af391))
+* **gateway:** repair malformed public failed envelopes before owner consumption ([78cc7cb](https://github.com/icoretech/codex-pooler/commit/78cc7cb4787dfa792a162d944a6f3a30ca9a7865))
+* **release:** resume image publication after delayed Drone success ([e665d93](https://github.com/icoretech/codex-pooler/commit/e665d93d1bfde738bdad907e460a8a5640c1df58))
+
+
+### Tests
+
+* **gateway:** await task completion before websocket fixture close ([343e5ff](https://github.com/icoretech/codex-pooler/commit/343e5ff8bc3eb350def21403b1fb4887b93d128f))
+
+
+### Miscellaneous Chores
+
+* **ci:** integrate the Ubuntu runner pin ([cc978d2](https://github.com/icoretech/codex-pooler/commit/cc978d25841112b64ed49b688da92382b2506ab5))
+* **deps:** lock file maintenance ([04acf37](https://github.com/icoretech/codex-pooler/commit/04acf370d34a79e211e3fd5c1b20d1fdf9186c5a))
+* **release:** integrate delayed publication recovery ([0de99b3](https://github.com/icoretech/codex-pooler/commit/0de99b330812279cb139b3a87cd30a7b18e9baaf))
+
 ## [0.10.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.7...codex-pooler-v0.10.8) (2026-10-04)
 
 
