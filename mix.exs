@@ -76,7 +76,7 @@ defmodule CodexPooler.MixProject do
       {:heroicons, github: "tailwindlabs/heroicons", tag: "v2.2.0", sparse: "optimized", app: false, compile: false, depth: 1},
       {:swoosh, "== 1.28.1"},
       {:gen_smtp, "== 1.3.0"},
-      {:req, "== 0.7.4"},
+      {:req, "== 0.7.5"},
       # Finch 0.24 closes an HTTP/1 connection after a request or response error before pooling it.
       # Mint 1.11 no longer closes one after a receive timeout, so an older Finch would pool it with the
       # abandoned response still pending and write the next request behind it. Keep Finch >= 0.24 with Mint >= 1.11.
