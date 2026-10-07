@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.0...codex-pooler-v0.11.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **upstreams:** end a workspace denial with its window instead of keeping the account out of routing ([bd8a932](https://github.com/icoretech/codex-pooler/commit/bd8a932d868375bb638436b1e010e9732e19be46))
+
+
+### Tests
+
+* **gateway:** pin the strict done status of public Responses tool completion ([7980090](https://github.com/icoretech/codex-pooler/commit/7980090e2c600ab1dd8401b9d3de9561c639f96e))
+* hoist generated test bodies into private functions and start test-fast partitions with a larger binary virtual heap ([be8030d](https://github.com/icoretech/codex-pooler/commit/be8030daece9b409a7b73ef1eabcae89697f36ec))
+* **v1:** print the tool-integrity evidence lines only when test diagnostics are on ([fb6e4f0](https://github.com/icoretech/codex-pooler/commit/fb6e4f02e99e2a2f88aea775affcdc156c2b62d2))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.10.4 ([#490](https://github.com/icoretech/codex-pooler/issues/490)) ([f3ca95f](https://github.com/icoretech/codex-pooler/commit/f3ca95ff928f53913322df243c9e5b0606509ab1))
+
 ## [0.11.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.10.9...codex-pooler-v0.11.0) (2026-10-07)
 
 
