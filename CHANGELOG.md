@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.11.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.4...codex-pooler-v0.11.5) (2026-10-08)
+
+
+### Features
+
+* **admin:** redesign the alert incidents table ([a881bfa](https://github.com/icoretech/codex-pooler/commit/a881bfa20a0e59386fcc6d8904de2d42b055b9a2))
+
+
+### Bug Fixes
+
+* **onboarding:** match generated Codex config to the client guide ([8c1d7b3](https://github.com/icoretech/codex-pooler/commit/8c1d7b3d71a98f9cb00bd90ded7a1983ab0e7e74))
+
+
+### Performance Improvements
+
+* **accounting:** batch retry admission session reads ([4e0a215](https://github.com/icoretech/codex-pooler/commit/4e0a2155d86c5045ddd5f9bfc3424522b01117cd))
+
+
+### Tests
+
+* **gateway:** bound continuation chain request deadlines ([3e3d42a](https://github.com/icoretech/codex-pooler/commit/3e3d42a934dc065fa39f63b242179ceca980cd3f))
+
+
+### Miscellaneous Chores
+
+* **deps:** qualify Codex 0.162.0 catalog decoding ([d6c8c21](https://github.com/icoretech/codex-pooler/commit/d6c8c21ce086b5ee0ef07251872713f5279d42d8))
+
 ## [0.11.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.3...codex-pooler-v0.11.4) (2026-10-08)
 
 
