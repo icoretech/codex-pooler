@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.11.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.1...codex-pooler-v0.11.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* **deps:** update dependency astro to v7.3.6 ([65834d8](https://github.com/icoretech/codex-pooler/commit/65834d80905792d0c9df4306dba1b7284a3f30e5))
+* **deps:** update req to 0.7.5 ([8d2b4d1](https://github.com/icoretech/codex-pooler/commit/8d2b4d1de483ba0e235581f8b3bde4d771e232a8))
+* **gateway:** check the Codex catalog for decodable entries through 0.161.0 ([4873353](https://github.com/icoretech/codex-pooler/commit/4873353632cda80c3ecdb8fc827e486480b1933a))
+* **gateway:** support reasoning updates and native live steering ([100f1de](https://github.com/icoretech/codex-pooler/commit/100f1de976020c64d52716dd62d96c685651d742))
+* **upstreams:** keep a newer workspace denial when the earlier witness of it ends ([ab85417](https://github.com/icoretech/codex-pooler/commit/ab854174222c1c203665972d31ea5987d9dd253a))
+* **upstreams:** let a witness cover a newer denial only up to its own reset, and retain a replaced current denial ([8796c1d](https://github.com/icoretech/codex-pooler/commit/8796c1d300216c123d8829cb18d8378c88a91896))
+* **v1:** declare the Decisions API unsupported ([1258281](https://github.com/icoretech/codex-pooler/commit/12582810843692b052b69edf75b7ad34eb064426))
+
+
+### Tests
+
+* **dev:** drive Socket preparation before native drain barriers ([e5b12c5](https://github.com/icoretech/codex-pooler/commit/e5b12c5952884ac045bcd5641537efb4f8623ce6))
+
+
+### Miscellaneous Chores
+
+* **deps:** classify Renovate version updates as maintenance ([3022187](https://github.com/icoretech/codex-pooler/commit/30221872c89d328f3e6ce7030a7e099f9bfeda71))
+* **deps:** update dependency openai/codex to v0.161.0 ([d2ab577](https://github.com/icoretech/codex-pooler/commit/d2ab577b37d8f2bdd7d63dc9dd1bb027654122f3))
+* **deps:** update ghcr.io/icoretech/codex-docker docker tag to v0.161.0 ([#501](https://github.com/icoretech/codex-pooler/issues/501)) ([cc9de51](https://github.com/icoretech/codex-pooler/commit/cc9de51c42a2fe7b29c5f6a5bee15d5d29711efe))
+
 ## [0.11.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.0...codex-pooler-v0.11.1) (2026-10-07)
 
 
