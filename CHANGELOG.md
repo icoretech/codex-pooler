@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.3...codex-pooler-v0.11.4) (2026-10-08)
+
+
+### Bug Fixes
+
+* **pricing:** import the gpt-6.1-sol ultrafast rates ([790b76b](https://github.com/icoretech/codex-pooler/commit/790b76b501164158dc3f8dc3c4a084b2e6cefdae))
+
+
+### Tests
+
+* **observatory:** allow the forty outcome rows in the query-plan contract ([1480627](https://github.com/icoretech/codex-pooler/commit/1480627bde31068a07401d82019063e6a914ae18))
+
 ## [0.11.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.2...codex-pooler-v0.11.3) (2026-10-08)
 
 
