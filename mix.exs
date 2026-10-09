@@ -74,7 +74,7 @@ defmodule CodexPooler.MixProject do
       {:esbuild, "== 0.10.0", runtime: Mix.env() == :dev},
       {:tailwind, "== 0.5.1", runtime: Mix.env() == :dev},
       {:heroicons, github: "tailwindlabs/heroicons", tag: "v2.2.0", sparse: "optimized", app: false, compile: false, depth: 1},
-      {:swoosh, "== 1.28.1"},
+      {:swoosh, "== 1.29.0"},
       {:gen_smtp, "== 1.3.0"},
       {:req, "== 0.7.5"},
       # Finch 0.24 closes an HTTP/1 connection after a request or response error before pooling it.
