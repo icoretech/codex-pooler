@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.1...codex-pooler-v0.12.2) (2026-10-10)
+
+
+### Tests
+
+* align lock and closed-socket observations with real boundaries ([1b196f3](https://github.com/icoretech/codex-pooler/commit/1b196f3b4789e87878ba17bf004b21afff3c044f))
+* distinguish deadline phases and remote watcher detachment ([be81745](https://github.com/icoretech/codex-pooler/commit/be81745e22f7b983d71d2f0de26fc56a69059d28))
+* distinguish delayed webhook timeout connection phases ([65a2adb](https://github.com/icoretech/codex-pooler/commit/65a2adb944f7bc47c79cbdf5462dd7b3ecb04c67))
+* verify destination closure when CONNECT forwarding ends ([5dfbf5e](https://github.com/icoretech/codex-pooler/commit/5dfbf5ea505b7a23e2e55b367490b14d6ca723f6))
+
 ## [0.12.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.0...codex-pooler-v0.12.1) (2026-10-10)
 
 
