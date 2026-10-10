@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.2...codex-pooler-v0.12.3) (2026-10-10)
+
+
+### Features
+
+* **observatory:** show readable recent-hour request outcomes ([4e4d137](https://github.com/icoretech/codex-pooler/commit/4e4d1378057b45e98c9f4f0797d10d09e2cf2460))
+
+
+### Bug Fixes
+
+* **accounting:** distinguish server idle cutoffs from client cancellations ([28c6cae](https://github.com/icoretech/codex-pooler/commit/28c6caefaf7a6612a65affd2bb8a98df3a0e8787))
+* **admin:** preserve request-log pages during live refresh ([0c310c1](https://github.com/icoretech/codex-pooler/commit/0c310c1e569b64b9c0740814e5a12b6d2ac79437))
+* **admin:** recover valid job pages after filtering and refresh ([e4c1433](https://github.com/icoretech/codex-pooler/commit/e4c143347a94a36a64e939ab5b48eb96251b4ba7))
+* **admin:** remove table status bands and empty ledger tracks ([1cbfcd4](https://github.com/icoretech/codex-pooler/commit/1cbfcd4f67fd1f446bd2375f222483d642303ef0))
+* **admin:** size worker cards to available content width ([8bb9667](https://github.com/icoretech/codex-pooler/commit/8bb96677f65518001b835a5ff5e4c2d8e778a705))
+* **quotas:** report unknown usage receipts with reducer precedence ([188f2a7](https://github.com/icoretech/codex-pooler/commit/188f2a7df600309ed61cac7e107ee0fe3e70a604))
+* **quotas:** retain specific credit authority refusal reasons ([84bff98](https://github.com/icoretech/codex-pooler/commit/84bff9835eb8c35625a20ebed35cc846fc16eca3))
+* **routing:** persist session preference exclusion diagnostics ([2fe5614](https://github.com/icoretech/codex-pooler/commit/2fe5614c3f314089d1d48049987dca0d8ed0cd6c))
+* **websocket:** admit user progress after a compaction-first resume ([04f3a19](https://github.com/icoretech/codex-pooler/commit/04f3a19aa6d5941da1d7633254ba54519e041a74))
+
+
+### Tests
+
+* **websocket:** await committed idle timeout attribution ([5adc55e](https://github.com/icoretech/codex-pooler/commit/5adc55e5dee3736bea43de98729e147974a2e916))
+
+
+### Miscellaneous Chores
+
+* **dev:** add additive Observatory request previews ([8ddba12](https://github.com/icoretech/codex-pooler/commit/8ddba12bc78787a3e7c98ecc2129f3465d88150c))
+
 ## [0.12.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.1...codex-pooler-v0.12.2) (2026-10-10)
 
 
