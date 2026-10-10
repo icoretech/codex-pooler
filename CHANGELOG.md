@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.12.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.0...codex-pooler-v0.12.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **auth:** apply the full TOTP recovery transaction timeout ([5649258](https://github.com/icoretech/codex-pooler/commit/564925825e06b195a4ccddf55c6fd6a114c521dc))
+* **auth:** recover legacy TOTP encryption offline ([a0f6f89](https://github.com/icoretech/codex-pooler/commit/a0f6f898b2f8f643120ae9baccb3a9d76a568df2))
+* **self-host:** check TOTP upgrade compatibility on the old runtime ([76614a2](https://github.com/icoretech/codex-pooler/commit/76614a2f250b21c4b1b7e940499fa68614a5a5c1))
+* **websocket:** retain steering peer close authority across notifications ([7e0d116](https://github.com/icoretech/codex-pooler/commit/7e0d1166d6c98102fc63f20d0808a399d7d7e9ad))
+
+
+### Tests
+
+* await owner visibility after provider pacing ([db94fea](https://github.com/icoretech/codex-pooler/commit/db94feac1b7cdce4c44a75672f2630d65457608f))
+* bind stale projection holds to the test owner lifetime ([e5e35d9](https://github.com/icoretech/codex-pooler/commit/e5e35d9b0ae1b2573c7c276ae29ded7c9da837c5))
+* include upgrade preflight files in release archive fixtures ([857b89e](https://github.com/icoretech/codex-pooler/commit/857b89e0b4c524b2938daffe5eb36fc6d6ac5182))
+* report bounded peer state when retirement closure is missing ([5448d23](https://github.com/icoretech/codex-pooler/commit/5448d235620f81629bcf59414c4abd7c9d550250))
+* verify endpoint cleanup by owned socket identity ([3315b8e](https://github.com/icoretech/codex-pooler/commit/3315b8ed4b25ede37e729c387d344ca9d66d341b))
+
+
+### Miscellaneous Chores
+
+* **deps:** qualify Codex 0.162.1 catalog decoding ([8765f44](https://github.com/icoretech/codex-pooler/commit/8765f448bda143490e6663bc026be96d9d0fcf85))
+* **deps:** use Codex 0.162.1 in the smoke container ([addf316](https://github.com/icoretech/codex-pooler/commit/addf316934d09c29b98470a9fecd95f46594cdaf))
+
 ## [0.12.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.11.5...codex-pooler-v0.12.0) (2026-10-10)
 
 
