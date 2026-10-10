@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.3...codex-pooler-v0.12.4) (2026-10-10)
+
+
+### Bug Fixes
+
+* **quotas:** preserve credit authority across positive balance drift ([73c965c](https://github.com/icoretech/codex-pooler/commit/73c965cd5e9dc4d56c83f24bf39b88cd1482968f))
+
+
+### Tests
+
+* **runtime:** verify owned listener resources after shutdown ([cd9f776](https://github.com/icoretech/codex-pooler/commit/cd9f776e51b5b44da35b7d36b85aa9794d50079a))
+
+
+### Miscellaneous Chores
+
+* **ci:** reject reusable-port cleanup assertions before compilation ([a42e9ad](https://github.com/icoretech/codex-pooler/commit/a42e9adfebf0de9e78c59b53846268040e636d0c))
+
 ## [0.12.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.2...codex-pooler-v0.12.3) (2026-10-10)
 
 
