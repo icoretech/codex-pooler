@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.12.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.3...codex-pooler-v0.12.4) (2026-10-11)
+
+
+### Bug Fixes
+
+* **gateway:** classify downstream socket closures as interruptions ([1e9c951](https://github.com/icoretech/codex-pooler/commit/1e9c95179e66bb1e438b32436f18ea614a68fb9c))
+* **quotas:** preserve credit authority across positive balance drift ([73c965c](https://github.com/icoretech/codex-pooler/commit/73c965cd5e9dc4d56c83f24bf39b88cd1482968f))
+* **websocket:** preserve active compaction during owner drain ([9c4d130](https://github.com/icoretech/codex-pooler/commit/9c4d130aecf84302356aa8986cc76bb57dff8f65))
+* **websocket:** wait for compact delivery before owner retirement ([5b6923b](https://github.com/icoretech/codex-pooler/commit/5b6923b9040ba15d20047b8f1da37bc62795a495))
+
+
+### Tests
+
+* **gateway:** isolate planner index statistics in rollback fixtures ([1eb130e](https://github.com/icoretech/codex-pooler/commit/1eb130e7d53c27d0c5727c9c0f9bea980127b3bd))
+* **runtime:** update leaked-owner drain status fixtures ([35c4c08](https://github.com/icoretech/codex-pooler/commit/35c4c08d414904e07c4b26ac41ac80411ead9565))
+* **runtime:** verify owned listener resources after shutdown ([cd9f776](https://github.com/icoretech/codex-pooler/commit/cd9f776e51b5b44da35b7d36b85aa9794d50079a))
+* **websocket:** cover compaction drain lifecycle boundaries ([d4d9da1](https://github.com/icoretech/codex-pooler/commit/d4d9da18880e766411a92b3ec5d1cc03e550c5fd))
+
+
+### Miscellaneous Chores
+
+* **ci:** reject reusable-port cleanup assertions before compilation ([a42e9ad](https://github.com/icoretech/codex-pooler/commit/a42e9adfebf0de9e78c59b53846268040e636d0c))
+* **deps:** update dependency apexcharts to v7.9.1 ([a7292c8](https://github.com/icoretech/codex-pooler/commit/a7292c8d0d70306a7424bc9bfadf97407813123f))
+* **deps:** update dependency yaml-language-server to v1.25.0 ([#525](https://github.com/icoretech/codex-pooler/issues/525)) ([2190a9b](https://github.com/icoretech/codex-pooler/commit/2190a9b7af85f331e27e4ed8ee95b39d0b211687))
+
 ## [0.12.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.2...codex-pooler-v0.12.3) (2026-10-10)
 
 
