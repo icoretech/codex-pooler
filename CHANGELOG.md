@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.4...codex-pooler-v0.12.5) (2026-10-11)
+
+
+### Tests
+
+* **runtime:** await steering reply before checking execution retirement ([216178f](https://github.com/icoretech/codex-pooler/commit/216178f2143b68a5bac124a7d29308aafc86aaeb))
+
 ## [0.12.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.3...codex-pooler-v0.12.4) (2026-10-11)
 
 
