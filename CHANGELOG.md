@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.13.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.0...codex-pooler-v0.13.1) (2026-10-14)
+
+
+### Features
+
+* **observability:** attribute lifecycle authorization query work ([73f8429](https://github.com/icoretech/codex-pooler/commit/73f84291f4bfa6ebc9208906c7ee050f069982af))
+* **observatory:** label activities and display model and client identities ([34fa69f](https://github.com/icoretech/codex-pooler/commit/34fa69fc944782eb7c5a239b77ec22a6d5b71426))
+* **observatory:** stick outcome headers below toolbar and compact tablet rows ([a362985](https://github.com/icoretech/codex-pooler/commit/a36298555c8e6cc098c57c0091ab8c785c6e2711))
+* support Home Assistant OpenAI integration ([edb2b61](https://github.com/icoretech/codex-pooler/commit/edb2b6164e701f51d728c46997515439e951492e))
+
+
+### Bug Fixes
+
+* **admin:** shorten default reasoning label in request logs ([c851c34](https://github.com/icoretech/codex-pooler/commit/c851c34b32d1770c3aeef1468c92bb993011fbc1))
+* **gateway:** bound native steering lane context retention ([23773a0](https://github.com/icoretech/codex-pooler/commit/23773a08c2b1bac5275152167a90ea2ca6232f32))
+* **gateway:** isolate owner recovery failures during runtime cleanup ([92713d1](https://github.com/icoretech/codex-pooler/commit/92713d12174cb7ff1561cf0ca83f159202562963))
+* **observability:** correct lifecycle attribution units ([bb5ac36](https://github.com/icoretech/codex-pooler/commit/bb5ac362bc9e96e1e4023cbecf58951fef3ec2b1))
+* **observability:** sanitize lifecycle authorization event tags ([a7a02fc](https://github.com/icoretech/codex-pooler/commit/a7a02fc6dc20f12a27ceb33076f9fe87a7500661))
+* **observatory:** simplify token cache percentage labels ([2d4af5b](https://github.com/icoretech/codex-pooler/commit/2d4af5b9bdaffb76e79ae8ab3cdfcf4aa31429b5))
+* **websocket:** align lifecycle authorization result handling ([9f9fea3](https://github.com/icoretech/codex-pooler/commit/9f9fea3fb52a17d0f7732ce125fdefb8adc87779))
+* **websocket:** bound local lifecycle authorization queries ([222e494](https://github.com/icoretech/codex-pooler/commit/222e494fd59d723678b198358d1871585905e619))
+* **websocket:** use bounded lifecycle authorization for forwarded frames ([8b1e2a3](https://github.com/icoretech/codex-pooler/commit/8b1e2a37b5d8fc4915d6365a1a9f4c729b37c36b))
+
+
+### Tests
+
+* **accounting:** measure websocket lifecycle authorization query budget ([33cc3de](https://github.com/icoretech/codex-pooler/commit/33cc3ded4db3237351c41887457bcb371db3c9c2))
+* **observatory:** include display name in principal isolation contract ([443fbf0](https://github.com/icoretech/codex-pooler/commit/443fbf07fcfdd99b159449db9eab21bcc7a9f2f4))
+* **replay:** use resilient unavailable repo fixture ([970a0b5](https://github.com/icoretech/codex-pooler/commit/970a0b524d6a82f1a9dfab438d0263dc15b7f35c))
+* **websocket:** await receipt persistence before closing log capture ([762b7c2](https://github.com/icoretech/codex-pooler/commit/762b7c2179ec8a36892f73d55ab73b2b42837028))
+* **websocket:** lock lifecycle query reduction against replay races ([a8e73b1](https://github.com/icoretech/codex-pooler/commit/a8e73b196c793e25f3d28d8d18992e6485d508dd))
+* **websocket:** wait for retained successor terminal ([a6f3a99](https://github.com/icoretech/codex-pooler/commit/a6f3a99c09d7b4bb54897626afd19ef2401a5fbc))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.13.5 ([#531](https://github.com/icoretech/codex-pooler/issues/531)) ([fd3bef2](https://github.com/icoretech/codex-pooler/commit/fd3bef2b2f46b0c376a5d1ac0238cd4011b7bf0b))
+
 ## [0.13.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.12.5...codex-pooler-v0.13.0) (2026-10-13)
 
 
