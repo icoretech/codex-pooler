@@ -96,7 +96,7 @@ defmodule CodexPooler.MixProject do
       {:dns_cluster, "== 0.3.1"},
       {:websock, "== 0.5.3"},
       {:websock_adapter, "== 0.6.0"},
-      {:bandit, "== 1.12.5"}
+      {:bandit, "== 1.13.0"}
     ]
   end
 
