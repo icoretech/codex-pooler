@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.1...codex-pooler-v0.13.2) (2026-10-16)
+
+
+### Miscellaneous Chores
+
+* **deps:** refresh website lockfile and retain opentype 1 ([b52ce61](https://github.com/icoretech/codex-pooler/commit/b52ce610196b4cef6a0f5fee16f50bc40a3dc8a2))
+* **deps:** update apexcharts to 8.2.0 ([e16d830](https://github.com/icoretech/codex-pooler/commit/e16d83046ce6f5e1f6363eec6cf762c4a9af0cc6))
+* **deps:** update Codex identity and catalog support to 0.163.0 ([19e8cbb](https://github.com/icoretech/codex-pooler/commit/19e8cbb28e70ba340c7bd70100e6a7bc434f661e))
+* **deps:** update Codex smoke image to 0.163.0 ([#520](https://github.com/icoretech/codex-pooler/issues/520)) ([4b8f955](https://github.com/icoretech/codex-pooler/commit/4b8f955ae55ee5f4c012183f64d8c45a94a0bdfc))
+* **deps:** update dependency daisyui to v5.7.50 ([#532](https://github.com/icoretech/codex-pooler/issues/532)) ([dd3dc2f](https://github.com/icoretech/codex-pooler/commit/dd3dc2f30863b59c6500e115c1beab15e0be9da9))
+* **deps:** update helm release codex-pooler to v0.14.0 ([#534](https://github.com/icoretech/codex-pooler/issues/534)) ([bf8d79d](https://github.com/icoretech/codex-pooler/commit/bf8d79dcfcd752a1e2616cd6209c475eed7f068d))
+* **deps:** update Node asset build image to 26.12.0 ([#519](https://github.com/icoretech/codex-pooler/issues/519)) ([5fc8371](https://github.com/icoretech/codex-pooler/commit/5fc837165050d8d4519aae3cf27728091446fe8f))
+* **deps:** update oban to 2.24.2 ([b68ba34](https://github.com/icoretech/codex-pooler/commit/b68ba34634c7a84df15b83089f83f307a45d87fd))
+* **deps:** use ubuntu 26.04 GitHub runners ([fb2731a](https://github.com/icoretech/codex-pooler/commit/fb2731ac7b4bb09e997eafd011adc7cfbfd8a361))
+* **models:** use gpt-6.1-sol in development fixtures ([0b8fa16](https://github.com/icoretech/codex-pooler/commit/0b8fa162d07e3aff6b0ab606ea8eacb44d5dd185))
+
 ## [0.13.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.0...codex-pooler-v0.13.1) (2026-10-14)
 
 
