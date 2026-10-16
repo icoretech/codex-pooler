@@ -4,7 +4,7 @@ local registry = 'registry.icorete.ch';
 local image = 'registry.icorete.ch/icoretech/codex-pooler';
 local buildxPlugin = 'plugins/buildx:1.3.23';
 local tagImage = 'alpine/git:latest';
-local helmVersion = 'v4.3.0';
+local helmVersion = 'v4.3.1';
 
 [
   {
