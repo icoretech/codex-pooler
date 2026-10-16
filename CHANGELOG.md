@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.3...codex-pooler-v0.13.4) (2026-10-16)
+
+
+### Miscellaneous Chores
+
+* **deps:** update apexcharts to 8.3.1 ([9013386](https://github.com/icoretech/codex-pooler/commit/9013386b69331a73e9af0ff18e2acb75d689bb61))
+* **deps:** update astro to 7.4.0 and docs node to 26.12.0 ([d1e3bbf](https://github.com/icoretech/codex-pooler/commit/d1e3bbfea6449422efb0955cdc71c0c316d28dc0))
+* **deps:** update bandit to 1.13.1 ([a7a94e4](https://github.com/icoretech/codex-pooler/commit/a7a94e40f20198d84a6e75668bcb723f4f8f65ad))
+* **deps:** update CI helm to 4.3.1 ([67ac215](https://github.com/icoretech/codex-pooler/commit/67ac21538b913aa8403a0e2b0e9e94e03eb861f3))
+
 ## [0.13.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.2...codex-pooler-v0.13.3) (2026-10-16)
 
 
