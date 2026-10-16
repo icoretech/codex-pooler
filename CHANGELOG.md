@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.13.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.2...codex-pooler-v0.13.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **images:** reject malformed Responses image results ([f57986a](https://github.com/icoretech/codex-pooler/commit/f57986a8fe23e40f0ba9c71cf10f38fe33cce070))
+* **upstreams:** resume deletion with adaptive history batches ([0485aff](https://github.com/icoretech/codex-pooler/commit/0485aff3b085181a2838ff0f20106c682d93b6db))
+* **upstreams:** show deletion progress and refresh terminal states ([31e7dbf](https://github.com/icoretech/codex-pooler/commit/31e7dbf24301e50132bd6acd515ffe0cf7801cf1))
+
+
+### Tests
+
+* **gateway:** await steering receipts before closing log capture ([43b0707](https://github.com/icoretech/codex-pooler/commit/43b07070d2944a77ea373a72694faa148e9b60a4))
+* **websocket:** arm steering idle timeout after fixture setup ([21d0d5b](https://github.com/icoretech/codex-pooler/commit/21d0d5b5b0ab3810a75ef8c52cb15dbd27624fd3))
+* **websocket:** await retired owner exit before reconnecting ([fe59504](https://github.com/icoretech/codex-pooler/commit/fe5950457cf9f3cb82c6fc615443be9a16f5aca7))
+* **websocket:** await server initialization after connection acquisition ([7f8db97](https://github.com/icoretech/codex-pooler/commit/7f8db97c8b6b9c109b541ab348d35bc200cab999))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency apexcharts to v8.3.0 ([#538](https://github.com/icoretech/codex-pooler/issues/538)) ([31a9462](https://github.com/icoretech/codex-pooler/commit/31a94629e7d6fc0703a1f31273a9e98d7ddeff64))
+
 ## [0.13.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.1...codex-pooler-v0.13.2) (2026-10-16)
 
 
