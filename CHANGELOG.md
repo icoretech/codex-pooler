@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.5...codex-pooler-v0.13.6) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deploy:** pin Railway 0.13.5 and published template URL ([53d199c](https://github.com/icoretech/codex-pooler/commit/53d199cd2850193d249263e177edb8b774fe16c0))
+
+
+### Tests
+
+* **gateway:** await both drain pollers before advancing time ([2107be0](https://github.com/icoretech/codex-pooler/commit/2107be0c6c3566344148b72b230fe8c3c6880093))
+* **http:** arm HTTP/2 idle timeout after response readiness ([d0c4432](https://github.com/icoretech/codex-pooler/commit/d0c4432030500f0fd44c056319b2770ec1908a5b))
+
+
+### Miscellaneous Chores
+
+* **deploy:** remove unused Railway template snapshot ([e031040](https://github.com/icoretech/codex-pooler/commit/e031040a90547f8241e923bece76147928bb5946))
+* **deps:** update helm release codex-pooler to v0.14.2 ([#546](https://github.com/icoretech/codex-pooler/issues/546)) ([403d4f1](https://github.com/icoretech/codex-pooler/commit/403d4f1628f9b78e1acdc6a3d0effa27c4f0f9c4))
+
 ## [0.13.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.4...codex-pooler-v0.13.5) (2026-10-17)
 
 
