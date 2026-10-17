@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.13.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.4...codex-pooler-v0.13.5) (2026-10-17)
+
+
+### Features
+
+* **deploy:** add Railway template and deployment guide ([0ad011f](https://github.com/icoretech/codex-pooler/commit/0ad011f7264aa0d0075bc8d12157366e995ec566))
+
+
+### Bug Fixes
+
+* **admin:** handle cockpit shutdown before timer initialization ([8643b0f](https://github.com/icoretech/codex-pooler/commit/8643b0f906debabf483225b4f1f79a3434709451))
+* **admin:** identify upstreams in dialog eyebrow labels ([4b8d475](https://github.com/icoretech/codex-pooler/commit/4b8d4759c98f4a41f8f6c33319fda0eb46000e37))
+* **admin:** keep upstream actions above plan tooltips ([93503de](https://github.com/icoretech/codex-pooler/commit/93503de4f7afb11d2578c488d344e99acc73bb3e))
+* **admin:** separate rename form data from submitted params ([c5493b7](https://github.com/icoretech/codex-pooler/commit/c5493b72ba6f6ce63840d22e29be7554ce1853a4))
+* **health:** serve HTTP probes without HTTPS redirects ([ee10806](https://github.com/icoretech/codex-pooler/commit/ee108060fc3da7ee0ef3902b5ed01c9600befd1d))
+* **websocket:** preserve settlement retries when clients disconnect ([b6fc8c7](https://github.com/icoretech/codex-pooler/commit/b6fc8c795994f01e2824973a8d6ef58711ff9839))
+
+
+### Tests
+
+* isolate database fixtures and recovery observations ([f3633ba](https://github.com/icoretech/codex-pooler/commit/f3633bad4cd081a3447ec7177a50d78569e247c7))
+
+
+### Miscellaneous Chores
+
+* **deps:** update helm release codex-pooler to v0.14.1 ([091d1d0](https://github.com/icoretech/codex-pooler/commit/091d1d047bf091e813e719aa1ae3e999d93607ef))
+
 ## [0.13.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.3...codex-pooler-v0.13.4) (2026-10-16)
 
 
