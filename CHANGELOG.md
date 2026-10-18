@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.13.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.5...codex-pooler-v0.13.6) (2026-10-18)
+
+
+### Bug Fixes
+
+* **accounting:** reject reservation token storage overflow ([6a7e372](https://github.com/icoretech/codex-pooler/commit/6a7e372543ac70e70877385cac199554db19a41c))
+* **alerts:** bound incident projections after scoped filtering ([46c81cb](https://github.com/icoretech/codex-pooler/commit/46c81cbbd07303d68e4510bdf011082ce0279962))
+* **alerts:** bound SMTP delivery and persist pending receipts ([db62404](https://github.com/icoretech/codex-pooler/commit/db6240431f7e79a46c7e97910908cf0e5ac8d54b))
+* **api:** preserve chat completion token details ([0644ef0](https://github.com/icoretech/codex-pooler/commit/0644ef083413321597f27c5a1da09a4606c2509e))
+* **deploy:** pin Railway 0.13.5 and published template URL ([53d199c](https://github.com/icoretech/codex-pooler/commit/53d199cd2850193d249263e177edb8b774fe16c0))
+* **mailer:** classify SMTP capability and reply error envelopes ([3ea4095](https://github.com/icoretech/codex-pooler/commit/3ea409533f74eeda0e0ec55fd7a0efb3fba2bb17))
+* **mailer:** disable STARTTLS on implicit TLS connections ([00f07bf](https://github.com/icoretech/codex-pooler/commit/00f07bff7b2f467e6fcaab67bb7497d807787892))
+* **mcp:** preserve operator login timestamps ([40fa680](https://github.com/icoretech/codex-pooler/commit/40fa680370c0fed1c150a1f821b33e9f43a1e99c))
+* **mcp:** reject non-post methods before admission and body reads ([264fec6](https://github.com/icoretech/codex-pooler/commit/264fec643d9af7929502c3d849e53259b95ddab0))
+* **operators:** bind password changes to authorized dialog targets ([7205e19](https://github.com/icoretech/codex-pooler/commit/7205e19397310deab28aea1595fb802a3489ea1a))
+* **operators:** interpolate password validation errors ([acf8f05](https://github.com/icoretech/codex-pooler/commit/acf8f054af648d41ff7895617d6071fb61bac7c3))
+* **quotas:** mark countdown error resets as inferred ([14714af](https://github.com/icoretech/codex-pooler/commit/14714af07ad31de2b4a4c33cf93336f0a29f6ec8))
+* **quotas:** retain account denials on ambiguous usage refresh ([e1b3483](https://github.com/icoretech/codex-pooler/commit/e1b348376c5cdb8e9bdd63d350c0d7d1693d0b7f))
+* **routing:** rank windowless capacity after ordinary candidates ([11d658d](https://github.com/icoretech/codex-pooler/commit/11d658d9230b0e32ca523751c109398a8ebcd396))
+* **websocket:** retry visibility checks after upstream completion ([36ce3f0](https://github.com/icoretech/codex-pooler/commit/36ce3f0eb200dabaec0079f01981b1fd13688347))
+
+
+### Performance Improvements
+
+* **accounting:** fetch retry admission ancestry in one query ([7e2c3dc](https://github.com/icoretech/codex-pooler/commit/7e2c3dc4049c39ea6cbcf0ada26025370ae01a06))
+
+
+### Tests
+
+* **alerts:** exercise delivery fencing through claimed jobs ([43fbdfb](https://github.com/icoretech/codex-pooler/commit/43fbdfb581229c496f9f62af8bec7c031937acad))
+* **alerts:** start SMTP deadlines after fixture readiness ([09de445](https://github.com/icoretech/codex-pooler/commit/09de445ea12d756046d489632abcef3f069cb3f6))
+* **gateway:** await both drain pollers before advancing time ([2107be0](https://github.com/icoretech/codex-pooler/commit/2107be0c6c3566344148b72b230fe8c3c6880093))
+* **http:** arm HTTP/2 idle timeout after response readiness ([d0c4432](https://github.com/icoretech/codex-pooler/commit/d0c4432030500f0fd44c056319b2770ec1908a5b))
+* **mailer:** handle peer closure during the SMTP QUIT reply ([5ace55d](https://github.com/icoretech/codex-pooler/commit/5ace55d3de0c0554a539e2a3a29a65ac04d71be6))
+* **mcp:** assert early method responses in path classification ([cd18a21](https://github.com/icoretech/codex-pooler/commit/cd18a21578b2b2df85e8c45f2fcad1ebba50b2c4))
+* **routing:** assert capacity group ordering independently of ranks ([8799e2b](https://github.com/icoretech/codex-pooler/commit/8799e2b38f50d3f994c8b13dcf3cb0fbcfb0e3b3))
+
+
+### Miscellaneous Chores
+
+* **deploy:** remove unused Railway template snapshot ([e031040](https://github.com/icoretech/codex-pooler/commit/e031040a90547f8241e923bece76147928bb5946))
+* **deps:** update helm release codex-pooler to v0.14.2 ([#546](https://github.com/icoretech/codex-pooler/issues/546)) ([403d4f1](https://github.com/icoretech/codex-pooler/commit/403d4f1628f9b78e1acdc6a3d0effa27c4f0f9c4))
+* **deps:** update helm release codex-pooler to v0.14.4 ([c9dddba](https://github.com/icoretech/codex-pooler/commit/c9dddba52dd41a3855e10c7adebf39941a8bcd91))
+
 ## [0.13.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.4...codex-pooler-v0.13.5) (2026-10-17)
 
 
