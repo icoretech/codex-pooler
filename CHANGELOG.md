@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.7...codex-pooler-v0.13.8) (2026-10-21)
+
+
+### Tests
+
+* **websocket:** keep terminal close barriers reading pong frames ([f44e293](https://github.com/icoretech/codex-pooler/commit/f44e293eaaec0d685d3303dbcbcab5e216d009de))
+* **websocket:** match receipt classes to confirmed frames ([0904eb1](https://github.com/icoretech/codex-pooler/commit/0904eb116eac47973616348e6ed4f07234a6d333))
+
 ## [0.13.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.6...codex-pooler-v0.13.7) (2026-10-21)
 
 
