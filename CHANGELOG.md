@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.13.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.6...codex-pooler-v0.13.7) (2026-10-21)
+
+
+### Bug Fixes
+
+* **compose:** enable init for postgres containers ([562f7df](https://github.com/icoretech/codex-pooler/commit/562f7df53be346f353be2d717b91a9c6b66f5915))
+* **site:** keep content visible and pause active dashboard tours ([5b591a9](https://github.com/icoretech/codex-pooler/commit/5b591a96b431d8f13a11f569b5204f7f6ba619fe))
+* **site:** redirect legacy docs paths and validate crawl output ([93bce7a](https://github.com/icoretech/codex-pooler/commit/93bce7a86b55702f1c10366144ce512bd43a9afc))
+* **streaming:** retain observed HTTP termination causes ([0a6b0a9](https://github.com/icoretech/codex-pooler/commit/0a6b0a977cc7d6ed979827c872b7aa4de63a95b6))
+* **usage:** rank sci plans as workspace accounts ([6b28463](https://github.com/icoretech/codex-pooler/commit/6b28463a74764176bc189012c0f8f995ee7f5b35))
+* **websocket:** ping clients after their first downstream output ([4e975eb](https://github.com/icoretech/codex-pooler/commit/4e975ebb38b262f76e17d62a87ffcbf15133efe8))
+* **websocket:** retry released pre-attempt disconnects ([302806a](https://github.com/icoretech/codex-pooler/commit/302806a4ff5eb6ce5570fdd97a4c39d1839e1039))
+
+
+### Performance Improvements
+
+* **site:** cache hero route lengths and batch geometry reads ([b11e65f](https://github.com/icoretech/codex-pooler/commit/b11e65fbd3cddbe6cf9cf5b4812d853116b673f6))
+
+
+### Dependencies
+
+* refresh documentation transitive dependencies ([02b6c62](https://github.com/icoretech/codex-pooler/commit/02b6c624c3c46ee4077fe270c3deaf71cc1171d2))
+* update phoenix, esbuild, astro and sdk packages ([992e967](https://github.com/icoretech/codex-pooler/commit/992e9676e86eb44dcb57ce405fd90118de0d08f6))
+
+
+### Tests
+
+* detect indirect postgres settlement waiters ([802f300](https://github.com/icoretech/codex-pooler/commit/802f3007cede0953dbf041355ef5787752c2e4dd))
+* **webhook:** require destination EOF after relay send closure ([88698ff](https://github.com/icoretech/codex-pooler/commit/88698ff9103088501f2346e97a6133071c410b30))
+* **websocket:** cover delivery receipts and remote reconnects ([752132e](https://github.com/icoretech/codex-pooler/commit/752132e8fc5ded58570b2d1720e292938747766a))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency esbuild to v0.10.1 ([#551](https://github.com/icoretech/codex-pooler/issues/551)) ([7503df9](https://github.com/icoretech/codex-pooler/commit/7503df9906023f036076aa241575068b7c1392be))
+* **deps:** update helm release codex-pooler to v0.14.5 ([173bab5](https://github.com/icoretech/codex-pooler/commit/173bab5073dba7d245f944ec3d1bf2a821126a6b))
+
 ## [0.13.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.5...codex-pooler-v0.13.6) (2026-10-18)
 
 
