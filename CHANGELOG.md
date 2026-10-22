@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.13.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.8...codex-pooler-v0.13.9) (2026-10-22)
+
+
+### Bug Fixes
+
+* **admin:** hold automatic async updates while paused ([1d83228](https://github.com/icoretech/codex-pooler/commit/1d832280e3ae8bc6681e2ff93a8c5773a3ea0c18))
+* **admin:** refresh pool chart accessible descriptions ([c92aedf](https://github.com/icoretech/codex-pooler/commit/c92aedfe410906d03787c8d4feb14be2bbea780c))
+* **alerts:** guard incident transitions with persisted state ([7303d3b](https://github.com/icoretech/codex-pooler/commit/7303d3b77ef5d6de9558c1a802f7f8266ca38a7a))
+* **files:** classify unavailable upstream credentials as service errors ([0c2bbc6](https://github.com/icoretech/codex-pooler/commit/0c2bbc64b054b3020a60828a4113a1c6973d9ec1))
+* **files:** retain sanitized routing on failed file requests ([a85ee60](https://github.com/icoretech/codex-pooler/commit/a85ee6021f518f8aec739e781f08092490b525be))
+* **images:** bound aggregate edit uploads before encoding ([d803484](https://github.com/icoretech/codex-pooler/commit/d8034843d8773cbfa4706960c62a581695eb576b))
+* **metrics:** accept Prometheus text scrape requests ([1fea123](https://github.com/icoretech/codex-pooler/commit/1fea1232960dfb2d00f5266d08b474b797bc42e4))
+* **pricing:** preserve unavailable cached input rates ([93d0b83](https://github.com/icoretech/codex-pooler/commit/93d0b8336bbaa8f06df6890cb49451fdd0bfd9df))
+* **replay:** permit reservation foreign-key locks during consumption ([1ac941b](https://github.com/icoretech/codex-pooler/commit/1ac941b65338168a8457229626b70b58eb6d26e9))
+* **settings:** remove the inactive file cleanup interval ([fe575c4](https://github.com/icoretech/codex-pooler/commit/fe575c472e4833ea6262bd53c063f0d72ce59b93))
+* **stats:** bucket one-hour pool traffic every five minutes ([7aa891b](https://github.com/icoretech/codex-pooler/commit/7aa891b414015e07495a9b9c2405c435eb884b8d))
+* **stats:** group one-hour dashboards into five-minute buckets ([d40b534](https://github.com/icoretech/codex-pooler/commit/d40b5340703dc6c16958c9c9e96035d1a93df7b1))
+* **stats:** retain partial-hour buckets in pool traffic charts ([ad62676](https://github.com/icoretech/codex-pooler/commit/ad6267650b8e900d6db485d5f07a428a4312e87b))
+* **upstreams:** bound usage recovery to issued probe cohorts ([c7a93a2](https://github.com/icoretech/codex-pooler/commit/c7a93a28b42385d5a0fcd60468155555810b8ce3))
+* **upstreams:** fence usage updates after terminal token rejection ([26af216](https://github.com/icoretech/codex-pooler/commit/26af2167e6da69cd193dd9afd19d6878de939821))
+* **websocket:** retire aborted public turns after owner cleanup ([4f03ae9](https://github.com/icoretech/codex-pooler/commit/4f03ae9673eff080e896b0f449698a54293d7b90))
+* **websocket:** scope drain observations to owner generations ([0ac1920](https://github.com/icoretech/codex-pooler/commit/0ac19209ba2c21ac3ec4a961c0cbfacf133c62b0))
+
+
+### Tests
+
+* **stats:** verify five-minute bounded usage projections ([c1fcac9](https://github.com/icoretech/codex-pooler/commit/c1fcac98bfb1017af6d8526d93eb0cd5aaa4cb0c))
+
 ## [0.13.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.7...codex-pooler-v0.13.8) (2026-10-21)
 
 
