@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.13.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.9...codex-pooler-v0.13.10) (2026-10-22)
+
+
+### Bug Fixes
+
+* **accounting:** isolate notification commits from settlement locks ([e91da70](https://github.com/icoretech/codex-pooler/commit/e91da701b45920fb9808c4cc4390aecf2c7bbe4a))
+
+
+### Dependencies
+
+* align and group Node build runtime updates ([310fbe2](https://github.com/icoretech/codex-pooler/commit/310fbe2dfb65404ce212e9922f35957f26dbdb0c))
+* refresh frontend and SDK probe packages ([4033fe8](https://github.com/icoretech/codex-pooler/commit/4033fe8d9f70f7b535d95150c2fd3979e55d2e85))
+* update helm release codex-pooler to v0.14.7 ([#554](https://github.com/icoretech/codex-pooler/issues/554)) ([8185431](https://github.com/icoretech/codex-pooler/commit/8185431fe55eb2fefa2e835801cfd3dfe124c319))
+
+
+### Tests
+
+* **responses:** verify citation annotations across public streams ([f25334c](https://github.com/icoretech/codex-pooler/commit/f25334c008fb255745a68ebb178480314d31f3c9))
+* **rollout:** await receipt completion before advancing virtual time ([12a4435](https://github.com/icoretech/codex-pooler/commit/12a4435287f1a758276fb34b45ea7fe89acc6731))
+* **websocket:** await receipt writers before fixture deletion ([77e906a](https://github.com/icoretech/codex-pooler/commit/77e906ab5be73e420bf8bcdc0fed4a60d0d01dca))
+* **websocket:** await retained owner completion before reconnect ([70929bc](https://github.com/icoretech/codex-pooler/commit/70929bcb8e0cfa0fba9dbf94c90c6b646a9df935))
+
 ## [0.13.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.8...codex-pooler-v0.13.9) (2026-10-22)
 
 
