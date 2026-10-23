@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.11...codex-pooler-v0.13.12) (2026-10-23)
+
+
+### Bug Fixes
+
+* **pricing:** import duration-specific cache write rates ([f52dda7](https://github.com/icoretech/codex-pooler/commit/f52dda7982e69e4c589e07792a42f9fa0a81fef7))
+* **v1:** reject unsupported function tool names before dispatch ([1b1e55f](https://github.com/icoretech/codex-pooler/commit/1b1e55f6a71ac7cd617295d807a261b50acceeb9))
+* **v1:** scope Responses function names by namespace ([0793ba1](https://github.com/icoretech/codex-pooler/commit/0793ba134482ae91061e9e235d9803f75ee2e3ab))
+
+
+### Dependencies
+
+* update plug_crypto to 2.2.1 ([4f738e7](https://github.com/icoretech/codex-pooler/commit/4f738e789cf1e7d6578b8f8ca9066c4e08496ec6))
+
+
+### Tests
+
+* measure ExUnit module durations at event producers ([017f4a2](https://github.com/icoretech/codex-pooler/commit/017f4a2d5c189de30b8a6f0c65d5690527344248))
+
 ## [0.13.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.10...codex-pooler-v0.13.11) (2026-10-23)
 
 
