@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.13.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.10...codex-pooler-v0.13.11) (2026-10-23)
+
+
+### Bug Fixes
+
+* **websocket:** settle completed turns after downstream detach ([b239bb4](https://github.com/icoretech/codex-pooler/commit/b239bb47edecf9dd3409ac51745e8b563cb908f2))
+
+
+### Dependencies
+
+* qualify Codex 0.164 catalog decoding ([19d17fe](https://github.com/icoretech/codex-pooler/commit/19d17fe74630b8a6646b57d7ae9a4565a618312e))
+* update ghcr.io/icoretech/codex-docker docker tag to v0.164.0 ([#560](https://github.com/icoretech/codex-pooler/issues/560)) ([f35eeb4](https://github.com/icoretech/codex-pooler/commit/f35eeb425430a22d0238e6c83ba8a6705de4e090))
+* update helm release codex-pooler to v0.14.8 ([#557](https://github.com/icoretech/codex-pooler/issues/557)) ([3c12611](https://github.com/icoretech/codex-pooler/commit/3c1261173aa209319976f28a1d7bb0b538a57c32))
+
+
+### Tests
+
+* **accounting:** inspect structured query plan nodes ([42feda0](https://github.com/icoretech/codex-pooler/commit/42feda03fb5b9ab01392f704abcd6969d16fb8b2))
+* **websocket:** await submitter exit after result delivery ([c90949a](https://github.com/icoretech/codex-pooler/commit/c90949ad8757599dca71a6bc6040b833d967944f))
+
 ## [0.13.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.9...codex-pooler-v0.13.10) (2026-10-22)
 
 
