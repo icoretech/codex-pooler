@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.12...codex-pooler-v0.13.13) (2026-10-24)
+
+
+### Bug Fixes
+
+* **websocket:** renew local leases and fence stale cleanup ([7fd3ac2](https://github.com/icoretech/codex-pooler/commit/7fd3ac258f536fc387b6063fdfe7c5966adf9605))
+
 ## [0.13.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.11...codex-pooler-v0.13.12) (2026-10-23)
 
 
