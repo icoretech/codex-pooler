@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.13...codex-pooler-v0.13.14) (2026-10-24)
+
+
+### Dependencies
+
+* update Tailwind installer to 0.5.2 for larger headers ([9b36730](https://github.com/icoretech/codex-pooler/commit/9b36730ad2673ac0498b359e538322ddc0a5b5e4))
+
 ## [0.13.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.12...codex-pooler-v0.13.13) (2026-10-24)
 
 
