@@ -122,7 +122,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                 %{
                   "type" => "input_text",
                   "text" => "v1 websocket prompt cache content",
-                  "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                  "prompt_cache_breakpoint" => %{"mode" => "explicit", "ttl" => "12h"}
                 }
               ]
             }

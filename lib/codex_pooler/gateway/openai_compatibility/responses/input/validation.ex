@@ -1027,9 +1027,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_prompt_cache_breakpoint(%{
          "prompt_cache_breakpoint" => %{"mode" => "explicit"} = breakpoint
        }) do
-    case breakpoint |> Map.keys() |> Enum.reject(&(&1 == "mode")) |> Enum.sort() do
+    case breakpoint |> Map.keys() |> Enum.reject(&(&1 in ["mode", "ttl"])) |> Enum.sort() do
       [] ->
-        :ok
+        validate_prompt_cache_breakpoint_ttl(Map.fetch(breakpoint, "ttl"))
 
       [key | _rest] ->
         {:error,
@@ -1049,6 +1049,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
        )}
 
   defp validate_prompt_cache_breakpoint(_part), do: :ok
+
+  defp validate_prompt_cache_breakpoint_ttl(:error), do: :ok
+  defp validate_prompt_cache_breakpoint_ttl({:ok, ttl}) when ttl in ["30m", "12h"], do: :ok
+
+  defp validate_prompt_cache_breakpoint_ttl(_ttl),
+    do: {:error, Error.invalid_request("prompt_cache_breakpoint ttl is not supported", "input.prompt_cache_breakpoint.ttl")}
 
   defp validate_each(items, validator) when is_list(items) and is_function(validator, 1) do
     Enum.reduce_while(items, :ok, fn item, :ok ->
