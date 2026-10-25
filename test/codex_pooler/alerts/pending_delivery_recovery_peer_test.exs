@@ -5,6 +5,7 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryPeerTest do
   import CodexPooler.PoolerFixtures
   import CodexPooler.AccountsFixtures
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.AlertDeliveryRecoveryPeer
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Delivery.{AttemptLifecycle, PendingRecovery}
   alias CodexPooler.Alerts.Schemas.{AlertChannel, AlertDeliveryAttempt}
@@ -72,7 +73,7 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryPeerTest do
     repo = start_supervised!(Supervisor.child_spec({Repo, Keyword.merge(Repo.config(), name: repo_name, pool: DBConnection.ConnectionPool, pool_size: 3)}, id: repo_name))
     telemetry = {__MODULE__, make_ref()}
     on_exit(fn -> :telemetry.detach(telemetry) end)
-    :ok = :telemetry.attach_many(telemetry, [[:oban, :job, :start], [:oban, :job, :exception]], &__MODULE__.observe/4, %{name: oban_name, repo: repo, parent: self()})
+    :ok = :telemetry.attach_many(telemetry, [[:oban, :job, :start], [:oban, :job, :exception]], &AlertDeliveryRecoveryPeer.observe/4, %{name: oban_name, repo: repo, parent: self()})
     oban = start_supervised!(Supervisor.child_spec({Oban, name: oban_name, repo: Repo, get_dynamic_repo: fn -> repo end, testing: :disabled, queues: [{String.to_atom(fixture.queue), 1}], plugins: [], notifier: Oban.Notifiers.PG, peer: false, log: false}, id: oban_name))
     assert_receive {:executor_started, pid, before_links}, @budget
     assert_receive {:held_http, handler}, @budget
@@ -127,14 +128,14 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryPeerTest do
 
     {:ok, _} = :erpc.call(owner.remote, Application, :ensure_all_started, [:postgrex])
     :erpc.call(owner.remote, WebsocketOwnerNodeHarness, :start_repo, [Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 3, log: false)])
-    :erpc.call(owner.remote, ExUnit, :start, [[autorun: false]])
-    :erpc.call(owner.remote, Code, :compile_file, [__ENV__.file])
+    # The peer loads compiled support callbacks; recompiling this ExUnit file
+    # would initialize the test framework and both scenarios inside the owner.
     server = start_supervised!({Bandit, plug: {Hold, self()}, ip: tls.ip, port: 0, scheme: :https, startup_log: false, thousand_island_options: [transport_options: [cert: tls.cert[:cert], key: tls.cert[:key]]]})
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
     {:ok, encrypted} = AppSecretCrypto.encrypt("https://#{tls.host}:#{port}/hooks", "alert_webhook_endpoint_url")
     database(fn -> fixture.channel |> Ecto.Changeset.change(endpoint_url_ciphertext: encrypted.ciphertext, endpoint_url_nonce: encrypted.nonce, endpoint_url_aad: encrypted.aad, endpoint_url_key_version: encrypted.key_version) |> Repo.update!() end)
     :ok = :erpc.call(owner.remote, :persistent_term, :put, [:pubkey_os_cacerts, :persistent_term.get(:pubkey_os_cacerts)])
-    :ok = :erpc.call(owner.remote, __MODULE__, :start_owner_worker, [fixture.queue, self()])
+    :ok = :erpc.call(owner.remote, AlertDeliveryRecoveryPeer, :start_owner_worker, [fixture.queue, self()])
     assert_receive {:executor_started, worker, _links}, @budget
     assert node(worker) == owner.remote
     assert_receive {:held_http, handler}, @budget
@@ -164,27 +165,6 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryPeerTest do
     assert {:ok, :unchanged} = :erpc.call(recovery_peer, PendingRecovery, :recover_one, [pending, DateTime.utc_now()])
     TestDiagnostics.puts("alert-recovery owner_node_stopped=true prior_executing_preserved=true stock_lifeline_rescue=true isolated_rescue_after_ms=1 remote_recovery=true")
   end
-
-  @doc false
-  def start_owner_worker(queue, parent) do
-    {:ok, _} = Application.ensure_all_started(:req)
-    {:ok, _} = Application.ensure_all_started(:oban)
-    {:ok, _} = Application.ensure_all_started(:mix)
-    name = String.to_atom("peer_alert_#{System.unique_integer([:positive])}")
-    :ok = :telemetry.attach({__MODULE__, name}, [:oban, :job, :start], &__MODULE__.observe/4, %{name: name, repo: Repo, parent: parent})
-    {:ok, pid} = Oban.start_link(name: name, repo: Repo, testing: :disabled, queues: [{String.to_atom(queue), 1}], plugins: [], peer: false, notifier: Oban.Notifiers.PG, log: false)
-    Process.unlink(pid)
-    :ok
-  end
-
-  def observe([:oban, :job, :start], _, %{conf: %{name: name}}, %{name: name} = config) do
-    Repo.put_dynamic_repo(config.repo)
-    {:links, links} = Process.info(self(), :links)
-    send(config.parent, {:executor_started, self(), links})
-  end
-
-  def observe([:oban, :job, :exception], _, %{conf: %{name: name}}, %{name: name} = config), do: send(config.parent, :executor_acknowledged)
-  def observe(_, _, _, _), do: :ok
 
   defp fixture!(suffix) do
     queue = "pending_recovery_#{suffix}"
