@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.15...codex-pooler-v0.13.16) (2026-10-25)
+
+
+### Features
+
+* **gateway:** persist scoped websocket size recovery denials ([7652f56](https://github.com/icoretech/codex-pooler/commit/7652f5699799eadf84be2bbab05d21b174811447))
+
+
+### Bug Fixes
+
+* **accounting:** recover native admissions after uncertain commits ([5a4ec35](https://github.com/icoretech/codex-pooler/commit/5a4ec3548be0a3461724e4d8c1681e12f4d24d05))
+* **gateway:** direct scoped oversized reconnects to HTTP ([a500407](https://github.com/icoretech/codex-pooler/commit/a500407efcd8923e34d75f48b307926733bfc727))
+* **gateway:** prepare native mailbox claims before database checkout ([3300d50](https://github.com/icoretech/codex-pooler/commit/3300d509b52d79109dc00ac44a64eb7a515e90b9))
+* **gateway:** reject oversized native histories before reservation ([125f3d3](https://github.com/icoretech/codex-pooler/commit/125f3d3c08db1102358fd88db3f22a6dcc751846))
+* **websocket:** keep upstream message-size closes health-neutral ([ec87bff](https://github.com/icoretech/codex-pooler/commit/ec87bff56ae3447b8e5295210df97546a96988fa))
+
+
+### Tests
+
+* **gateway:** align websocket contract with client fallback ([93034b8](https://github.com/icoretech/codex-pooler/commit/93034b887b51b12bacd0885b5c8ddfa2f1a2b937))
+* **gateway:** load mailbox coordinator before installing traces ([d4f39ea](https://github.com/icoretech/codex-pooler/commit/d4f39ea2910a6738621015f2eec82b5b875184a7))
+* **gateway:** require successful oversized preflight exclusions ([4278a4d](https://github.com/icoretech/codex-pooler/commit/4278a4de638aca02b325cbaa467574c0b3528d5c))
+
 ## [0.13.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.14...codex-pooler-v0.13.15) (2026-10-25)
 
 
