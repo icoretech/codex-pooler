@@ -3,10 +3,11 @@ name: pages
 # Publishes docs-site/ to GitHub Pages: the landing page at the site root
 # and the docs under /docs.
 on:
+  # Release PRs change the manifest, not docs sources. The merged manifest
+  # rebuilds the version-derived install snippet through the push trigger.
   pull_request:
     paths:
       - 'docs-site/**'
-      - '.release-please-manifest.json'
       - '.github/workflows/pages.yml'
   push:
     paths:

@@ -28,15 +28,11 @@ cd codex-pooler
 For every self-hosted install, choose a tagged stable release before creating
 `.env`. Find the latest tagged stable release on [GitHub Releases](https://github.com/icoretech/codex-pooler/releases). The `latest` tag follows verified stable releases and does not move backward when an older version is published again. A version tag keeps the installation reproducible.
 
-{/* x-release-please-start-version */}
-
 ```bash
 export CODEX_POOLER_IMAGE=ghcr.io/icoretech/codex-pooler
-export CODEX_POOLER_IMAGE_TAG=0.13.14
+export CODEX_POOLER_IMAGE_TAG=__CODEX_POOLER_RELEASE_VERSION__
 scripts/self-host/generate-env.sh
 ```
-
-{/* x-release-please-end */}
 
 The generated `.env` contains release secrets, encryption roots, database settings, and image settings such as `CODEX_POOLER_IMAGE` and `CODEX_POOLER_IMAGE_TAG`. Keep it private. Don't commit it, paste it into tickets, or reuse values between public installs.
 

@@ -1,10 +1,11 @@
-import { rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightPageActions from "starlight-page-actions";
 import sitemap from "@astrojs/sitemap";
 import docsLinks from "./plugins/docs-links.mjs";
 import docsImages from "./plugins/docs-images.mjs";
+import { renderReleaseVersion } from "./plugins/release-version.mjs";
 import { DOCS_REDIRECTS, isIndexablePage } from "./src/legacyRedirects.mjs";
 
 // The landing page is the site root (src/pages/index.astro) and the docs are
@@ -18,13 +19,16 @@ const autogenerateGroup = (label, directory) => ({
   items: [{ autogenerate: { directory } }],
 });
 
-const removePrivateMarkdownAssets = () => ({
-  name: "codex-pooler-docs-private-markdown-filter",
+const finalizeMarkdownAssets = () => ({
+  name: "codex-pooler-docs-markdown-assets",
   hooks: {
     "astro:build:done": async ({ dir }) => {
       await rm(new URL("_docs-contract.md", dir), { force: true });
       // The page-actions Markdown copy of the 404 page is only its title.
       await rm(new URL("404.md", dir), { force: true });
+      // Keep the exported Markdown install command equal to the rendered page.
+      const composeGuide = new URL("deployment/docker-compose.md", dir);
+      await writeFile(composeGuide, renderReleaseVersion(await readFile(composeGuide, "utf8")));
     },
   },
 });
@@ -153,6 +157,6 @@ export default defineConfig({
     }),
     docsLinks({ prefix: "/docs" }),
     docsImages(),
-    removePrivateMarkdownAssets(),
+    finalizeMarkdownAssets(),
   ],
 });

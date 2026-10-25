@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { matchesGlob } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
@@ -110,4 +111,29 @@ for (const trigger of ["push", "pull_request"]) {
 			);
 		assert.match(policy, /node --test test\/scripts\/\*_test\.mjs/);
 	});
+}
+
+const triggeredByPaths = (event, changedPaths) => {
+  const paths = workflow.match(
+    new RegExp(`^  ${event}:\\n    paths:\\n((?:      - .+\\n)+)`, "m"),
+  );
+  assert.ok(paths, `missing ${event} path trigger`);
+  const patterns = [...paths[1].matchAll(/- '([^']+)'/g)].map((match) => match[1]);
+  return changedPaths.some((path) => patterns.some((pattern) => matchesGlob(path, pattern)));
+};
+
+test("generated release PR files do not register Pages, but their merged manifest rebuilds the site", () => {
+  const config = JSON.parse(readFileSync(new URL("../../release-please-config.json", import.meta.url), "utf8"));
+  const packageConfig = config.packages["."];
+  const releaseFiles = [".release-please-manifest.json", packageConfig["changelog-path"], ...packageConfig["extra-files"].map((file) => file.path)];
+  assert.equal(triggeredByPaths("pull_request", releaseFiles), false);
+  assert.equal(triggeredByPaths("push", [".release-please-manifest.json"]), true);
+});
+
+for (const path of ["docs-site/src/content/docs/deployment/docker-compose.mdx", "docs-site/src/content/docs/clients/example.mdx", "docs-site/package-lock.json", ".github/workflows/pages.yml"]) {
+  test(`ordinary and fork PR changes to ${path} still register Pages checks`, () => {
+    assert.equal(triggeredByPaths("pull_request", [path]), true);
+    assert.equal(evaluates(condition("build"), pullRequest("docs/update-guide")), true);
+    assert.equal(evaluates(condition("build"), pullRequest("docs/update-guide", "external-contributor/sample-app")), true);
+  });
 }

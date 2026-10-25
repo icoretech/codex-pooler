@@ -1,4 +1,5 @@
 import { defineEcConfig } from "@astrojs/starlight/expressive-code";
+import { releaseVersionCode } from "./plugins/release-version.mjs";
 import promql from "./syntax/promql.tmLanguage.json" with { type: "json" };
 
 // On touch screens (no hover) Expressive Code keeps the copy button visible over the top-right of the
@@ -32,5 +33,5 @@ const touchCopyButton = {
 export default defineEcConfig({
   styleOverrides: { codeFontSize: "0.775rem" },
   shiki: { langs: [promql] },
-  plugins: [touchCopyButton],
+  plugins: [releaseVersionCode, touchCopyButton],
 });

@@ -21,10 +21,6 @@
         {
           "type": "generic",
           "path": "mix.exs"
-        },
-        {
-          "type": "generic",
-          "path": "docs-site/src/content/docs/deployment/docker-compose.mdx"
         }
       ]
     }
