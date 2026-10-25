@@ -23,6 +23,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   }
 
   alias CodexPooler.Accounting.RequestLifecycle.{
+    AdmissionExecutionRecovery,
     DeadExecutionResendRecovery,
     FailedPredecessorResend,
     LedgerEntries,
@@ -646,13 +647,45 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         {claim, nil}
 
       %Request{} = predecessor ->
-        :ok = retire_forwarded_chain!(predecessor)
+        scope = native_turn_resend_scope(session, context) |> Map.put(:auth_epoch, context.api_key.runtime_revocation_epoch)
 
-        if unfinished_http_mailbox_predecessor?(predecessor, context) or websocket_resend_predecessor?(predecessor) or delivered_provider_output?(predecessor) do
-          resolve_native_turn_resend!(session, context, claim)
-        else
-          step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
+        case AdmissionExecutionRecovery.recover_native_retry(predecessor, scope, now(context.opts)) do
+          {:ok, recovered, markers} ->
+            native_admission_successor!(session, context, claim, recovered, markers, depth)
+
+          {:error, disposition} ->
+            Repo.rollback(duplicate_request_error(disposition))
+
+          :unchanged ->
+            :ok = retire_forwarded_chain!(predecessor)
+
+            if unfinished_http_mailbox_predecessor?(predecessor, context) or websocket_resend_predecessor?(predecessor) or delivered_provider_output?(predecessor) do
+              resolve_native_turn_resend!(session, context, claim)
+            else
+              step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
+            end
         end
+    end
+  end
+
+  defp native_admission_successor!(session, context, claim, predecessor, markers, depth) do
+    case ClientRetry.deterministic_failed_predecessor_claim(claim, predecessor.id) do
+      {:ok, derived} ->
+        successor = native_turn_predecessor(derived)
+        links = Repo.all(from(link in CodexPooler.Accounting.RequestClientRetryLink, where: link.predecessor_request_id == ^predecessor.id, select: link.successor_request_id))
+
+        if Enum.any?(links, &(is_nil(successor) or &1 != successor.id)), do: Repo.rollback(duplicate_request_error(:successor_claimed))
+
+        case successor do
+          nil ->
+            {derived, %{predecessor_request_id: predecessor.id, reason: :failed_predecessor, predecessor_shape: :zero_output_http_failure, recovery_markers: markers}}
+
+          %Request{} ->
+            walk_native_turn_chain(session, context, derived, depth + 1)
+        end
+
+      _invalid ->
+        Repo.rollback(duplicate_request_error(:invalid_predecessor))
     end
   end
 

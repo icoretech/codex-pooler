@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Access
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.ClientRetry
+  alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
   alias CodexPooler.Accounting.RequestLifecycle.Reservation, as: RequestReservation
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
@@ -2642,7 +2643,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         turn_claim,
         authorized_correlation_id
       )
+      |> tap(fn _result -> maybe_test_runtime_authorization_barrier(:reservation_commit, :after) end)
     end
+    |> DeadExecutionResendRecovery.emit_after_commit(Repo.in_transaction?())
     |> normalize_mailbox_admission_exhaustion(endpoint, request_options)
     |> normalize_native_http_turn_duplicate(endpoint, request_options)
     |> case do
@@ -3098,6 +3101,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
           receive do
             {:runtime_authorization_release, ^ref} -> :ok
+            {:runtime_authorization_failure, ^ref, exception} -> raise exception
           end
 
         _value ->

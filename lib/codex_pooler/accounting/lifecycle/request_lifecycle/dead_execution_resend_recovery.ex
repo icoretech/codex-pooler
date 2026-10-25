@@ -3,18 +3,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLifecycle}
+  alias CodexPooler.Accounting.{Attempt, PreAttemptRelease, Request, RequestLifecycle}
   alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Repo
 
   @live_request_statuses ["accepted", "in_progress"]
 
-  @type marker :: %{
-          required(:kind) => :stream_outcome,
-          required(:outcome) => String.t(),
-          required(:downstream_transport) => String.t(),
-          required(:upstream_transport) => String.t()
-        }
+  @type marker ::
+          PreAttemptRelease.marker()
+          | %{
+              required(:kind) => :stream_outcome,
+              required(:outcome) => String.t(),
+              required(:downstream_transport) => String.t(),
+              required(:upstream_transport) => String.t()
+            }
 
   @spec recover(Request.t(), boolean(), DateTime.t()) ::
           {:ok, Request.t(), marker() | nil} | {:error, :active_predecessor}
@@ -63,8 +65,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery do
   @spec emit_after_commit({:ok, map()} | {:error, term()}, boolean()) ::
           {:ok, map()} | {:error, term()}
   def emit_after_commit({:ok, %{after_commit_markers: markers} = result}, false) do
-    Enum.each(markers, fn marker ->
-      InterruptionOutcome.emit(marker.downstream_transport, marker.upstream_transport)
+    Enum.each(markers, fn
+      %{kind: :pre_attempt_release} = marker -> PreAttemptRelease.emit_marker(marker)
+      marker -> InterruptionOutcome.emit(marker.downstream_transport, marker.upstream_transport)
     end)
 
     {:ok, Map.delete(result, :after_commit_markers)}

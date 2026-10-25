@@ -5,7 +5,7 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
   import Ecto.Query
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, PreAttemptRelease, Request}
+  alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, PreAttemptRelease, Request}
   alias CodexPooler.Accounting.RequestLifecycle.AdmissionExecutionRecovery
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Platform.{ExecutionIdentity, InstancePresence}
@@ -139,19 +139,164 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     assert ledger_kinds(request) == ["reservation"]
   end
 
-  test "an existing turn protects a reservation after the earlier admission executor ended" do
+  test "an exact ended admission recovers its invisible native HTTP turn without any attempt" do
     setup = accounting_setup()
     {executor, request} = start_executor!(setup)
-    stop_executor!(executor)
-    CodexPooler.ExecutionProofSupport.publish_terminal!(execution_identity(request))
+    request = request |> Ecto.Changeset.change(transport: "http_sse", endpoint: "/backend-api/codex/responses") |> Repo.update!()
     now = DateTime.utc_now()
     session = Repo.insert!(%CodexSession{pool_id: setup.pool.id, api_key_id: setup.api_key.id, session_key: Ecto.UUID.generate(), status: "active"})
     turn = Repo.insert!(%CodexTurn{codex_session_id: session.id, request_id: request.id, turn_sequence: 1, transport_kind: "http_sse", status: "in_progress", started_at: now})
 
     assert {:ok, %{admission_only_requests_recovered: 0}} = recover_ids(request)
-    assert Repo.reload!(turn).status == "in_progress"
+    stop_executor!(executor)
+    CodexPooler.ExecutionProofSupport.publish_terminal!(execution_identity(request))
+    assert {:ok, %{admission_only_requests_recovered: 1}} = recover_ids(request)
+    assert %CodexTurn{status: "interrupted", error_code: "admission_execution_recovered", final_attempt_id: nil, first_visible_output_at: nil, completed_at: %DateTime{}} = Repo.reload!(turn)
+    assert %Request{status: "failed", usage_status: "not_applicable", last_error_code: "admission_execution_recovered"} = Repo.reload!(request)
+    assert ledger_kinds(request) == ["release", "reservation"]
+    refute Repo.exists?(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+    assert {:ok, %{admission_only_requests_recovered: 0}} = recover_ids(request)
+  end
+
+  for attrs <- [
+        %{transport_kind: "websocket"},
+        %{first_visible_output_at: :now},
+        %{status: "succeeded", completed_at: :now},
+        %{final_attempt_id: :attempt}
+      ] do
+    test "native admission recovery retains turn evidence #{inspect(attrs)}" do
+      setup = accounting_setup()
+      {executor, request} = start_executor!(setup)
+      request = request |> Ecto.Changeset.change(transport: "http_sse", endpoint: "/backend-api/codex/responses") |> Repo.update!()
+      stop_executor!(executor)
+      CodexPooler.ExecutionProofSupport.publish_terminal!(execution_identity(request))
+      now = DateTime.utc_now()
+      session = Repo.insert!(%CodexSession{pool_id: setup.pool.id, api_key_id: setup.api_key.id, session_key: Ecto.UUID.generate(), status: "active"})
+
+      attrs =
+        Map.new(unquote(Macro.escape(attrs)), fn {key, value} ->
+          {key,
+           case value do
+             :now ->
+               now
+
+             :attempt ->
+               {:ok, attempt} = Accounting.create_attempt(request, setup.assignment)
+               attempt.id
+
+             other ->
+               other
+           end}
+        end)
+
+      turn = Repo.insert!(struct(%CodexTurn{codex_session_id: session.id, request_id: request.id, turn_sequence: 1, transport_kind: "http_sse", status: "in_progress", started_at: now}, attrs))
+      assert {:ok, %{admission_only_requests_recovered: 0}} = recover_ids(request)
+      assert Repo.reload!(turn).status == turn.status
+      assert Repo.reload!(request).status == "in_progress"
+      assert ledger_kinds(request) == ["reservation"]
+    end
+  end
+
+  for changed <- [:pool_id, :api_key_id, :model_id, :codex_session_id, :auth_epoch, :witness, :anchor] do
+    test "native admission retry retains #{changed} fence", do: assert_native_scope_fence(unquote(changed))
+  end
+
+  defp native_retry_fixture! do
+    setup = accounting_setup()
+    {executor, request} = start_executor!(setup)
+    stop_executor!(executor)
+    CodexPooler.ExecutionProofSupport.publish_terminal!(execution_identity(request))
+    witness = ClientRetry.original_witness!(:crypto.strong_rand_bytes(32), 0)
+    request = request |> Ecto.Changeset.change(Map.merge(ClientRetry.request_attrs(witness), %{transport: "http_sse", endpoint: "/backend-api/codex/responses"})) |> Repo.update!()
+    now = DateTime.utc_now()
+    session = Repo.insert!(%CodexSession{pool_id: setup.pool.id, api_key_id: setup.api_key.id, session_key: Ecto.UUID.generate(), status: "active"})
+    Repo.insert!(%CodexTurn{codex_session_id: session.id, request_id: request.id, turn_sequence: 1, transport_kind: "http_sse", status: "in_progress", started_at: now})
+    scope = %{pool_id: request.pool_id, api_key_id: request.api_key_id, model_id: request.model_id, endpoint: request.endpoint, codex_session_id: session.id, auth_epoch: 0, native_client_retry_witness: witness, anchor_present?: false}
+
+    {setup, request, scope}
+  end
+
+  defp assert_native_scope_fence(changed) do
+    {_setup, request, scope} = native_retry_fixture!()
+    now = DateTime.utc_now()
+
+    scope =
+      case changed do
+        :auth_epoch -> %{scope | auth_epoch: 1}
+        :witness -> %{scope | native_client_retry_witness: ClientRetry.original_witness!(:crypto.strong_rand_bytes(32), 0)}
+        :anchor -> %{scope | anchor_present?: true}
+        key -> Map.put(scope, key, Ecto.UUID.generate())
+      end
+
+    assert {:error, :authorization_changed} = AdmissionExecutionRecovery.recover_native_retry(request, scope, now)
     assert Repo.reload!(request).status == "in_progress"
     assert ledger_kinds(request) == ["reservation"]
+  end
+
+  for mutation <- [:source_link, :missing_source_link, :linked_noncanonical_reservation, :release_source, :reservation_source, :request_status, :estimated_cost, :settled_cost, :pool_id, :api_key_id, :model_id, :transport, :currency_code, :input_tokens, :cached_input_tokens, :output_tokens, :reasoning_tokens, :total_tokens, :request_count] do
+    @tag :native_release_provenance
+    test "native retry refuses a corrupted release #{mutation}", do: assert_release_provenance_fence(unquote(mutation))
+  end
+
+  defp assert_release_provenance_fence(mutation) do
+    {_setup, request, scope} = native_retry_fixture!()
+    assert {:ok, %{admission_only_requests_recovered: 1}} = recover_ids(request)
+    request = Repo.reload!(request)
+    assert {:ok, ^request, []} = AdmissionExecutionRecovery.recover_native_retry(request, scope, DateTime.utc_now())
+    [release] = releases(request)
+    reservation = reservation(request)
+
+    {target, attrs} = release_corruption(mutation, release, reservation)
+
+    target |> Ecto.Changeset.change(attrs) |> Repo.update!()
+    assert {:error, :terminal_predecessor} = AdmissionExecutionRecovery.recover_native_retry(request, scope, DateTime.utc_now())
+    assert ledger_kinds(request) == ["release", "reservation"]
+    refute Repo.exists?(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+  end
+
+  defp release_corruption(:source_link, release, _reservation), do: {release, %{details: Map.put(release.details, "reservation_source_event_id", "synthetic-wrong-reservation")}}
+  defp release_corruption(:missing_source_link, release, _reservation), do: {release, %{details: Map.delete(release.details, "reservation_source_event_id")}}
+
+  defp release_corruption(:linked_noncanonical_reservation, release, reservation) do
+    source = "synthetic-linked-noncanonical-reservation"
+    release |> Ecto.Changeset.change(details: Map.put(release.details, "reservation_source_event_id", source)) |> Repo.update!()
+    {reservation, %{source_event_id: source}}
+  end
+
+  defp release_corruption(:release_source, release, _reservation), do: {release, %{source_event_id: "synthetic-wrong-release"}}
+  defp release_corruption(:reservation_source, _release, reservation), do: {reservation, %{source_event_id: "synthetic-wrong-reservation"}}
+  defp release_corruption(:request_status, release, _reservation), do: {release, %{details: Map.put(release.details, "request_status", "in_progress")}}
+  defp release_corruption(:estimated_cost, release, _reservation), do: {release, %{estimated_cost_micros: Decimal.add(release.estimated_cost_micros, 1)}}
+  defp release_corruption(:settled_cost, release, _reservation), do: {release, %{settled_cost_micros: Decimal.new(1)}}
+  defp release_corruption(:transport, release, _reservation), do: {release, %{transport: "websocket"}}
+  defp release_corruption(:currency_code, release, _reservation), do: {release, %{currency_code: "EUR"}}
+
+  defp release_corruption(field, release, _reservation) when field in [:pool_id, :api_key_id, :model_id] do
+    other = accounting_setup()
+
+    value =
+      case field do
+        :pool_id -> other.pool.id
+        :api_key_id -> other.api_key.id
+        :model_id -> other.model.id
+      end
+
+    {release, %{field => value}}
+  end
+
+  defp release_corruption(field, release, _reservation), do: {release, %{field => (Map.get(release, field) || 0) + 1}}
+
+  @tag :native_release_provenance
+  test "scheduled recovery handles an admission after its API key was deleted" do
+    {setup, request, scope} = native_retry_fixture!()
+    Repo.delete!(setup.api_key)
+    request = Repo.reload!(request)
+    assert request.api_key_id == nil
+    refute Repo.get(CodexSession, scope.codex_session_id)
+    refute Repo.exists?(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+    assert {:ok, %{admission_only_requests_recovered: 1}} = AdmissionExecutionRecovery.recover(DateTime.utc_now())
+    assert Repo.reload!(request).last_error_code == "admission_execution_recovered"
+    assert ledger_kinds(request) == ["release", "reservation"]
   end
 
   test "caller-owned rollback keeps the reservation and defers its release telemetry" do
@@ -175,6 +320,7 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     setup = committed_setup!()
     {executor, request} = start_executor!(setup, DateTime.utc_now(), :unboxed)
     stop_executor!(executor)
+    {request, native_turn} = committed_native_turn!(request, setup)
     CodexPooler.ExecutionProofSupport.publish_committed_terminal!(execution_identity(request))
     parent = self()
 
@@ -212,6 +358,7 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     UnboxedFixture.run_unboxed(fn ->
       assert Repo.reload!(request).status == "in_progress"
       assert Repo.reload!(attempt).status == "in_progress"
+      assert Repo.reload!(native_turn).status == "in_progress"
       assert ledger_kinds(request) == ["reservation"]
       assert Accounting.reservation_outstanding?(request)
     end)
@@ -221,6 +368,7 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     setup = committed_setup!()
     {executor, request} = start_executor!(setup, DateTime.utc_now(), :unboxed)
     stop_executor!(executor)
+    {request, native_turn} = committed_native_turn!(request, setup)
     CodexPooler.ExecutionProofSupport.publish_committed_terminal!(execution_identity(request))
     parent = self()
 
@@ -259,7 +407,8 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     UnboxedFixture.run_unboxed(fn ->
       assert Repo.reload!(request).last_error_code == "admission_execution_recovered"
       assert ledger_kinds(request) == ["release", "reservation"]
-      assert_no_attempt_or_turn(request)
+      refute Repo.exists?(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+      assert Repo.reload!(native_turn).status == "interrupted"
     end)
   end
 
@@ -325,6 +474,16 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
       assert {:ok, %{admission_only_requests_recovered: 1}} = AdmissionExecutionRecovery.recover_published(DateTime.utc_now(), limit: 2, timeout: 500)
       assert ledger_kinds(older) == ["release", "reservation"]
       assert ledger_kinds(later) == ["release", "reservation"]
+    end)
+  end
+
+  defp committed_native_turn!(request, setup) do
+    UnboxedFixture.run_unboxed(fn ->
+      request = request |> Ecto.Changeset.change(transport: "http_sse", endpoint: "/backend-api/codex/responses") |> Repo.update!()
+      now = DateTime.utc_now()
+      session = Repo.insert!(%CodexSession{pool_id: setup.pool.id, api_key_id: setup.api_key.id, session_key: Ecto.UUID.generate(), status: "active"})
+      turn = Repo.insert!(%CodexTurn{codex_session_id: session.id, request_id: request.id, turn_sequence: 1, transport_kind: "http_sse", status: "in_progress", started_at: now})
+      {request, turn}
     end)
   end
 
