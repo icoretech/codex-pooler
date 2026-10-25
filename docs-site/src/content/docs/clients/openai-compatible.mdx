@@ -483,6 +483,8 @@ The OpenAI-compatible `/v1` surface supports or translates selected routes only:
 
 The `/v1` surface is compatibility over Codex routing, not a separate OpenAI engine. Supported requests still require a Pool API key and a Pool with eligible upstream capacity for the requested model.
 
+`GET /v1/files` returns the complete set of visible, unexpired files for the authenticated Pool API key in one page, with `has_more: false`. SDK iteration stops after that page; the endpoint does not provide cursor pagination.
+
 ### Request metadata
 
 `POST /v1/responses`, the Responses websocket and `POST /v1/chat/completions`

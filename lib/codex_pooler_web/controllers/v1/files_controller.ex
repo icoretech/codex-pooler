@@ -27,7 +27,7 @@ defmodule CodexPoolerWeb.V1.FilesController do
          %{
            status: 200,
            headers: [],
-           body: %{"object" => "list", "data" => Enum.map(files, &Files.response_shape/1)}
+           body: %{"object" => "list", "data" => Enum.map(files, &Files.response_shape/1), "has_more" => false}
          }}
       end
     end)

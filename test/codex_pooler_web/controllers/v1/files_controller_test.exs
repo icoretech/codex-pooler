@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert json_response(show_conn, 200)["id"] == file_id
 
     list_conn = build_conn() |> auth(setup) |> get("/v1/files")
-    assert %{"object" => "list", "data" => [listed]} = json_response(list_conn, 200)
+    assert %{"object" => "list", "data" => [listed], "has_more" => false} = json_response(list_conn, 200)
     assert listed["id"] == file_id
 
     before_content = Repo.aggregate(Request, :count)
@@ -177,6 +177,19 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     refute inspect(requests) =~ file_contents
     refute inspect(requests) =~ setup.raw_key
     refute inspect(requests) =~ upload_url
+  end
+
+  test "empty file lists are terminal pages and record one successful request" do
+    setup = active_api_key_fixture()
+
+    conn = build_conn() |> auth(setup) |> get("/v1/files")
+
+    assert %{"object" => "list", "data" => [], "has_more" => false} = json_response(conn, 200)
+    request = Repo.one!(from request in Request, where: request.api_key_id == ^setup.api_key.id)
+    assert request.endpoint == "/v1/files"
+    assert request.status == "succeeded"
+    assert request.request_metadata["operation"] == "list"
+    assert request.request_metadata["file_count"] == 0
   end
 
   test "transient upload recovery retains one file record and one create/finalize pair", %{conn: conn} do
