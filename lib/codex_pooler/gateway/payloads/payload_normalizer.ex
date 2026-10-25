@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
@@ -13,6 +14,22 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
   alias CodexPooler.Gateway.Routing.ModelMetadata
+
+  defmodule PreparedJSON do
+    @moduledoc false
+    @derive {Inspect, only: []}
+    @enforce_keys [:encoded, :upstream_previous_response_id?, :reasoning_effort_snapshot, :prompt_cache_controls_downgraded, :upstream_input_index_map, :compaction_projection]
+    defstruct @enforce_keys
+
+    @type t :: %__MODULE__{
+            encoded: binary(),
+            upstream_previous_response_id?: boolean(),
+            reasoning_effort_snapshot: map(),
+            prompt_cache_controls_downgraded: boolean(),
+            upstream_input_index_map: RequestOptions.RuntimeContext.upstream_input_index_map(),
+            compaction_projection: CompactionProjectionContext.safe_projection() | nil
+          }
+  end
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
   @backend_turn_state_param "client_metadata.x-codex-turn-state"
@@ -272,7 +289,27 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp named_function_choice?(_choice), do: false
 
-  defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options, opts) do
+  defp json_payload(payload, model, endpoint, request_options, opts) do
+    with {:ok, prepared, debug_input, upstream_payload} <- normalize_json_payload(payload, model, endpoint, request_options, opts) do
+      debug_payload = maybe_record_gateway_debug_payload(endpoint, debug_input, upstream_payload, request_options)
+      {:ok, prepared.encoded, apply_prepared_json_options(prepared, request_options, debug_payload)}
+    end
+  end
+
+  @doc false
+  @spec prepare_json_payload(map(), Model.t(), String.t(), RequestOptions.t(), [prepare_option()]) ::
+          {:ok, PreparedJSON.t()} | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
+  def prepare_json_payload(payload, model, endpoint, %RequestOptions{} = request_options, opts) do
+    with {:ok, prepared, _debug_input, _upstream_payload} <- normalize_json_payload(payload, model, endpoint, request_options, opts) do
+      {:ok, prepared}
+    end
+  end
+
+  # The ordinary path already owns these maps. Only the encoded result and
+  # derived metadata escape into a candidate cache; decoded variants do not.
+  @spec normalize_json_payload(map(), Model.t(), String.t(), RequestOptions.t(), [prepare_option()]) ::
+          {:ok, PreparedJSON.t(), map(), map()} | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
+  defp normalize_json_payload(payload, model, endpoint, request_options, opts) do
     payload =
       payload
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
@@ -312,9 +349,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     upstream_payload =
       finalize_compact_transport_envelope(upstream_payload, endpoint, request_options)
 
-    debug_payload =
-      maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
-
     reasoning_effort_snapshot =
       reasoning_effort_snapshot(
         requested_effort,
@@ -326,7 +360,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     request_options =
       request_options
       |> put_upstream_previous_response_id(upstream_payload)
-      |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
       |> RequestOptions.put_runtime_context(
         prompt_cache_controls_downgraded: prompt_cache_controls_downgraded,
@@ -338,7 +371,57 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {_compaction_projection, request_options} =
         CompactionProjectionContext.finalize(request_options, upstream_payload)
 
-      {:ok, encoded, request_options}
+      {:ok,
+       %PreparedJSON{
+         encoded: encoded,
+         upstream_previous_response_id?: request_options.continuity.upstream_previous_response_id?,
+         reasoning_effort_snapshot: reasoning_effort_snapshot,
+         prompt_cache_controls_downgraded: prompt_cache_controls_downgraded,
+         upstream_input_index_map: request_options.runtime.upstream_input_index_map,
+         compaction_projection: request_options.payload_context.compaction_projection
+       }, payload, upstream_payload}
+    end
+  end
+
+  @doc false
+  @spec apply_prepared_json(PreparedJSON.t(), map(), Model.t(), String.t(), RequestOptions.t()) :: RequestOptions.t()
+  def apply_prepared_json(%PreparedJSON{} = prepared, payload, model, endpoint, %RequestOptions{} = request_options) do
+    debug_payload =
+      if OperationalSettings.current().gateway_debug? do
+        debug_input =
+          payload
+          |> Map.new(fn {key, value} -> {to_string(key), value} end)
+          |> normalize_reasoning_aliases()
+          |> Map.put("model", upstream_model_id(model, endpoint, request_options))
+          |> apply_enforced_payload_policy(request_options)
+          |> canonicalize_backend_fast_service_tier()
+          |> omit_upstream_auto_default_service_tier()
+          |> normalize_client_reasoning_effort()
+
+        maybe_record_gateway_debug_payload(endpoint, debug_input, CodexPooler.JSON.decode!(prepared.encoded), request_options)
+      end
+
+    apply_prepared_json_options(prepared, request_options, debug_payload)
+  end
+
+  defp apply_prepared_json_options(prepared, request_options, debug_payload) do
+    request_options =
+      request_options
+      |> RequestOptions.put_continuity(upstream_previous_response_id?: prepared.upstream_previous_response_id?)
+      |> put_gateway_debug_payload(debug_payload)
+      |> put_reasoning_effort_snapshot(prepared.reasoning_effort_snapshot)
+      |> RequestOptions.put_runtime_context(
+        prompt_cache_controls_downgraded: prepared.prompt_cache_controls_downgraded,
+        upstream_input_index_map: prepared.upstream_input_index_map
+      )
+
+    if prepared.compaction_projection do
+      RequestOptions.put_payload_context(request_options,
+        compaction_projection_context: nil,
+        compaction_projection: prepared.compaction_projection
+      )
+    else
+      request_options
     end
   end
 

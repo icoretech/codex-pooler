@@ -181,6 +181,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PartitionFallback do
           auth: context.auth,
           endpoint: context.endpoint,
           payload: context.payload,
+          prepared_native_payloads: context.prepared_native_payloads,
           model: context.model,
           reserved: context.reserved,
           candidates: candidates,

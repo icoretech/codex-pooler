@@ -334,37 +334,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
   @spec route_selection_updates(dispatch_context(), RoutingSelection.t()) :: keyword()
   defp route_selection_updates(context, %RoutingSelection{} = selection) do
-    updates = [
-      routing_attempt_metadata: selection.attempt_metadata,
-      supports_reasoning_summary_parameter?:
-        selected_supports_reasoning_summary_parameter?(
-          context.model,
-          selection.assignment
-        )
-    ]
+    Keyword.put(payload_selection_updates(context.model, selection.assignment.id, context.request_options), :routing_attempt_metadata, selection.attempt_metadata)
+  end
 
-    case RequestOptions.model_serving_mode_snapshot(context.request_options) do
-      nil ->
-        Keyword.put(
-          updates,
-          :use_responses_lite?,
-          selected_uses_responses_lite?(context.model, selection.assignment)
-        )
+  @doc false
+  @spec payload_selection_updates(CodexPooler.Catalog.Model.t(), Ecto.UUID.t(), RequestOptions.t()) :: keyword()
+  def payload_selection_updates(model, assignment_id, request_options) do
+    metadata = ModelMetadata.selected_assignment_metadata(model, assignment_id)
+    updates = [supports_reasoning_summary_parameter?: ModelMetadata.supports_reasoning_summary_parameter?(metadata)]
 
-      _resolved_snapshot ->
-        updates
+    case RequestOptions.model_serving_mode_snapshot(request_options) do
+      nil -> Keyword.put(updates, :use_responses_lite?, ModelMetadata.bool_metadata(metadata, "use_responses_lite"))
+      _resolved_snapshot -> updates
     end
-  end
-
-  defp selected_uses_responses_lite?(model, assignment) do
-    metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
-    ModelMetadata.bool_metadata(metadata, "use_responses_lite")
-  end
-
-  defp selected_supports_reasoning_summary_parameter?(model, assignment) do
-    model
-    |> ModelMetadata.selected_assignment_metadata(assignment.id)
-    |> ModelMetadata.supports_reasoning_summary_parameter?()
   end
 
   defp put_routing_circuit_admission(

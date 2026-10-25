@@ -260,7 +260,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   defp native_codex_response_control(_context), do: nil
 
   defp release_websocket_payload(%PreparedContext{context: context} = prepared_context) do
-    %{prepared_context | context: %{context | payload: continuity_payload(context.payload)}}
+    %{prepared_context | context: %{context | payload: continuity_payload(context.payload), prepared_native_payloads: nil}}
   end
 
   defp continuity_payload(payload) when is_map(payload) do

@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
   alias CodexPooler.Gateway.Runtime.Dispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
+  alias CodexPooler.Gateway.Runtime.Dispatch.PreparedNativePayloads
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs
@@ -143,13 +144,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
          %Operations{} = operations
        ) do
     with {:ok, upstream_payload, request_options} <-
-           PayloadNormalizer.prepare_upstream_payload(
-             context.payload,
-             context.model,
-             context.endpoint,
-             context.request_options,
-             assignment_id: context.assignment.id
-           ),
+           prepare_payload(context),
          {:ok, context} <- persist_compaction_projection(context, request_options, operations),
          {:ok, token} <-
            operations.decrypt_active_secret.(context.identity, @secret_kind),
@@ -171,6 +166,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
       |> dispatch_fun.()
       |> log_compact_transport_failure(context)
     else
+      {:error, :prepared_native_payload_binding_mismatch} ->
+        refuse_prepared_payload_binding(context, operations)
+
       {:compaction_projection_merge_error, reason} ->
         handle_compaction_projection_merge_failure(context, reason, operations)
 
@@ -179,6 +177,45 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
         log_compact_terminal_decision(context, :local_preflight, result, reason)
         result
     end
+  end
+
+  defp refuse_prepared_payload_binding(context, operations) do
+    error = %{status: 500, code: "server_error", message: "prepared upstream payload binding mismatch"}
+
+    settlement =
+      operations.finalize_failure.(
+        context.reserved.request,
+        context.attempt,
+        SettlementAttrs.failure(context, 500, error.code, error.message, %{}, latency_ms: elapsed_ms(context.started)),
+        context.request_options.runtime.session_owner_witness
+      )
+
+    neutral = operations.neutral_completion.(context)
+
+    case {settlement, neutral} do
+      {{:ok, _settled}, :ok} ->
+        {:error, error}
+
+      {{:stale_generation, settled}, :ok} ->
+        {:ok, settled}
+
+      {{:error, settlement_error}, :ok} ->
+        {:error, settlement_error}
+
+      {{result, _settled}, {:error, neutral_error}} when result in [:ok, :stale_generation] ->
+        {:error, neutral_error}
+
+      {{:error, settlement_error}, {:error, neutral_error}} ->
+        operations.accounting_failure.(:prepared_payload_binding_cleanup, context.reserved.request, context.attempt, {settlement_error, neutral_error})
+    end
+  end
+
+  defp prepare_payload(%SelectedCandidateContext{prepared_native_payloads: %PreparedNativePayloads{} = prepared} = context) do
+    PreparedNativePayloads.fetch(prepared, context.payload, context.model, context.endpoint, context.request_options, context.assignment.id)
+  end
+
+  defp prepare_payload(%SelectedCandidateContext{prepared_native_payloads: nil} = context) do
+    PayloadNormalizer.prepare_upstream_payload(context.payload, context.model, context.endpoint, context.request_options, assignment_id: context.assignment.id)
   end
 
   defp log_compact_transport_failure(
