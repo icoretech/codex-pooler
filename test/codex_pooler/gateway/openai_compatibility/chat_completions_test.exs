@@ -595,6 +595,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       end
     end
 
+    for type <- ["response.failed", "error"], prefix <- [:none, :created, :text, :tool] do
+      test "#{type} emits one sanitized error after #{prefix}, without a successful finish" do
+        assert_failed_stream_terminal(unquote(type), unquote(prefix))
+      end
+    end
+
     test "blank event labels use the data type while nonblank mismatches remain rejected" do
       failed = %{
         "type" => "response.failed",
@@ -697,6 +703,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       refute chunk =~ "finish_reason"
     end
   end
+
+  defp assert_failed_stream_terminal(type, prefix) do
+    state = ChatCompletions.stream_state(%{"model" => "gpt-example", "stream_options" => %{"include_usage" => true}})
+    prefix_events = failed_stream_prefix(prefix)
+    {prefix_output, state} = ChatCompletions.normalize_stream_data(IO.iodata_to_binary(prefix_events), state)
+    assert prefix_output != "" == (prefix != :none)
+
+    error = %{"code" => "server_error", "message" => "synthetic provider detail", "param" => "synthetic_param"}
+    failed = if type == "error", do: %{"type" => type, "error" => error}, else: %{"type" => type, "response" => %{"status" => "failed", "error" => error}}
+    terminal = sse_event(type, failed) |> IO.iodata_to_binary()
+    {output, state} = ChatCompletions.normalize_stream_data(terminal, state)
+
+    assert [%{"error" => public_error}] = normalized_sse_payloads(output)
+    assert public_error == %{"type" => "server_error", "code" => "server_error", "message" => "upstream request failed"}
+    assert state.terminal_seen?
+    refute output =~ "finish_reason"
+    refute output =~ "data: [DONE]"
+    refute output =~ "synthetic provider detail"
+    refute output =~ "synthetic_param"
+    completed = sse_event("response.completed", %{"type" => "response.completed", "response" => %{"status" => "completed"}})
+    assert {"", _state} = ChatCompletions.normalize_stream_data(IO.iodata_to_binary([terminal, completed]), state)
+  end
+
+  defp failed_stream_prefix(:none), do: []
+  defp failed_stream_prefix(:created), do: sse_event("response.created", %{"type" => "response.created", "response" => %{"status" => "in_progress"}})
+  defp failed_stream_prefix(:text), do: sse_event("response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic text"})
+  defp failed_stream_prefix(:tool), do: sse_event("response.output_item.added", %{"type" => "response.output_item.added", "output_index" => 0, "item" => %{"type" => "function_call", "id" => "fc_synthetic", "call_id" => "call_synthetic", "name" => "synthetic_tool", "arguments" => ""}})
 
   defp assert_usage_projection(details, expected_details, status \\ "completed") do
     usage = Map.merge(%{"input_tokens" => 5, "output_tokens" => 3, "compute_units" => 7}, details)

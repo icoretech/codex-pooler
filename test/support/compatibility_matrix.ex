@@ -4176,6 +4176,9 @@ defmodule CodexPooler.CompatibilityMatrix do
         chat_first_chunk: "data_error_object",
         chat_omits_assistant_role_before_output: true,
         chat_omits_done_before_output: true,
+        chat_late_failure_chunk: "data_error_object",
+        chat_omits_done_after_failure: true,
+        chat_omits_finish_reason_after_failure: true,
         late_failures_retry: false,
         non_stream_errors: "json_error"
       },

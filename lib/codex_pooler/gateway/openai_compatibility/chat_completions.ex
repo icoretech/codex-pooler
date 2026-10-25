@@ -470,7 +470,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     {chat_sse_chunk(delta, nil, state), mark_visible(state)}
   end
 
-  defp terminal_stream_chunk(type, decoded, %{role_sent?: false} = state)
+  defp terminal_stream_chunk(type, decoded, state)
        when type in ["response.failed", "error"] do
     state = sync_response_state(state, decoded)
     {["data: ", CodexPooler.JSON.encode!(%{"error" => public_error(decoded)}), "\n\n"], state}

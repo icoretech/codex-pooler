@@ -1374,61 +1374,11 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     end
   end
 
-  @tag :streaming_chat
-  test "POST /v1/chat/completions streaming preserves late response.failed after output", %{
-    conn: conn
-  } do
-    upstream =
-      start_upstream(
-        FakeUpstream.sse_stream([
-          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
-          {"response.failed",
-           %{
-             "type" => "response.failed",
-             "error" => %{
-               "type" => "invalid_request_error",
-               "code" => "invalid_request_error",
-               "message" => "synthetic late chat streaming validation"
-             },
-             "response" => %{
-               "id" => "resp_chat_stream_late_failed",
-               "status" => "failed",
-               "error" => %{
-                 "type" => "invalid_request_error",
-                 "code" => "invalid_request_error",
-                 "message" => "synthetic late chat streaming validation"
-               }
-             }
-           }}
-        ])
-      )
-
-    setup = gateway_setup(upstream)
-
-    conn =
-      conn
-      |> auth(setup)
-      |> post(
-        "/v1/chat/completions",
-        chat_payload(setup) |> Map.put("stream", true)
-      )
-
-    assert [content_type] = get_resp_header(conn, "content-type")
-    assert content_type =~ "text/event-stream"
-    assert conn.status == 200
-    assert conn.resp_body =~ "\"role\":\"assistant\""
-    assert conn.resp_body =~ "\"content\":\"partial chat text\""
-    assert conn.resp_body =~ "\"finish_reason\":\"stop\""
-    assert conn.resp_body =~ "data: [DONE]\n\n"
-    assert FakeUpstream.count(upstream) == 1
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.transport == "http_sse"
-    assert request.status == "failed"
-    assert request.last_error_code == "invalid_request_error"
-
-    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.status == "failed"
+  for mode <- ~w(full lite), type <- ~w(response.failed error), phase <- [:early, :late] do
+    @tag :streaming_chat
+    test "real HTTP Chat #{mode} relays #{phase} #{type} as a terminal error" do
+      assert_chat_terminal_failure(unquote(mode), unquote(type), unquote(phase))
+    end
   end
 
   @tag :streaming_chat
@@ -2872,6 +2822,40 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp assert_chat_terminal_failure(mode, type, phase) do
+    code = if phase == :late, do: "server_error", else: "invalid_request_error"
+    error = %{"type" => code, "code" => code, "message" => "synthetic provider detail", "param" => "synthetic_param"}
+    failed = if type == "error", do: %{"type" => type, "error" => error}, else: %{"type" => type, "response" => %{"id" => "resp_chat_failure", "status" => "failed", "error" => error}}
+    prefix = if phase == :late, do: [{"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic partial output"}}], else: []
+    upstream = start_upstream(FakeUpstream.sse_stream(prefix ++ [{type, failed}]))
+    setup = gateway_setup(upstream)
+    put_chat_model_serving_mode!(setup, mode)
+    port = start_public_endpoint!()
+    payload = chat_payload(setup) |> Map.put("stream", true) |> Map.put("stream_options", %{"include_usage" => true})
+    {headers, body} = curl_json_request!(port, setup.authorization, payload, "/v1/chat/completions")
+
+    assert String.starts_with?(headers, "HTTP/1.1 200")
+    assert String.contains?(String.downcase(headers), "content-type: text/event-stream")
+    assert [%{"error" => public_error}] = Enum.filter(chat_chunks(body), &Map.has_key?(&1, "error"))
+    assert List.last(chat_chunks(body)) == %{"error" => public_error}
+    assert public_error == %{"type" => "server_error", "code" => code, "message" => "upstream request failed"}
+    assert body =~ "synthetic partial output" == (phase == :late)
+    refute body =~ "synthetic provider detail"
+    refute body =~ "synthetic_param"
+    refute body =~ "data: [DONE]"
+    refute Enum.any?(chat_chunks(body), &(get_in(&1, ["choices", Access.at(0), "finish_reason"]) != nil))
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == code
+    assert request.request_metadata["routing"]["model_serving_mode"] == mode
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == code
   end
 
   defp chat_payload(setup) do
