@@ -1110,6 +1110,90 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert result["structuredContent"]["message"] == ""
   end
 
+  test "stored account quota selectors preserve workspace ambiguity after label changes", %{auth: auth} do
+    pool = pool_fixture()
+    account_id = "acct-shared-quota"
+    masked_label = Redaction.forbidden_sentinel!(:disallowed_email)
+    %{identity: first} = upstream_assignment_fixture(pool, %{chatgpt_account_id: account_id, account_label: "Sample alpha", workspace_id: "sample-workspace-alpha", workspace_label: masked_label})
+    %{identity: second} = upstream_assignment_fixture(pool, %{chatgpt_account_id: account_id, account_label: "Sample beta", workspace_id: "sample-workspace-beta", workspace_label: "Sample beta"})
+
+    for {identity, remaining} <- [{first, 90}, {second, 10}] do
+      assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [primary_quota_window_attrs(%{active_limit: 100, credits: remaining, used_percent: Decimal.new(100 - remaining)})])
+      assert {:ok, exact} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => identity.id}, %{auth: auth})
+      assert exact["isError"] == false
+      assert exact["structuredContent"]["status"] == "ok"
+      assert exact["structuredContent"]["item"]["id"] == identity.id
+      assert [%{"remaining_value" => ^remaining}] = exact["structuredContent"]["item"]["quota_windows"]
+    end
+
+    assert {:ok, result} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => account_id}, %{auth: auth})
+    assert_quota_candidates(result, [first.id, second.id])
+    candidates = result["structuredContent"]["candidates"]
+    assert Enum.all?(candidates, &String.starts_with?(&1["workspace_ref"], "ws:"))
+    assert length(Enum.uniq_by(candidates, & &1["workspace_ref"])) == 2
+    assert Enum.find(candidates, &(&1["id"] == first.id))["workspace_label"] == "RE***@example.com"
+    assert [%{"text" => text}] = result["content"]
+    assert text =~ "workspace=ws:"
+    assert text =~ "workspace_label=RE***@example.com"
+    refute inspect(result) =~ masked_label
+    refute inspect(result) =~ first.workspace_id
+    refute inspect(result) =~ second.workspace_id
+
+    first |> Ecto.Changeset.change(account_label: "Sample zeta") |> Repo.update!()
+    assert {:ok, renamed} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => account_id}, %{auth: auth})
+    assert_quota_candidates(renamed, [first.id, second.id])
+  end
+
+  test "stored account quota ambiguity candidates are capped at ten", %{auth: auth} do
+    pool = pool_fixture()
+
+    identities =
+      for number <- 1..11 do
+        %{identity: identity} = upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct-many-quota", account_label: "Sample account", workspace_id: "sample-workspace-#{number}"})
+        identity
+      end
+
+    assert {:ok, result} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => "acct-many-quota"}, %{auth: auth})
+    assert result["isError"] == false
+    assert result["structuredContent"]["status"] == "ambiguous"
+    assert result["structuredContent"]["item"] == nil
+    candidates = result["structuredContent"]["candidates"]
+    assert length(candidates) == 10
+    assert length(Enum.uniq_by(candidates, & &1["id"])) == 10
+    assert MapSet.subset?(MapSet.new(candidates, & &1["id"]), MapSet.new(identities, & &1.id))
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "stored account quota matching counts only the operator's visible workspaces", %{owner: owner} do
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    visible_pool = pool_fixture()
+    hidden_pool = pool_fixture()
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: owner.id)
+    context = %{auth: %{scope: Scope.for_user(admin)}}
+    account_id = "acct-scoped-quota"
+    %{identity: visible} = upstream_assignment_fixture(visible_pool, %{chatgpt_account_id: account_id, account_label: "Visible quota", workspace_id: "sample-visible"})
+    %{identity: hidden} = upstream_assignment_fixture(hidden_pool, %{chatgpt_account_id: account_id, account_label: "Hidden quota", workspace_id: "sample-hidden"})
+
+    assert {:ok, single} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => account_id}, context)
+    assert single["isError"] == false
+    assert single["structuredContent"]["status"] == "ok"
+    assert single["structuredContent"]["item"]["id"] == visible.id
+    assert single["structuredContent"]["candidates"] == []
+
+    %{identity: another_visible} = upstream_assignment_fixture(visible_pool, %{chatgpt_account_id: account_id, account_label: "Another visible quota", workspace_id: "sample-other-visible"})
+    assert {:ok, ambiguous} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => account_id}, context)
+    assert_quota_candidates(ambiguous, [visible.id, another_visible.id])
+    refute inspect(ambiguous) =~ hidden.id
+    refute inspect(ambiguous) =~ hidden.account_label
+
+    assert {:ok, missing} = ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => hidden.id}, context)
+    assert missing["isError"] == false
+    assert missing["structuredContent"]["status"] == "not_found"
+    assert missing["structuredContent"]["item"] == nil
+    assert missing["structuredContent"]["candidates"] == []
+    assert :ok = Redaction.assert_mcp_output_safe!(missing)
+  end
+
   test "get upstream quota returns bounded ambiguity candidates", %{auth: auth} do
     first_pool = pool_fixture()
     second_pool = pool_fixture()
@@ -1147,7 +1231,9 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
                  "label",
                  "plan_family",
                  "status",
-                 "stored_account_id"
+                 "stored_account_id",
+                 "workspace_label",
+                 "workspace_ref"
                ])
            )
 
@@ -1520,6 +1606,14 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert text =~ "account scope (request permission and billing source not guaranteed)"
     assert text =~ "provider_credits_disabled"
     refute text =~ "quota_capacity_facts"
+  end
+
+  defp assert_quota_candidates(result, ids) do
+    assert result["isError"] == false
+    assert result["structuredContent"]["status"] == "ambiguous"
+    assert result["structuredContent"]["item"] == nil
+    assert MapSet.new(result["structuredContent"]["candidates"], & &1["id"]) == MapSet.new(ids)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 
   defp assert_dto_keys(window) do

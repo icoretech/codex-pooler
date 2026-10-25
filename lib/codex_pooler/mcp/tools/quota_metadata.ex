@@ -167,7 +167,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
           use_when: "an MCP client needs exact sanitized quota evidence for one visible upstream account",
           returns: "one sanitized upstream account quota summary, a not-found marker, or structured ambiguity candidates when the selector matches multiple accounts",
           never_returns: "raw selectors, raw filter values, auth.json, raw metadata, provider payloads, websocket frames, or raw idempotency keys",
-          filters_limits: "selector is required; exact id and stored account id are preferred, label matches can be ambiguous, and ambiguity candidates are bounded to 10"
+          filters_limits: "selector is required; exact id is preferred; stored account id and label matches can be ambiguous across workspace slots; candidates are bounded to 10"
         ),
       input_schema: @get_input_schema,
       output_schema: @get_output_schema,
@@ -350,13 +350,14 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
 
   defp resolve_account(accounts, selector) do
     selector = normalize_selector(selector)
+    account_matches = Enum.filter(accounts, &(normalize_selector(&1["stored_account_id"]) == selector))
 
     cond do
       account = Enum.find(accounts, &(normalize_selector(&1["id"]) == selector)) ->
         {:ok, account}
 
-      account = Enum.find(accounts, &(normalize_selector(&1["stored_account_id"]) == selector)) ->
-        {:ok, account}
+      account_matches != [] ->
+        one_ambiguous_or_missing(account_matches)
 
       true ->
         accounts
@@ -370,7 +371,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
   defp one_ambiguous_or_missing(items), do: {:ambiguous, items}
 
   defp candidate(account) do
-    Map.take(account, ["id", "label", "stored_account_id", "status", "plan_family"])
+    Map.take(account, ["id", "label", "stored_account_id", "workspace_ref", "workspace_label", "status", "plan_family"])
   end
 
   defp quota_list_text(%{"items" => []}),
@@ -389,6 +390,8 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
       {"id", "id"},
       {"label", "label", required: true},
       {"stored_account_id", "account"},
+      {"workspace_ref", "workspace"},
+      {"workspace_label", "workspace_label"},
       {"status", "status", required: true}
     ])
   end
