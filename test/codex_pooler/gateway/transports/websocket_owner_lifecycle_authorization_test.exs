@@ -49,7 +49,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerLifecycleAuthorizationTes
   test "a cancelled database read withholds lifecycle data and records visible output unavailable" do
     state = replay_fixture(reservation?: true) |> owner_state()
 
-    with_failed_request_reads("57014", fn ->
+    with_failed_request_reads("57014", state, fn ->
       assert {:noreply, next} = deliver(state, @lifecycle)
       assert next.active_turn.lifecycle_authorization_result == {:error, :visible_output_unavailable}
       refute_received {:local_delivery, _, _}
@@ -59,7 +59,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerLifecycleAuthorizationTes
   test "a nontransient database read error is reraised without lifecycle delivery" do
     state = replay_fixture(reservation?: true) |> owner_state()
 
-    with_failed_request_reads("22012", fn ->
+    with_failed_request_reads("22012", state, fn ->
       error = assert_raise Postgrex.Error, fn -> deliver(state, @lifecycle) end
       assert error.postgres.code == :division_by_zero
       refute_received {:local_delivery, _, _}
@@ -159,9 +159,16 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerLifecycleAuthorizationTes
 
   # The temporary view shadows only this sandbox connection's request reads.
   # PostgreSQL itself raises the error; sandbox rollback also covers setup failure.
-  defp with_failed_request_reads(sqlstate, callback) do
+  defp with_failed_request_reads(sqlstate, state, callback) do
     Repo.query!("CREATE FUNCTION pg_temp.fail_local_lifecycle_read() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic lifecycle read failure' USING ERRCODE = '#{sqlstate}'; END $$")
+    # The function initializes pg_temp before the exact request query is warmed,
+    # reproducing a connection whose prepared plan still resolves public.requests.
+    assert_lifecycle_read(state)
+
     Repo.query!("CREATE TEMP VIEW requests AS SELECT * FROM public.requests WHERE pg_temp.fail_local_lifecycle_read()")
+    # Creating a shadow view does not invalidate a plan bound to public.requests.
+    # Replan this connection's statements without dropping Postgrex's prepared names.
+    Repo.query!("DISCARD PLANS")
 
     try do
       callback.()
@@ -170,5 +177,13 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerLifecycleAuthorizationTes
       Repo.query!("DROP FUNCTION pg_temp.fail_local_lifecycle_read()")
       assert %{rows: [[nil, nil]]} = Repo.query!("SELECT to_regclass('pg_temp.requests'), to_regprocedure('pg_temp.fail_local_lifecycle_read()')")
     end
+
+    assert_lifecycle_read(state)
+  end
+
+  defp assert_lifecycle_read(state) do
+    assert {{:noreply, ^state}, 9} = capture_selects(fn -> deliver(state, @lifecycle) end)
+    assert_received {:local_delivery, @lifecycle, true}
+    refute_received {:local_delivery, _, _}
   end
 end
