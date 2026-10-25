@@ -109,15 +109,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     base = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic")}
     metadata = %{"x-codex-turn-metadata" => %{"request_kind" => "compaction", "compaction" => %{"implementation" => "responses"}}}
-    payloads = [Map.put(base, "generate", false), Map.put(base, "client_metadata", metadata), Map.put(base, "input", [%{"type" => "compaction", "encrypted_content" => "synthetic-checkpoint"}]), Map.put(base, "previous_response_id", "resp_synthetic_anchor")]
 
-    for payload <- payloads do
+    payloads = [
+      prewarm: Map.put(base, "generate", false),
+      local_compaction: Map.put(base, "client_metadata", metadata),
+      post_compaction_resume: Map.put(base, "input", [%{"type" => "compaction", "encrypted_content" => "synthetic-checkpoint"}]),
+      body_anchor: Map.put(base, "previous_response_id", "resp_synthetic_anchor")
+    ]
+
+    for {shape, payload} <- payloads do
       options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
-
-      case PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model) do
-        {:ok, prepared} -> refute Map.has_key?(prepared, :prepared_native_payloads)
-        {:error, reason} -> assert is_binary(reason.code)
-      end
+      result = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+      assert match?({:ok, _prepared}, result), "expected successful excluded preparation for #{shape}"
+      {:ok, prepared} = result
+      refute Map.has_key?(prepared, :prepared_native_payloads)
+      assert prepared.request_options.continuity.previous_response_id == Map.get(payload, "previous_response_id")
     end
 
     options = request_options(auth, base, openai_source_endpoint: "/v1/responses") |> RequestOptions.for_websocket(base)
