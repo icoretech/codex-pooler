@@ -33,13 +33,14 @@ defmodule CodexPoolerWeb.Runtime.NativeHttpClaimPreparationTest do
     thread = Ecto.UUID.generate()
     input = mailbox_input()
 
-    Code.ensure_loaded!(NativeHttpTurnIdentity)
+    Enum.each([@claim_function, @coordinator], fn {module, _, _} -> Code.ensure_loaded!(module) end)
     trace = :trace.session_create(__MODULE__, self(), [])
-    :trace.function(trace, @claim_function, [{:_, [], [{:return_trace}]}], [:local])
-    :trace.function(trace, @coordinator, true, [:local])
-    :trace.process(trace, :all, true, [:call, :arity, :monotonic_timestamp])
 
     try do
+      assert 1 == :trace.function(trace, @claim_function, [{:_, [], [{:return_trace}]}], [:local])
+      assert 1 == :trace.function(trace, @coordinator, true, [:local])
+      :trace.process(trace, :all, true, [:call, :arity, :monotonic_timestamp])
+
       for turn <- 1..2 do
         metadata = CodexPooler.JSON.encode!(%{"session_id" => thread, "thread_id" => thread, "turn_id" => "synthetic-#{turn}", "request_kind" => "turn", "agent_name" => "synthetic-worker", "workspaces" => [%{"root" => "/synthetic-workspace"}]})
         payload = %{"model" => fixture.model.exposed_model_id, "input" => input, "stream" => true, "store" => false, "client_metadata" => %{"x-codex-turn-metadata" => metadata}}
