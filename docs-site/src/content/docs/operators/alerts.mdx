@@ -36,6 +36,8 @@ Keep severity tied to user-visible impact and operator action. Avoid implementat
 
 An incident is resolved when the condition of the rule that raised it clears. Deleting a rule also removes its targets from its incidents. An incident that no remaining rule targets cannot clear by itself, so the scheduled evaluation pass, which runs every five minutes, resolves it and records `resolved_reason` `no_rule_target`. An incident that another rule still targets stays open and keeps following that rule.
 
+Changing a rule's condition removes that rule's links to incidents raised by the previous condition. An incident resolves when no remaining active rule targets it; incidents still targeted by another active rule remain open. Changes to the display name, severity, cooldown or delivery channels keep the condition's incident links.
+
 ## Pool signals
 
 Pool alerts usually mean a routing boundary isn't ready for the clients that depend on it.

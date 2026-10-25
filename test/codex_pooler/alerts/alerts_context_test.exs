@@ -11,11 +11,111 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     AlertChannel,
     AlertIncident,
     AlertIncidentReceipt,
+    AlertIncidentTarget,
     AlertRule,
     AlertRuleChannel
   }
 
+  alias CodexPooler.Jobs.AlertEvaluationWorker
   alias CodexPooler.Repo
+  alias CodexPooler.UnboxedFixture
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  alias Ecto.Adapters.SQL.Sandbox
+
+  test "an edit waits for an earlier worker and retires the worker's old-condition match" do
+    assert_rule_edit_order(:evaluation)
+  end
+
+  test "a worker with stale candidates waits for an edit and discards its old condition" do
+    assert_rule_edit_order(:edit)
+  end
+
+  test "editing a condition retires its old incident even after both conditions recover" do
+    %{user: owner} = bootstrap_owner_fixture()
+    scope = Scope.for_user(owner)
+    pool = pool_fixture()
+    {:ok, rule} = Alerts.create_rule(scope, rule_attrs(pool, %{}))
+    timestamp = now()
+    assert :ok = evaluate_rule_job(rule, timestamp)
+    incident = Repo.one!(from row in AlertIncident, where: row.pool_id == ^pool.id)
+
+    assert {:ok, updated} = Alerts.update_rule(scope, rule, %{rule_kind: "pool_low_usable_assignments", min_usable_assignments: 2})
+    assert Repo.get!(AlertIncident, incident.id).state == "resolved"
+    assert incident_targets(incident) == []
+
+    for _ <- 1..2 do
+      %{identity: identity} = upstream_assignment_fixture(pool)
+      seed_available_quota(identity, timestamp)
+    end
+
+    assert [%{action: :clear}] = Alerts.evaluate_rule(rule, at: timestamp)
+    assert [%{action: :clear}] = Alerts.evaluate_rule(updated, at: timestamp)
+    assert :ok = evaluate_rule_job(updated, timestamp)
+    assert {:ok, []} = Alerts.resolve_orphaned_incidents(timestamp)
+    assert Repo.get!(AlertIncident, incident.id).state == "resolved"
+  end
+
+  test "threshold edits retire only the changed rule target of a shared incident" do
+    %{user: owner} = bootstrap_owner_fixture()
+    scope = Scope.for_user(owner)
+    pool = pool_fixture()
+    %{identity: identity} = upstream_assignment_fixture(pool)
+    timestamp = now()
+    seed_available_quota(identity, timestamp, "95")
+    first_channel = alert_channel_fixture(created_by_user_id: owner.id)
+    second_channel = alert_channel_fixture(created_by_user_id: owner.id)
+    attrs = rule_attrs(pool, %{scope_type: "upstream_identity", rule_kind: "upstream_quota_threshold", threshold_used_percent: "90", window_selector: "account_primary"})
+    {:ok, first} = Alerts.create_rule(scope, Map.put(attrs, :channel_ids, [first_channel.id]))
+    {:ok, second} = Alerts.create_rule(scope, Map.merge(attrs, %{display_name: "Second threshold rule", channel_ids: [second_channel.id]}))
+    assert :ok = evaluate_rule_job(first, timestamp)
+    assert :ok = evaluate_rule_job(second, timestamp)
+    incident = Repo.one!(from row in AlertIncident, where: row.upstream_identity_id == ^identity.id)
+
+    assert {:ok, unchanged} = Alerts.update_rule(scope, first, %{threshold_used_percent: "90.0", display_name: "Renamed threshold rule", cooldown_minutes: 60})
+    assert Repo.get!(AlertIncident, incident.id).state == "open"
+    assert Enum.all?(incident_targets(incident), &is_nil(&1.resolved_at))
+
+    assert {:ok, changed} = Alerts.update_rule(scope, unchanged, %{threshold_used_percent: "99"})
+    assert Repo.get!(AlertIncident, incident.id).state == "open"
+    assert [%{rule_id: remaining_rule, resolved_at: nil}] = incident_targets(incident)
+    assert remaining_rule == second.id
+    assert [%{channel_id: remaining_channel}] = Alerts.list_incident_delivery_channels_due(incident)
+    assert remaining_channel == second_channel.id
+    assert :ok = evaluate_rule_job(changed, timestamp)
+    assert Repo.get!(AlertIncident, incident.id).state == "open"
+
+    assert {:ok, _} = Alerts.update_rule(scope, second.id, %{threshold_used_percent: "99"})
+    assert Repo.get!(AlertIncident, incident.id).state == "resolved"
+    assert incident_targets(incident) == []
+
+    assert {:ok, current} = Alerts.update_rule(scope, first, %{display_name: "Edited through stale struct"})
+    assert Decimal.equal?(current.threshold_used_percent, Decimal.new(99))
+  end
+
+  test "model and route condition edits retire targets while rejected edits preserve them" do
+    %{user: owner} = bootstrap_owner_fixture()
+    scope = Scope.for_user(owner)
+    pool = pool_fixture()
+    {:ok, rule} = Alerts.create_rule(scope, rule_attrs(pool, %{}))
+    timestamp = now()
+    assert :ok = evaluate_rule_job(rule, timestamp)
+    incident = Repo.one!(from row in AlertIncident, where: row.pool_id == ^pool.id)
+
+    assert {:error, _} = Alerts.update_rule(scope, rule, %{model: "example-model", channel_ids: [Ecto.UUID.generate()]})
+    assert is_nil(Repo.get!(AlertRule, rule.id).model)
+    assert Repo.get!(AlertIncident, incident.id).state == "open"
+    assert Enum.all?(incident_targets(incident), &is_nil(&1.resolved_at))
+
+    assert {:ok, changed} = Alerts.update_rule(scope, rule, %{model: "example-model"})
+    assert Repo.get!(AlertIncident, incident.id).state == "resolved"
+    assert :ok = evaluate_rule_job(changed, timestamp)
+    next_incident = Repo.one!(from row in AlertIncident, where: row.pool_id == ^pool.id and row.state == "open")
+    refute next_incident.id == incident.id
+
+    assert {:ok, _} = Alerts.update_rule(scope, changed, %{route_class: "proxy_stream"})
+    assert Repo.get!(AlertIncident, next_incident.id).state == "resolved"
+  end
 
   test "owner and assigned admins list manageable active pool targets" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
@@ -661,6 +761,115 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     }
     |> Map.merge(overrides)
   end
+
+  defp evaluate_rule_job(rule, timestamp) do
+    perform_job(AlertEvaluationWorker, %{"alert_rule_id" => rule.id, "evaluation_window_started_at" => DateTime.to_iso8601(timestamp)}, attempted_at: timestamp)
+  end
+
+  defp assert_rule_edit_order(first_kind) do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    scope = Scope.for_user(owner)
+
+    {rule, incident} =
+      UnboxedFixture.run_unboxed(fn ->
+        pool = pool_fixture(%{created_by_user_id: owner.id})
+        {:ok, rule} = Alerts.create_rule(scope, rule_attrs(pool, %{}))
+        assert :ok = evaluate_rule_job(rule, now())
+        {rule, Repo.one!(from row in AlertIncident, where: row.pool_id == ^pool.id)}
+      end)
+
+    tasks = start_supervised!({Task.Supervisor, []})
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:codex_pooler, :repo, :query], &__MODULE__.hold_rule_query/4, nil)
+    operations = %{evaluation: fn -> evaluate_rule_job(rule, now()) end, edit: fn -> Alerts.update_rule(scope, rule, %{rule_kind: "pool_low_usable_assignments", min_usable_assignments: 2}) end}
+    first = start_rule_actor(tasks, operations[first_kind], true)
+    assert_receive {:rule_actor_backend, first_pid, first_backend}
+    assert first_pid == first.pid
+    assert_receive {:rule_lock_held, ^first_pid}
+
+    second_kind = if first_kind == :edit, do: :evaluation, else: :edit
+    second = start_rule_actor(tasks, operations[second_kind], false)
+    assert_receive {:rule_actor_backend, second_pid, second_backend}
+    assert second_pid == second.pid
+    refute first_backend == second_backend
+    assert_rule_actor_blocked(second_backend, first_backend, System.monotonic_time(:millisecond) + 5_000)
+    send(first.pid, :release_rule_lock)
+    results = [{first_kind, finish_rule_actor(first)}, {second_kind, finish_rule_actor(second)}] |> Map.new()
+    assert results.evaluation == :ok
+    assert {:ok, %AlertRule{rule_kind: "pool_low_usable_assignments"}} = results.edit
+
+    UnboxedFixture.run_unboxed(fn ->
+      current = Repo.get!(AlertIncident, incident.id)
+      assert current.state == "resolved"
+      assert current.occurrence_count == if(first_kind == :evaluation, do: 2, else: 1)
+      refute Repo.exists?(from row in AlertIncident, where: row.pool_id == ^rule.pool_id and row.state == "open")
+    end)
+  end
+
+  defp start_rule_actor(tasks, operation, hold?) do
+    parent = self()
+
+    task =
+      Task.Supervisor.async_nolink(tasks, fn -> Sandbox.unboxed_run(Repo, fn -> run_rule_actor(parent, operation, hold?) end) end)
+
+    %{task: task, pid: task.pid, monitor: Process.monitor(task.pid)}
+  end
+
+  defp run_rule_actor(parent, operation, hold?) do
+    %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
+    send(parent, {:rule_actor_backend, self(), backend})
+    if hold?, do: Process.put({__MODULE__, :hold_rule}, parent)
+    operation.()
+  end
+
+  defp finish_rule_actor(%{task: task, pid: pid, monitor: monitor}) do
+    result = Task.await(task, 10_000)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    result
+  end
+
+  def hold_rule_query(_event, _measurements, %{source: "alert_rules", query: query}, _config) do
+    if String.contains?(query, "FOR UPDATE") do
+      case Process.delete({__MODULE__, :hold_rule}) do
+        nil ->
+          :ok
+
+        parent ->
+          send(parent, {:rule_lock_held, self()})
+
+          receive do
+            :release_rule_lock -> :ok
+          after
+            10_000 -> raise "rule lock barrier was not released"
+          end
+      end
+    end
+  end
+
+  def hold_rule_query(_event, _measurements, _metadata, _config), do: :ok
+
+  defp assert_rule_actor_blocked(waiter, holder, deadline) do
+    blocked? = UnboxedFixture.run_unboxed(fn -> Repo.query!("SELECT $1::integer = ANY(pg_blocking_pids($2::integer))", [holder, waiter]).rows == [[true]] end)
+
+    unless blocked? do
+      assert System.monotonic_time(:millisecond) < deadline, "rule actor did not wait on the other backend's rule lock"
+
+      receive do
+      after
+        10 -> :ok
+      end
+
+      assert_rule_actor_blocked(waiter, holder, deadline)
+    end
+  end
+
+  defp seed_available_quota(identity, timestamp, used_percent \\ "10") do
+    attrs = BackendCodexTestSupport.primary_quota_window_attrs(%{used_percent: Decimal.new(used_percent), reset_at: DateTime.add(timestamp, 3600, :second), observed_at: timestamp})
+    assert {:ok, [_]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
+
+  defp incident_targets(incident), do: Repo.all(from target in AlertIncidentTarget, where: target.incident_id == ^incident.id)
 
   defp saved_reset_rule_attrs(pool, overrides) do
     rule_attrs(

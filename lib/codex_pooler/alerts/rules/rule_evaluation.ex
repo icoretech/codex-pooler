@@ -40,6 +40,28 @@ defmodule CodexPooler.Alerts.Rules.RuleEvaluation do
 
   def fetch_rule_for_evaluation(_rule_id), do: {:error, :alert_rule_not_found}
 
+  @doc "Records one candidate only while the evaluated rule snapshot is still current."
+  @spec record_current_evaluation(AlertRule.t(), (-> :ok | {:error, reason})) :: :ok | {:error, reason} when reason: term()
+  def record_current_evaluation(%AlertRule{} = expected, record) do
+    Repo.transact(fn ->
+      current = Repo.one(from rule in AlertRule, where: rule.id == ^expected.id, lock: "FOR UPDATE")
+
+      # Keep the rule lock through one incident's persistence and enqueue, not
+      # the entire candidate set: workers for different rules may share many
+      # incidents and must not accumulate their locks in conflicting orders.
+      result = if current == expected, do: record.(), else: :ok
+
+      case result do
+        :ok -> {:ok, :ok}
+        {:error, _reason} = error -> error
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, _reason} = error -> error
+    end
+  end
+
   @spec evaluate_rule(AlertRule.t(), Evaluator.evaluation_opts()) :: [Evaluator.candidate()]
   def evaluate_rule(rule, opts \\ []), do: Evaluator.evaluate_rule(rule, opts)
 

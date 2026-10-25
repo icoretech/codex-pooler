@@ -146,6 +146,9 @@ defmodule CodexPooler.Alerts do
   @spec fetch_rule_for_evaluation(Ecto.UUID.t()) :: evaluation_rule_result()
   defdelegate fetch_rule_for_evaluation(rule_id), to: RuleEvaluation
 
+  @spec record_current_evaluation(AlertRule.t(), (-> :ok | {:error, reason})) :: :ok | {:error, reason} when reason: term()
+  defdelegate record_current_evaluation(rule, record), to: RuleEvaluation
+
   @spec evaluate_rule(AlertRule.t(), Evaluator.evaluation_opts()) :: [Evaluator.candidate()]
   defdelegate evaluate_rule(rule, opts \\ []), to: RuleEvaluation
 

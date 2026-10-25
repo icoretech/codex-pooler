@@ -59,12 +59,14 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
     rule
     |> Alerts.evaluate_rule(at: timestamp, circuit_observed_at: attempted_at)
     |> Enum.reduce_while(:ok, fn candidate, :ok ->
-      case record_candidate(candidate) do
+      case record_current_candidate(rule, candidate) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
+
+  defp record_current_candidate(rule, candidate), do: Alerts.record_current_evaluation(rule, fn -> record_candidate(candidate) end)
 
   @spec record_candidate(Evaluator.candidate()) :: :ok | {:error, evaluation_error()}
   defp record_candidate(%{

@@ -8,7 +8,8 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycle do
 
   alias CodexPooler.Alerts.Schemas.{
     AlertIncident,
-    AlertIncidentTarget
+    AlertIncidentTarget,
+    AlertRule
   }
 
   alias CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle
@@ -119,6 +120,50 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycle do
             where: target.incident_id == parent_as(:incident).id and is_nil(target.resolved_at),
             select: 1
         )
+  end
+
+  @doc """
+  Retires the old condition's targets while the caller holds the rule row lock.
+  Evaluation takes that lock and rechecks its rule snapshot before recording
+  each candidate, so an earlier write finishes before this retirement and a
+  later stale candidate cannot recreate targets. Incident locks precede target
+  writes on both paths.
+  """
+  @spec retire_rule_targets(Ecto.UUID.t(), DateTime.t()) :: :ok
+  def retire_rule_targets(rule_id, timestamp) do
+    {:ok, :ok} =
+      NotificationEvents.invalidate_after_cascade({:rule, rule_id}, fn ->
+        retire_locked_rule_targets(rule_id, timestamp)
+        {:ok, :ok}
+      end)
+
+    :ok
+  end
+
+  defp retire_locked_rule_targets(rule_id, timestamp) do
+    incidents =
+      Repo.all(
+        from incident in AlertIncident,
+          as: :incident,
+          where: incident.state in ^@unresolved_states,
+          where: exists(from target in AlertIncidentTarget, where: target.incident_id == parent_as(:incident).id and target.rule_id == ^rule_id and is_nil(target.resolved_at), select: 1),
+          order_by: [asc: incident.id],
+          lock: "FOR UPDATE"
+      )
+
+    Enum.each(incidents, fn incident ->
+      Repo.delete_all(from target in AlertIncidentTarget, where: target.incident_id == ^incident.id and target.rule_id == ^rule_id and is_nil(target.resolved_at))
+
+      unless active_target?(incident.id) do
+        resolve_incident(incident, timestamp)
+      end
+    end)
+
+    :ok
+  end
+
+  defp active_target?(incident_id) do
+    Repo.exists?(from target in AlertIncidentTarget, join: rule in AlertRule, on: rule.id == target.rule_id, where: target.incident_id == ^incident_id and is_nil(target.resolved_at) and rule.state == "active")
   end
 
   defp resolve_orphaned_incident(%AlertIncident{} = incident, timestamp) do

@@ -7,6 +7,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
   alias CodexPooler.Alerts.AuditLog, as: AlertAudit
   alias CodexPooler.Alerts.Authorization
   alias CodexPooler.Alerts.ChannelManagement
+  alias CodexPooler.Alerts.Incidents.IncidentLifecycle
   alias CodexPooler.Alerts.Incidents.NotificationEvents
 
   alias CodexPooler.Alerts.Schemas.{
@@ -17,6 +18,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
   alias CodexPooler.Repo
 
   @saved_reset_first_seen_rule_kind "upstream_saved_reset_banked_first_seen"
+  @condition_fields ~w(pool_id scope_type rule_kind model route_class min_usable_assignments target_state window_selector threshold_used_percent)a
 
   @type access_error :: Authorization.access_error()
   @type rule_result :: {:ok, AlertRule.t()} | {:error, Ecto.Changeset.t() | access_error()}
@@ -60,21 +62,12 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
   @spec update_rule(term(), AlertRule.t() | Ecto.UUID.t(), map()) :: rule_result()
-  def update_rule(%Scope{} = scope, %AlertRule{} = rule, attrs) when is_map(attrs) do
-    target_pool_id = Map.get(attrs, :pool_id) || Map.get(attrs, "pool_id") || rule.pool_id
-
-    with {:ok, _existing_decision} <- Authorization.authorize_pool_operation(scope, rule.pool_id),
-         {:ok, _target_decision} <- Authorization.authorize_pool_operation(scope, target_pool_id) do
-      rule
-      |> update_rule_with_channels(scope, rule_update_attrs(rule, attrs, target_pool_id, now()))
-      |> AlertAudit.audit_rule_update(scope, rule, attrs)
-    end
-  end
+  def update_rule(%Scope{} = scope, %AlertRule{id: id}, attrs) when is_map(attrs), do: update_rule(scope, id, attrs)
 
   def update_rule(%Scope{} = scope, rule_id, attrs) when is_binary(rule_id) and is_map(attrs) do
-    case Repo.get(AlertRule, rule_id) do
-      %AlertRule{} = rule -> update_rule(scope, rule, attrs)
-      nil -> {:error, Authorization.access_error(:rule_not_found, "alert rule was not found")}
+    case Repo.transact(fn -> update_rule_in_transaction(scope, rule_id, attrs) end) do
+      {:ok, {previous, updated}} -> AlertAudit.audit_rule_update({:ok, updated}, scope, previous, attrs)
+      {:error, _reason} = error -> error
     end
   end
 
@@ -99,16 +92,28 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
   def delete_rule(_scope, _rule),
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
-  defp update_rule_with_channels(rule, scope, attrs) do
-    Repo.transaction(fn -> update_rule_in_transaction(rule, scope, attrs) end)
+  defp update_rule_in_transaction(scope, rule_id, attrs) do
+    case Repo.one(from rule in AlertRule, where: rule.id == ^rule_id, lock: "FOR UPDATE") do
+      %AlertRule{} = rule -> update_locked_rule(scope, rule, attrs)
+      nil -> {:error, Authorization.access_error(:rule_not_found, "alert rule was not found")}
+    end
   end
 
-  defp update_rule_in_transaction(rule, scope, attrs) do
-    with {:ok, updated_rule} <- rule |> AlertRule.changeset(attrs) |> Repo.update(),
-         {:ok, _channels} <- maybe_sync_rule_channels(scope, updated_rule, attrs, now()) do
-      updated_rule
-    else
-      {:error, reason} -> Repo.rollback(reason)
+  defp update_locked_rule(scope, rule, attrs) do
+    target_pool_id = Map.get(attrs, :pool_id) || Map.get(attrs, "pool_id") || rule.pool_id
+    timestamp = now()
+    normalized = rule_update_attrs(rule, attrs, target_pool_id, timestamp)
+    changeset = AlertRule.changeset(rule, normalized)
+
+    with {:ok, _existing} <- Authorization.authorize_pool_operation(scope, rule.pool_id),
+         {:ok, _target} <- Authorization.authorize_pool_operation(scope, target_pool_id),
+         {:ok, updated} <- Repo.update(changeset),
+         {:ok, _channels} <- maybe_sync_rule_channels(scope, updated, normalized, timestamp) do
+      if Enum.any?(@condition_fields, &Ecto.Changeset.changed?(changeset, &1)) do
+        IncidentLifecycle.retire_rule_targets(rule.id, timestamp)
+      end
+
+      {:ok, {rule, updated}}
     end
   end
 
