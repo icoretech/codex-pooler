@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Metadata
+  alias CodexPooler.Gateway.NativeWebsocketSizeRecovery
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
@@ -213,15 +214,21 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       )
       |> maybe_mark_websocket_openai_origin(opts)
 
-    case maybe_put_websocket_models_etag(conn, auth, request_options) do
-      {:ok, conn} ->
+    with :ok <- NativeWebsocketSizeRecovery.handshake(auth, conn.request_path, request_options),
+         {:ok, conn} <- maybe_put_websocket_models_etag(conn, auth, request_options) do
+      conn
+      |> put_resp_header("x-codex-turn-state", turn_state)
+      |> WebSockAdapter.upgrade(
+        CodexPoolerWeb.CodexResponsesSocket,
+        %{auth: auth, opts: request_options, firewall_client_ip: conn.remote_ip},
+        websocket_upgrade_opts()
+      )
+      |> halt()
+    else
+      :http_required ->
         conn
-        |> put_resp_header("x-codex-turn-state", turn_state)
-        |> WebSockAdapter.upgrade(
-          CodexPoolerWeb.CodexResponsesSocket,
-          %{auth: auth, opts: request_options, firewall_client_ip: conn.remote_ip},
-          websocket_upgrade_opts()
-        )
+        |> put_resp_header("connection", "close")
+        |> send_resp(426, "")
         |> halt()
 
       {:error, reason} ->
