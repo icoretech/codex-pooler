@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.Metadata do
   alias CodexPooler.Accounting.NativeContentFilterRetry
   alias CodexPooler.Accounting.NativeReplayClaim
   alias CodexPooler.Accounting.NativeResampledCompletion
+  alias CodexPooler.Accounting.NativeWebsocketSizeRecovery
   alias CodexPooler.Accounting.PricingResolution.InputEstimate
   alias CodexPooler.Accounting.{Request, RequestLogFacts}
   alias CodexPooler.Events
@@ -455,6 +456,9 @@ defmodule CodexPooler.Accounting.Metadata do
     do: Map.drop(left, ~w(session_preference_kind session_preference_status session_preference_diagnostics))
 
   defp clear_previous_preference(_key, left, _right), do: left
+
+  defp sanitize_value(value, key) when key in [:native_websocket_size_recovery, "native_websocket_size_recovery"],
+    do: NativeWebsocketSizeRecovery.sanitize(value)
 
   defp sanitize_value(value, key) when key in [:image_estimate, "image_estimate"],
     do: InputEstimate.put_metadata(%{}, value)["image_estimate"]

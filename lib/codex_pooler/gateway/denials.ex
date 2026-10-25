@@ -30,6 +30,22 @@ defmodule CodexPooler.Gateway.Denials do
           }
   end
 
+  @spec record_native_websocket_size_recovery(Context.t(), pos_integer()) ::
+          {:ok, :native_websocket_size_recovery} | {:error, :missing_window | :invalid_recovery | :storage_unavailable}
+  def record_native_websocket_size_recovery(%Context{} = context, message_bytes) do
+    with {:ok, digest} <- CodexPooler.Gateway.NativeWebsocketSizeRecovery.window_digest(context.opts),
+         marker when not is_nil(marker) <- CodexPooler.Accounting.NativeWebsocketSizeRecovery.marker(digest, message_bytes) do
+      attrs =
+        request_attrs(context.auth, context.model, context.endpoint, context.payload, context.opts, {413, "native_websocket_message_too_large"}, %{"native_websocket_size_recovery" => marker})
+        |> Map.put(:correlation_id, Ecto.UUID.generate())
+
+      Accounting.confirm_native_websocket_size_recovery(context.auth, context.model, attrs)
+    else
+      :error -> {:error, :missing_window}
+      nil -> {:error, :invalid_recovery}
+    end
+  end
+
   @spec log_policy(Context.t()) :: {:error, map()}
   def log_policy(%Context{
         auth: auth,

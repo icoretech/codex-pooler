@@ -82,6 +82,12 @@ defmodule CodexPooler.Accounting do
   @spec final_refusal_predecessor(CodexPooler.Gateway.Persistence.CodexSession.t(), map()) :: {:ok, map()} | :none
   defdelegate final_refusal_predecessor(session, input), to: CodexPooler.Accounting.ClientRetry
 
+  @spec confirm_native_websocket_size_recovery(auth(), model_ref(), map()) :: CodexPooler.Accounting.NativeWebsocketSizeRecovery.result()
+  defdelegate confirm_native_websocket_size_recovery(auth, model, attrs), to: CodexPooler.Accounting.NativeWebsocketSizeRecovery, as: :record
+
+  @spec native_websocket_size_recovery(auth(), String.t()) :: CodexPooler.Accounting.NativeWebsocketSizeRecovery.lookup_result()
+  defdelegate native_websocket_size_recovery(auth, digest), to: CodexPooler.Accounting.NativeWebsocketSizeRecovery, as: :recent
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   defdelegate record_denied_request(auth, model_or_id, opts \\ %{}), to: RequestLifecycle
 
