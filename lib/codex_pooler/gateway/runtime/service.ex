@@ -2253,12 +2253,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %RequestOptions{} = request_options,
          %RouteState{} = route_state,
          turn_claim,
-         authorized_correlation_id
+         %{authorized_correlation_id: authorized_correlation_id, native_http_claim: native_http_claim}
        ) do
-    # Resolved once: the reservation attributes and the final-refusal lookup
-    # both read it, and building it hashes the payload for the resend witness.
-    native_http_claim = NativeHttpTurnIdentity.request_claim(request_options, payload)
-
     attrs =
       auth
       |> AccountingReservation.attrs(
@@ -2375,7 +2371,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   # websocket request's (findings#232 row 232-231), so the refused turn is found
   # the way its websocket resend finds it. An HTTP predecessor records no
   # provider status of its own and keeps that step-over. The claim is the one
-  # `reserve/8` resolved for the reservation attributes, not derived again.
+  # `reserve/8` received for the reservation attributes, not derived again.
   defp native_http_final_refusal(%RequestOptions{transport: %{transport: transport}, continuity: %{codex_session: %CodexSession{} = session}} = request_options, native_http_claim)
        when transport in ["http_sse", "http_json"] do
     with true <- NativeHttpTurnIdentity.fenced?(request_options),
@@ -2717,14 +2713,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          turn_claim,
          authorized_correlation_id
        ) do
+    # Mailbox witnesses hash retained input prefixes. Derive this immutable claim
+    # before checkout, then reuse it for discovery, locked revalidation and reserve.
+    # The session lock refreshes ownership, not the id/Pool/key claim scope; current
+    # authorization and predecessor decisions still run inside the transaction.
+    native_http_claim = NativeHttpTurnIdentity.request_claim(request_options, payload)
+
     PersistenceSessionContinuity.mailbox_admission_transaction(
       fn ->
-        attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state, authorized_correlation_id)
+        attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state, authorized_correlation_id, native_http_claim)
         attrs = attrs |> Map.put(:original_request_claim, request_options.continuity.request_claim_key) |> Map.put(:turn_claim, turn_claim) |> Map.put(:replay_claim_digest, request_options.continuity.replay_claim_digest)
         RequestReservation.mailbox_admission_session_ids(auth, model, attrs)
       end,
       fn ->
-        attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state, authorized_correlation_id)
+        attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state, authorized_correlation_id, native_http_claim)
         attrs = attrs |> Map.put(:original_request_claim, request_options.continuity.request_claim_key) |> Map.put(:turn_claim, turn_claim) |> Map.put(:replay_claim_digest, request_options.continuity.replay_claim_digest)
         :ok = RequestReservation.revalidate_mailbox_admission_sessions!(auth, model, attrs)
         request_options = lock_codex_session_before_reservation(request_options)
@@ -2738,7 +2740,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                  request_options,
                  route_state,
                  turn_claim,
-                 authorized_correlation_id
+                 %{authorized_correlation_id: authorized_correlation_id, native_http_claim: native_http_claim}
                ),
              {:ok, reserved} <- maybe_start_reserved_turn(reserved, request_options),
              :ok <-
