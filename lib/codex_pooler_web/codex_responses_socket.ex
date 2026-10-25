@@ -1790,6 +1790,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  defp flush_discarded_submissions({:stop, reason, close_detail, messages, state}) do
+    {frames, state} = take_discarded_submissions(state)
+    {:stop, reason, close_detail, List.wrap(messages) ++ frames, state}
+  end
+
   # The untouched state is returned verbatim when nothing was discarded: this
   # runs on every socket result, and rewriting the key unconditionally would
   # make every return differ from the state it was handed.
@@ -2528,6 +2533,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp handle_non_public_response_done(pid, {:response_task_failure, {:error, reason}}, state) do
     native_turn_error_result(state, pid, reason)
+  end
+
+  defp handle_non_public_response_done(pid, {:response_task_result, {:error, %{native_websocket_disposition: :size_recovery} = reason}}, state),
+    do: handle_non_public_response_done(pid, {:error, reason}, state)
+
+  # Only the confirmed preclaim denial can mint this internal disposition.
+  # Mark stopping before acknowledging delivery: acknowledgment normally starts
+  # queued work, which must not run while the socket instructs an HTTP retry.
+  defp handle_non_public_response_done(pid, {:error, %{native_websocket_disposition: :size_recovery} = reason}, state) do
+    message = {:text, CodexPooler.JSON.encode!(client_error_event(reason, state))}
+
+    state =
+      state
+      |> Map.put(:socket_stopped?, true)
+      |> record_downstream_terminal(pid, "error")
+      |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
+      |> drop_queued_responses()
+
+    {:stop, :normal, {1011, "upstream websocket message limit"}, [message], state}
   end
 
   defp handle_non_public_response_done(pid, {:response_task_result, {:error, reason}}, state) do
@@ -4329,7 +4354,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # the closed connection's response and waits for the close to take its
   # place (`cancel_upstream_close/2`, findings#270 row 270-302).
   defp maybe_start_queued_response_task(state) do
-    if socket_revoked?(state) or active_response_task?(state) or
+    if Map.get(state, :socket_stopped?, false) or socket_revoked?(state) or active_response_task?(state) or
          public_turn_open?(state) or is_map(Map.get(state, :upstream_close_pending)) do
       state
     else
@@ -4999,6 +5024,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp maybe_schedule_response_delivery({:stop, reason, detail, state}, pid, _completion_source) do
     {:stop, reason, detail, complete_response_task_delivery_for_pid(state, pid)}
+  end
+
+  defp maybe_schedule_response_delivery({:stop, reason, detail, messages, state}, pid, _completion_source) do
+    {:stop, reason, detail, messages, complete_response_task_delivery_for_pid(state, pid)}
   end
 
   defp maybe_schedule_response_delivery(result, pid, completion_source) do

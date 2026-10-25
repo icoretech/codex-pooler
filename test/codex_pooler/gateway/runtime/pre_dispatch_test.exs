@@ -42,6 +42,96 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   @endpoint_path "/backend-api/codex/responses"
 
+  for offset <- [-1, 0, 1] do
+    test "native preclaim preparation enforces exact normalized boundary #{offset}" do
+      setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{})))
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      payload = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic"), "instructions" => "é\n\""}
+      options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+      assert {:ok, initial} = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+      [%{encoded: encoded}] = Map.values(initial.prepared_native_payloads.variants)
+      target = 16_777_216 + unquote(offset)
+      payload = Map.update!(payload, "instructions", &(&1 <> String.duplicate("x", target - byte_size(encoded))))
+      options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+      result = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+
+      if unquote(offset) > 0 do
+        assert {:native_websocket_oversized, ^target, %RequestOptions{}} = result
+      else
+        assert {:ok, prepared} = result
+        [%{encoded: encoded}] = Map.values(prepared.prepared_native_payloads.variants)
+        assert byte_size(encoded) == target
+      end
+
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+    end
+  end
+
+  test "preclaim considers every reachable capability variant without filtering candidates by size" do
+    upstream = start_upstream(FakeUpstream.json_response(%{}))
+    setup = gateway_setup(upstream)
+    other = gateway_upstream(setup.pool, upstream, "synthetic-second-upstream", compact?: false)
+    prime_routing_quota!(other.identity)
+    put_model_source_assignments!(setup.model, [setup.assignment, other.assignment])
+    model = Repo.reload!(setup.model)
+    sources = model.metadata["source_assignment_models"]
+    sources = sources |> Map.update!(setup.assignment.id, &Map.put(&1, "supports_reasoning_summary_parameter", false)) |> Map.update!(other.assignment.id, &Map.put(&1, "supports_reasoning_summary_parameter", true))
+    model = model |> Ecto.Changeset.change(metadata: Map.put(model.metadata, "source_assignment_models", sources)) |> Repo.update!()
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => native_text_input("synthetic"), "instructions" => "", "reasoning" => %{"summary" => "auto"}}
+    options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+    assert map_size(prepared.prepared_native_payloads.assignment_variants) == 2
+    sizes = prepared.prepared_native_payloads.variants |> Map.values() |> Enum.map(&byte_size(&1.encoded))
+    assert Enum.min(sizes) < Enum.max(sizes)
+    payload = Map.put(payload, "instructions", String.duplicate("x", 16_777_216 - Enum.min(sizes)))
+    options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+    assert {:native_websocket_oversized, bytes, %RequestOptions{}} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+    assert bytes > 16_777_216
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  test "preclaim native sizing ignores discarded raw metadata" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic"), "metadata" => %{"discarded" => String.duplicate("x", 16_777_217)}}
+    options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+    [%{encoded: encoded}] = Map.values(prepared.prepared_native_payloads.variants)
+    assert byte_size(encoded) < 1_024
+    assert Repo.aggregate(Request, :count) == 0
+  end
+
+  test "preclaim sizing preserves prewarm, compaction, resume, translated, Lite and body-anchor exclusions" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    base = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic")}
+    metadata = %{"x-codex-turn-metadata" => %{"request_kind" => "compaction", "compaction" => %{"implementation" => "responses"}}}
+    payloads = [Map.put(base, "generate", false), Map.put(base, "client_metadata", metadata), Map.put(base, "input", [%{"type" => "compaction", "encrypted_content" => "synthetic-checkpoint"}]), Map.put(base, "previous_response_id", "resp_synthetic_anchor")]
+
+    for payload <- payloads do
+      options = request_options(auth, payload, []) |> RequestOptions.for_websocket(payload)
+
+      case PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model) do
+        {:ok, prepared} -> refute Map.has_key?(prepared, :prepared_native_payloads)
+        {:error, reason} -> assert is_binary(reason.code)
+      end
+    end
+
+    options = request_options(auth, base, openai_source_endpoint: "/v1/responses") |> RequestOptions.for_websocket(base)
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, base, options, setup.model)
+    refute Map.has_key?(prepared, :prepared_native_payloads)
+    put_model_serving_override!(auth.pool.id, setup.model.exposed_model_id, "lite")
+    options = request_options(auth, base, []) |> RequestOptions.for_websocket(base)
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, base, options, setup.model)
+    assert prepared.request_options.routing.model_serving_mode == "lite"
+    refute Map.has_key?(prepared, :prepared_native_payloads)
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
   test "prepare returns request options and routable candidates without reserving a request" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)

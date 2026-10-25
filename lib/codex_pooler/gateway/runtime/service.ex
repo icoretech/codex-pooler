@@ -112,7 +112,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           required(:candidates) => list(),
           required(:route_state) => RouteState.t(),
           required(:turn_claim) => CodexPooler.Accounting.Request.t() | nil,
-          optional(:authorized_correlation_id) => String.t() | nil
+          optional(:authorized_correlation_id) => String.t() | nil,
+          optional(:prepared_native_payloads) => CodexPooler.Gateway.Runtime.Dispatch.PreparedNativePayloads.t() | nil
         }
   @typep session_routable_result ::
            {:ok, map(), list(), opts(), RouteState.t()} | {:error, term()} | {:error, term(), opts()}
@@ -417,32 +418,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ) do
     case before_dispatch("pre_dispatch", fn -> PreDispatch.prepare(auth, endpoint, payload, request_options, model, visible_model_data, validation) end) do
       {:ok, prepared} ->
-        case claim_prepared_turn(auth, model, payload, endpoint, prepared, validation) do
-          {:ok, turn_claim, authorized_correlation_id} ->
-            execute_session_routable_model(%{
-              auth: auth,
-              endpoint: endpoint,
-              payload: payload,
-              request_options: prepared.request_options,
-              model: model,
-              candidates: prepared.candidates,
-              route_state: prepared.route_state,
-              turn_claim: turn_claim,
-              authorized_correlation_id: authorized_correlation_id
-            })
+        execute_prepared_turn(auth, model, payload, endpoint, prepared, validation)
 
-          {:error, %{code: :duplicate_request} = reason} ->
-            websocket_turn_claim_duplicate(prepared.request_options, reason)
-
-          # The claim rolled back; an admitted compaction must not keep the
-          # owner waiting for a turn that will not run.
-          {:error, %{code: "service_unavailable"} = reason} ->
-            clear_native_compaction_admission(prepared.request_options)
-            {:error, reason}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+      {:native_websocket_oversized, bytes, prepared_options} ->
+        refuse_oversized_native_websocket(auth, model, endpoint, payload, prepared_options, bytes)
 
       # Not recorded as a denied request: the record needs the database that
       # just failed (findings#206 row 206-368).
@@ -454,6 +433,50 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       {:error, %{code: _code} = reason} ->
         log_gateway_denial(denial_context(auth, model, reason, endpoint, payload, request_options))
+    end
+  end
+
+  defp execute_prepared_turn(auth, model, payload, endpoint, prepared, validation) do
+    case claim_prepared_turn(auth, model, payload, endpoint, prepared, validation) do
+      {:ok, turn_claim, authorized_correlation_id} ->
+        execute_session_routable_model(%{
+          auth: auth,
+          endpoint: endpoint,
+          payload: payload,
+          request_options: prepared.request_options,
+          model: model,
+          candidates: prepared.candidates,
+          route_state: prepared.route_state,
+          prepared_native_payloads: Map.get(prepared, :prepared_native_payloads),
+          turn_claim: turn_claim,
+          authorized_correlation_id: authorized_correlation_id
+        })
+
+      {:error, %{code: :duplicate_request} = reason} ->
+        websocket_turn_claim_duplicate(prepared.request_options, reason)
+
+      # The claim rolled back; an admitted compaction must not keep the
+      # owner waiting for a turn that will not run.
+      {:error, %{code: "service_unavailable"} = reason} ->
+        clear_native_compaction_admission(prepared.request_options)
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp refuse_oversized_native_websocket(auth, model, endpoint, payload, options, bytes) do
+    refusal = error(413, "websocket_message_too_large", "request exceeds the upstream websocket message limit")
+
+    with :ok <- DirectCleanup.ready(options),
+         {:ok, :native_websocket_size_recovery} <-
+           Denials.record_native_websocket_size_recovery(denial_context(auth, model, refusal, endpoint, payload, options), bytes) do
+      {:error, Map.put(error(502, "upstream_request_failed", "request exceeds the upstream websocket message limit"), :native_websocket_disposition, :size_recovery)}
+    else
+      {:error, :missing_window} -> {:error, refusal}
+      {:error, :cancelled} -> {:error, error(499, "client_disconnected", "request cancelled before admission")}
+      {:error, _reason} -> {:error, error(503, "service_unavailable", "request admission is unavailable")}
     end
   end
 
@@ -629,6 +652,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       model: model,
       candidates: candidates,
       route_state: route_state,
+      prepared_native_payloads: Map.get(context, :prepared_native_payloads),
       turn_claim: turn_claim
     })
   end
@@ -650,22 +674,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            request_options: request_options,
            model: model,
            turn_claim: turn_claim
-         }
+         } = context
        ) do
     case result do
       {:ok, reserved, candidates, request_options, route_state} ->
         case DirectCleanup.ready(request_options) do
           :ok ->
-            dispatch_candidates(
-              auth,
-              endpoint,
-              payload,
-              model,
-              reserved,
-              candidates,
-              request_options,
-              route_state
-            )
+            dispatch_candidates(context, reserved, candidates, request_options, route_state)
 
           {:error, :cancelled} ->
             {:error, error(499, "client_disconnected", "request cancelled before dispatch")}
@@ -1828,49 +1843,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     }
   end
 
-  defp dispatch_candidates(
-         auth,
-         endpoint,
-         payload,
-         model,
-         reserved,
-         candidates,
-         request_options,
-         %RouteState{} = route_state
-       ) do
-    dispatch_fresh_candidates(
-      auth,
-      endpoint,
-      payload,
-      model,
-      reserved,
-      candidates,
-      request_options,
-      route_state
-    )
-  end
+  defp dispatch_candidates(prepared, reserved, candidates, request_options, route_state) do
+    attrs =
+      prepared
+      |> Map.take([:auth, :endpoint, :payload, :model, :prepared_native_payloads])
+      |> Map.merge(%{reserved: reserved, candidates: candidates, request_options: request_options, route_state: route_state})
 
-  defp dispatch_fresh_candidates(
-         auth,
-         endpoint,
-         payload,
-         model,
-         reserved,
-         candidates,
-         request_options,
-         route_state
-       ) do
-    with {:ok, context} <-
-           Context.new(%{
-             auth: auth,
-             endpoint: endpoint,
-             payload: payload,
-             model: model,
-             reserved: reserved,
-             candidates: candidates,
-             request_options: request_options,
-             route_state: route_state
-           }) do
+    with {:ok, context} <- Context.new(attrs) do
       CandidateDispatch.dispatch(context, &dispatch_decrypted_candidate/1)
     end
   after

@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
+  alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -20,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+  alias CodexPooler.Gateway.Runtime.Dispatch.PreparedNativePayloads
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
@@ -36,7 +38,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   @type prepared :: %{
           required(:request_options) => RequestOptions.t(),
           required(:candidates) => [candidate()],
-          required(:route_state) => RouteState.t()
+          required(:route_state) => RouteState.t(),
+          optional(:prepared_native_payloads) => PreparedNativePayloads.t() | nil
         }
   @type validation_authority ::
           :validate
@@ -49,7 +52,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           map(),
           RequestOptions.t(),
           Model.t()
-        ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
+        ) :: {:ok, prepared()} | {:native_websocket_oversized, pos_integer(), RequestOptions.t()} | {:error, GatewayContracts.gateway_error()}
   def prepare(auth, endpoint, payload, %RequestOptions{} = request_options, %Model{} = model) do
     hydration = CandidateEligibility.hydrate_model_visibility(model, models: [model])
 
@@ -77,7 +80,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           RequestOptions.t(),
           Model.t(),
           visible_model_context()
-        ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
+        ) :: {:ok, prepared()} | {:native_websocket_oversized, pos_integer(), RequestOptions.t()} | {:error, GatewayContracts.gateway_error()}
   def prepare(
         auth,
         endpoint,
@@ -98,7 +101,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           Model.t(),
           visible_model_context(),
           validation_authority()
-        ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
+        ) :: {:ok, prepared()} | {:native_websocket_oversized, pos_integer(), RequestOptions.t()} | {:error, GatewayContracts.gateway_error()}
   def prepare(
         auth,
         endpoint,
@@ -227,8 +230,54 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           )
         )
 
-      {:ok, %{request_options: request_options, candidates: candidates, route_state: route_state}}
+      prepared = %{request_options: request_options, candidates: candidates, route_state: route_state}
+      prepare_native_payloads(prepared, payload, model, endpoint, canonical_filter_input_candidates ++ partition_fallback ++ candidates)
     end
+  end
+
+  # This is a transport decision, not a semantic turn-role decision: inherited
+  # tool results remain eligible when the request carries its complete history.
+  # Keep every reachable cohort; size never filters or reorders assignments.
+  defp prepare_native_payloads(prepared, payload, model, endpoint, candidates) do
+    options = prepared.request_options
+
+    if native_size_check?(payload, endpoint, options) and options.payload_context.portable_full_history? and is_nil(SessionContinuity.hard_pin_metadata(options, model)) do
+      candidates = Enum.uniq_by(candidates, fn {assignment, _identity} -> assignment.id end)
+
+      case PreparedNativePayloads.prepare(payload, model, endpoint, options, candidates, 16_777_216) do
+        {:ok, payloads} ->
+          {:ok, Map.put(prepared, :prepared_native_payloads, payloads)}
+
+        {:oversized, bytes} ->
+          {:native_websocket_oversized, bytes, options}
+
+        {:error, %{status: _status, code: _code} = reason} ->
+          {:error, reason}
+
+        {:error, _encoding_error} ->
+          {:error, error(500, "server_error", "upstream payload preparation failed", nil)}
+      end
+    else
+      {:ok, prepared}
+    end
+  end
+
+  defp native_size_check?(payload, endpoint, %RequestOptions{transport: %{transport: "websocket"}, routing: %{model_serving_mode: "full"}, openai_compatibility: %{source_endpoint: nil}, native_compaction_admission: nil, runtime: %{native_replay_binding: nil}} = options)
+       when endpoint in ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
+    ordinary_native_generation?(payload, options) and
+      not RequestOptions.use_responses_lite?(options) and
+      not OpenAICompatibility.translated_responses_surface?(options.openai_compatibility) and
+      not options.payload_context.compaction_trigger_bridge?
+  end
+
+  defp native_size_check?(_payload, _endpoint, _options), do: false
+
+  defp ordinary_native_generation?(payload, options) do
+    Map.get(payload, "type", "response.create") == "response.create" and
+      Map.get(payload, "generate") != false and
+      is_nil(Map.get(payload, "previous_response_id")) and is_nil(options.continuity.previous_response_id) and
+      not NativeTurnContinuation.compaction_request?(payload, options) and
+      NativeTurnContinuation.turn_role(payload) in [:opening, :tool_continuation]
   end
 
   defp validate_strict_schema(payload, %RequestOptions{openai_compatibility: compatibility}) do

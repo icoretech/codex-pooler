@@ -38,6 +38,7 @@ defmodule CodexPooler.Gateway.Contracts do
           optional(:non_credit_recovery_outcome) => String.t(),
           optional(:route_class) => String.t(),
           optional(:accounting_disposition) => :zero_work,
+          optional(:native_websocket_disposition) => :size_recovery,
           optional(:internal_reason) => String.t(),
           optional(:compaction_invalid_reason) => String.t(),
           optional(:public_compaction_error?) => boolean(),
