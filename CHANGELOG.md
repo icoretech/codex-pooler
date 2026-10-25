@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.13.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.14...codex-pooler-v0.13.15) (2026-10-25)
+
+
+### Bug Fixes
+
+* **alerts:** detach incident targets when rule conditions change ([8448a46](https://github.com/icoretech/codex-pooler/commit/8448a467e0574d2477ba1db0b636326992f3a685))
+* **compat:** accept nested prompt-cache breakpoint TTLs ([89f5f5b](https://github.com/icoretech/codex-pooler/commit/89f5f5bb4260e32f14323295fe3e64a450dd17c0))
+* **compat:** preserve late chat stream errors ([1707a9c](https://github.com/icoretech/codex-pooler/commit/1707a9cc0a0b2701cd897d284239d857b5da7255))
+* **files:** mark complete file lists as terminal pages ([834ccb0](https://github.com/icoretech/codex-pooler/commit/834ccb08e6ae15ce6550790ecde38009695265f4))
+* **mcp:** disambiguate quota selectors across workspaces ([a97796a](https://github.com/icoretech/codex-pooler/commit/a97796a7fc45523907041693979aafe495df786a))
+
+
+### Dependencies
+
+* update dependency @astrojs/starlight to v0.42.7 ([#566](https://github.com/icoretech/codex-pooler/issues/566)) ([5abee76](https://github.com/icoretech/codex-pooler/commit/5abee761f9e738ab30b41486fc1c1575b049b0e2))
+* update helm release codex-pooler to v0.14.10 ([#568](https://github.com/icoretech/codex-pooler/issues/568)) ([ab74213](https://github.com/icoretech/codex-pooler/commit/ab74213fbe3c82deb501e1d83b77347949eb4867))
+
+
+### Tests
+
+* **alerts:** preload peer recovery callbacks ([9a3171f](https://github.com/icoretech/codex-pooler/commit/9a3171f23977a0c49dbbf5d87810a92ba6443745))
+* **ci:** format Pages trigger admission assertions ([8e4cb18](https://github.com/icoretech/codex-pooler/commit/8e4cb1855b85d5862a05305f8720c162a809ae12))
+* **gateway:** replan reads after installing lifecycle error views ([49b3ce1](https://github.com/icoretech/codex-pooler/commit/49b3ce1c8b2bda6d7d9e76abdd01e5c97697ab2e))
+
 ## [0.13.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.13...codex-pooler-v0.13.14) (2026-10-24)
 
 
