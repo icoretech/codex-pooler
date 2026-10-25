@@ -17,6 +17,10 @@ These failures can occur before request reservation, so an empty Request logs er
 
 When the rate rises, compare database checkout pressure, owner-process logs and rollout timing. This counter does not measure TCP resets or prove that a close frame reached the client.
 
+For oversized native Full startup requests, distinguish the stored rejection from the client wire sequence: Request logs record `413 native_websocket_message_too_large` with no usage, attempt or turn, while the websocket receives a retryable `502` and Close `1011`. The matching authenticated window then receives HTTP `426` on reconnect for up to 60 seconds, so the client can use HTTP. A missing canonical window produces local `413`; marker-storage failure produces `503`. See [websocket guardrails](/reference/runtime-routes/#websocket-guardrails).
+
+A provider Close `1009` means the upstream message was too large; it is distinct from an inbound frame-limit refusal. Native Full and Lite size closes are health-neutral. Do not treat zero received response frames as authority to replay a request internally or clear its accounting.
+
 ## Duplicate-turn refusals
 
 `codex_pooler_gateway_duplicate_turn_refused_count` counts client-visible `409 duplicate_turn` refusals that get no request row of their own, so database-derived request/error totals do not include them. A guided retry of a content-filtered turn that dispatch refuses because its account binding does not hold is also answered `409 duplicate_turn`, but it is an admitted request: its row records status `409` and the error code `invalid_content_filter_retry_binding`, so Request logs show it and this counter does not count it.
@@ -39,6 +43,8 @@ Look for these log messages:
 The bounded stage and `reason_class` help locate the boundary. The refused request may have no request row because persistence was unavailable.
 
 Use HTTP status metrics for HTTP refusals; an error inside an already-upgraded WebSocket is not a new HTTP 503 response. For that case, inspect the application logs and WebSocket diagnostics.
+
+A `503` followed by repeated `409 duplicate_turn` can mean admission committed but its acknowledgement was lost. Compare the exact predecessor, admission execution identity, turn visibility, attempt count and reservation release. An exact terminal execution proof without interruption permits recovery of an invisible native HTTP turn with no attempt; the later explicit retry retains all duplicate protections. The initial database delay and this stranded-reservation consequence are separate findings. Never clear an active claim from the HTTP status alone.
 
 A burst across replicas points to a shared dependency or resource problem. Check PostgreSQL availability, connection-pool pressure, query cancellation and deployment changes before concluding that storage or the database server is the cause.
 
@@ -75,7 +81,7 @@ These events come from serving application nodes and have no worker/scheduler re
 | Phase | What to check |
 | --- | --- |
 | `routing_rejected` | A deliberate refusal before dispatch; inspect the routing reason |
-| `turn_interrupted` | Client departure or owner lifecycle; inspect the release reason |
+| `turn_interrupted` | Client departure, owner lifecycle or proven terminal admission recovery; inspect the release reason |
 | `task_exception` | A process raised before creating an attempt; investigate the pre-dispatch path |
 | `stale_sweep` | Cleanup found a reservation abandoned beyond the six-hour threshold |
 | `unrecorded` | The releasing path did not declare its boundary; a rising count needs investigation |
