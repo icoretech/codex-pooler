@@ -81,6 +81,12 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
           optional(:transport_failure) => transport_failure_metadata()
         }
 
+  # Only the transport's observed peer close identifies a message-size refusal.
+  # Generic stream errors and a close code without its provenance are not proof.
+  @spec peer_message_too_large?(term()) :: boolean()
+  def peer_message_too_large?(%{"phase" => "upstream_close", "termination_source" => "peer_close_frame", "peer_close_code" => 1009}), do: true
+  def peer_message_too_large?(_metadata), do: false
+
   @spec safe_reason(term()) :: String.t() | nil
   defdelegate safe_reason(reason), to: SharedTransportFailureReason
 

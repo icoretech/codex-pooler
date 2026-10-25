@@ -3,6 +3,24 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
 
   alias CodexPooler.Gateway.Transports.TransportFailureReason
 
+  test "message-size neutrality requires the transport's exact peer Close1009 shape" do
+    metadata = %{"phase" => "upstream_close", "termination_source" => "peer_close_frame", "peer_close_code" => 1009}
+    assert TransportFailureReason.peer_message_too_large?(metadata)
+
+    for field <- Map.keys(metadata) do
+      refute TransportFailureReason.peer_message_too_large?(Map.delete(metadata, field))
+    end
+
+    for code <- [1011, 1012, "1009", nil] do
+      refute TransportFailureReason.peer_message_too_large?(%{metadata | "peer_close_code" => code})
+    end
+
+    refute TransportFailureReason.peer_message_too_large?(%{metadata | "termination_source" => "transport_closed"})
+    refute TransportFailureReason.peer_message_too_large?(%{metadata | "phase" => "receive"})
+    refute TransportFailureReason.peer_message_too_large?(%{phase: "upstream_close", termination_source: "peer_close_frame", peer_close_code: 1009})
+    refute TransportFailureReason.peer_message_too_large?(nil)
+  end
+
   test "extracts safe reasons from transport exceptions" do
     assert TransportFailureReason.safe_reason(%Req.TransportError{reason: :timeout}) == "timeout"
 

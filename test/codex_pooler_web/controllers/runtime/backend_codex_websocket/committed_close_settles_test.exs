@@ -25,10 +25,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CommittedCloseSettlesTest
     only: [owner_socket: 3, pool_attempts: 1]
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request, RequestClientRetryLink}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestClientRetryLink}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, CodexSession, RoutingCircuitState}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
   alias CodexPoolerWeb.CodexResponsesSocket
@@ -168,6 +168,100 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CommittedCloseSettlesTest
       assert_received {:upgrade_close_served, 1}
       assert :ok = FakeUpstream.verify!(served)
     end
+  end
+
+  for mode <- ["full", "lite"], forwarding <- [false, true], half_open <- [false, true] do
+    @tag :websocket_connect_failover
+    test "#{mode} forwarding=#{forwarding} half_open=#{half_open}: peer Close1009 settles once without penalizing the route" do
+      assert_message_too_large_health!(unquote(mode), unquote(forwarding), unquote(half_open))
+    end
+  end
+
+  for mode <- ["full", "lite"], path <- [:direct, :owner] do
+    test "#{mode} #{path}: peer Close1012 remains a route failure" do
+      assert_restart_close_health!(unquote(mode), unquote(path))
+    end
+  end
+
+  defp assert_restart_close_health!(mode, path) do
+    put_owner_forwarding!(path == :owner)
+    upstream = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_close(code: 1012))]))
+    other = start_upstream(completed_response_frames("resp_unexpected_other", [], 3, 1))
+    {setup, _second} = websocket_failover_candidates!(upstream, other, mode)
+    cleanup_pool_owners!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    assert %{"type" => "error", "status" => 502} = run_turn!(path, auth, setup, Ecto.UUID.generate())
+    assert route_circuit_failures(setup.assignment.id) == [{"upstream_stream_error", 1}]
+    assert FakeUpstream.count(other) == 0
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  defp assert_message_too_large_health!(mode, forwarding, half_open) do
+    put_owner_forwarding!(forwarding)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, FakeUpstream.websocket_close(code: 1009)),
+          strict_native_request(2, completed_response_frames("resp_after_size_close", [], 3, 1))
+        ])
+      )
+
+    other = start_upstream(completed_response_frames("resp_unexpected_other", [], 3, 1))
+    {setup, _second} = websocket_failover_candidates!(upstream, other, mode)
+    cleanup_pool_owners!(setup)
+    circuit = if half_open, do: half_open_websocket_circuit!(setup, setup.assignment)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    {_server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, Ecto.UUID.generate())
+    payload = released_client_turn(setup, Ecto.UUID.generate(), Ecto.UUID.generate())
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+    {conn, _websocket, _types, terminal} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
+    assert %{"type" => "error", "status" => 502, "error" => %{"code" => "upstream_request_failed"}} = terminal
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"request_id" => request_id, "status" => "failed"}}}, @detection_timeout_ms
+    request = Repo.get!(Request, request_id)
+    assert {request.status, request.last_error_code, request.response_status_code, request.retry_count} == {"failed", "upstream_stream_error", 502, 0}
+    assert request.request_metadata["routing"]["model_serving_mode"] == mode
+    assert [attempt] = pool_attempts(setup.pool.id)
+    assert {attempt.status, attempt.network_error_code, attempt.pool_upstream_assignment_id} == {"failed", "upstream_stream_error", setup.assignment.id}
+    assert %{"phase" => "upstream_close", "termination_source" => "peer_close_frame", "peer_close_code" => 1009, "upstream_committed" => true} = attempt.response_metadata["transport_failure"]
+    assert [settlement] = Repo.all(from(e in LedgerEntry, where: e.request_id == ^request_id and e.entry_kind == "settlement"))
+    assert settlement.attempt_id == attempt.id
+    assert {request.usage_status, attempt.usage_status, settlement.usage_status} == {"usage_unknown", "usage_unknown", "usage_unknown"}
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(other) == 0
+
+    if half_open do
+      assert %RoutingCircuitState{status: "half_open", reason_code: "test_probe", failure_count: 1, metadata: %{"probe_in_flight_count" => 0}} = Repo.get!(RoutingCircuitState, circuit.id)
+    else
+      assert route_circuit_failures(setup.assignment.id) == []
+    end
+
+    refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_upstream_assignment_id == ^setup.assignment.id))
+
+    CodexPooler.TestDiagnostics.puts(fn ->
+      CodexPooler.JSON.encode!(%{scenario: "native_peer_close1009", mode: mode, forwarding: forwarding, half_open: half_open, topology: "one_node", request_status: request.status, request_code: request.last_error_code, status_code: request.response_status_code, usage_status: settlement.usage_status, attempt_count: 1, settlement_count: 1, upstream_committed: attempt.response_metadata["transport_failure"]["upstream_committed"], primary_requests: FakeUpstream.count(upstream), other_requests: FakeUpstream.count(other), circuit_failures: Enum.map(route_circuit_failures(setup.assignment.id), fn {reason, count} -> %{reason: reason, count: count} end), probe_in_flight: if(circuit, do: Repo.get!(RoutingCircuitState, circuit.id).metadata["probe_in_flight_count"]), demotion_count: Repo.aggregate(from(d in BridgeDemotion, where: d.pool_upstream_assignment_id == ^setup.assignment.id), :count)})
+    end)
+
+    await_downstream_closed!(conn, request, forwarding)
+
+    # A distinct ordinary turn can use the same account after the refusal,
+    # including the probe slot just released by neutral completion.
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, Ecto.UUID.generate())
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, released_client_turn(setup, Ecto.UUID.generate(), Ecto.UUID.generate()))
+    {conn, _websocket, _types, terminal} = receive_public_websocket_until_terminal(conn, websocket, ref, [])
+    assert %{"type" => "response.completed"} = terminal
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"request_id" => next_request_id, "status" => "succeeded"}}}, @detection_timeout_ms
+    await_downstream_closed!(conn, Repo.get!(Request, next_request_id), forwarding)
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert FakeUpstream.count(other) == 0
+  end
+
+  defp cleanup_pool_owners!(setup) do
+    on_exit(fn ->
+      Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id, select: s.id))
+      |> Enum.each(&stop_websocket_owner_session/1)
+    end)
   end
 
   defp put_owner_forwarding!(enabled?) do

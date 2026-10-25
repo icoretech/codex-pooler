@@ -1410,7 +1410,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              attempt_metadata: metadata,
              before_finalize: fn ->
                SideEffects.observe_websocket_response(context, finalization)
-               record_failed_health(context, reason, code)
+               record_failed_health(context, finalization, code)
              end
            }) do
         {:stale_generation, finalized} -> {:ok, finalized}
@@ -1441,7 +1441,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
            |> maybe_put_before_finalize(fn ->
              SideEffects.observe_websocket_response(context, finalization)
 
-             record_failed_health(context, reason, code, auth_exhaustion)
+             record_failed_health(context, finalization, code)
            end),
            context.request_options.runtime.session_owner_witness
          ) do
@@ -1485,16 +1485,24 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp failed_message(nil, reason), do: Metadata.safe_reason(reason)
   defp failed_message(_auth_exhaustion, _reason), do: ErrorCodes.upstream_unauthorized_message()
 
-  defp record_failed_health(context, _reason, _code, :follower), do: DispatchLifecycle.neutral_completion(context)
-
-  defp record_failed_health(context, reason, code, :exhausted) do
-    SideEffects.maybe_enqueue_gateway_reconciliation(context.reserved.request.pool_id, context.assignment)
-    record_failed_health(context, reason, code)
+  defp record_failed_health(context, finalization, code) do
+    if TransportFailureReason.peer_message_too_large?(Map.get(finalization, :transport_failure)) do
+      DispatchLifecycle.neutral_completion(context)
+    else
+      do_record_failed_health(context, finalization.reason, code, Map.get(finalization, :auth_exhaustion))
+    end
   end
 
-  defp record_failed_health(context, reason, code, nil), do: record_failed_health(context, reason, code)
+  defp do_record_failed_health(context, _reason, _code, :follower), do: DispatchLifecycle.neutral_completion(context)
 
-  defp record_failed_health(context, :upstream_websocket_closed_before_terminal = reason, code) do
+  defp do_record_failed_health(context, reason, code, :exhausted) do
+    SideEffects.maybe_enqueue_gateway_reconciliation(context.reserved.request.pool_id, context.assignment)
+    do_record_failed_health(context, reason, code)
+  end
+
+  defp do_record_failed_health(context, reason, code, nil), do: do_record_failed_health(context, reason, code)
+
+  defp do_record_failed_health(context, :upstream_websocket_closed_before_terminal = reason, code) do
     if native_full_history_compaction?(context.request_options) do
       DispatchLifecycle.neutral_completion(context)
     else
@@ -1502,7 +1510,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
-  defp record_failed_health(context, reason, code),
+  defp do_record_failed_health(context, reason, code),
     do: Streaming.record_health_failure(reason, code, context)
 
   defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
