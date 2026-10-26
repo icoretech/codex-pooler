@@ -2,93 +2,41 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import test from "node:test";
-import { runInNewContext } from "node:vm";
 
 const workflow = readFileSync(
 	new URL("../../.github/workflows/pages.yml", import.meta.url),
 	"utf8",
 );
 
-const condition = (job) => {
-	const match = workflow.match(
-		new RegExp(`^  ${job}:\\n    if: \\$\\{\\{ (.+) \\}\\}`, "m"),
+const triggers = workflow.match(/^on:\n([\s\S]*?)(?=^\S)/m)?.[1];
+assert.ok(triggers, "missing workflow triggers");
+const pushTrigger = triggers.match(/^ {2}push:\n((?: {4,}.+\n|\n)+)/m)?.[1];
+assert.ok(pushTrigger, "missing push trigger");
+
+const listValues = (list) =>
+	[...list.matchAll(/^ {6}- (.+)$/gm)].map((match) =>
+		match[1].replace(/^(['"])(.*)\1$/, "$2"),
 	);
-	assert.ok(match, `missing ${job} job condition`);
-	return match[1];
-};
 
-const evaluates = (expression, github) =>
-	runInNewContext(expression, {
-		github,
-		startsWith: (value, prefix) =>
-			value.toLowerCase().startsWith(prefix.toLowerCase()),
-	});
-
-const pullRequest = (headRef, headRepository = "example-org/sample-app") => ({
-	event_name: "pull_request",
-	head_ref: headRef,
-	repository: "example-org/sample-app",
-	event: { pull_request: { head: { repo: { full_name: headRepository } } } },
+test("Pages admits only main pushes, excluding PRs, tags and manual dispatch before jobs start", () => {
+	assert.deepEqual(
+		[...triggers.matchAll(/^ {2}(\w+):/gm)].map((match) => match[1]),
+		["push"],
+	);
+	const branches = pushTrigger.match(/^ {4}branches:\n((?: {6}- .+\n)+)/m);
+	assert.ok(branches, "missing push branch filter");
+	assert.deepEqual(listValues(branches[1]), ["main"]);
+	assert.doesNotMatch(triggers, /^ {4}(tags|tags-ignore|branches-ignore):/m);
 });
 
-for (const [name, github, build, deploy] of [
-	[
-		"release-please component PR",
-		pullRequest("release-please--branches--main--components--sample-app"),
-		false,
-		false,
-	],
-	[
-		"release-please notes PR",
-		pullRequest(
-			"release-please--branches--main--components--sample-app--release-notes",
-		),
-		false,
-		false,
-	],
-	[
-		"fork PR with a release-please branch name",
-		pullRequest(
-			"release-please--branches--main--components--sample-app",
-			"external-contributor/sample-app",
-		),
-		true,
-		false,
-	],
-	["ordinary docs PR", pullRequest("docs/update-guide"), true, false],
-	["Renovate PR", pullRequest("renovate/docs-dependencies"), true, false],
-	[
-		"main release push",
-		{ event_name: "push", ref: "refs/heads/main", head_ref: "" },
-		true,
-		true,
-	],
-	[
-		"other branch push",
-		{ event_name: "push", ref: "refs/heads/docs-update", head_ref: "" },
-		true,
-		false,
-	],
-	[
-		"manual publication",
-		{ event_name: "workflow_dispatch", ref: "refs/heads/main", head_ref: "" },
-		true,
-		true,
-	],
-]) {
-	test(`Pages selects the intended jobs for a ${name}`, () => {
-		assert.equal(evaluates(condition("build"), github), build);
-		assert.equal(evaluates(condition("deploy"), github), deploy);
-	});
-}
-
-test("Pages deployment requires the successful build and retains its artifact publication condition", () => {
+test("Pages deployment requires the successful build and its uploaded artifact", () => {
 	assert.match(workflow, / {2}deploy:\n[\s\S]*? {4}needs: build\n/);
-	const upload = workflow.match(
-		/- name: Upload Pages artifact\n {8}if: \$\{\{ (.+) \}\}/,
+	assert.match(workflow, /uses: actions\/upload-pages-artifact@/);
+	assert.match(workflow, /name: github-pages-\$\{\{ github.run_attempt \}\}/);
+	assert.match(
+		workflow,
+		/artifact_name: github-pages-\$\{\{ github.run_attempt \}\}/,
 	);
-	assert.ok(upload, "missing upload condition");
-	assert.equal(upload[1], condition("deploy"));
 });
 
 for (const trigger of ["push", "pull_request"]) {
@@ -113,57 +61,30 @@ for (const trigger of ["push", "pull_request"]) {
 	});
 }
 
-const triggeredByPaths = (event, changedPaths) => {
-	const paths = workflow.match(
-		new RegExp(`^  ${event}:\\n    paths:\\n((?:      - .+\\n)+)`, "m"),
-	);
-	assert.ok(paths, `missing ${event} path trigger`);
-	const patterns = [...paths[1].matchAll(/- '([^']+)'/g)].map(
-		(match) => match[1],
-	);
+const triggeredByMainPush = (changedPaths) => {
+	const paths = pushTrigger.match(/^ {4}paths:\n((?: {6}- .+\n)+)/m);
+	assert.ok(paths, "missing push path trigger");
+	const patterns = listValues(paths[1]);
 	return changedPaths.some((path) =>
 		patterns.some((pattern) => matchesGlob(path, pattern)),
 	);
 };
 
-test("generated release PR files do not register Pages, but their merged manifest rebuilds the site", () => {
-	const config = JSON.parse(
-		readFileSync(
-			new URL("../../release-please-config.json", import.meta.url),
-			"utf8",
-		),
-	);
-	const packageConfig = config.packages["."];
-	const releaseFiles = [
-		".release-please-manifest.json",
-		packageConfig["changelog-path"],
-		...packageConfig["extra-files"].map((file) => file.path),
-	];
-	assert.equal(triggeredByPaths("pull_request", releaseFiles), false);
-	assert.equal(
-		triggeredByPaths("push", [".release-please-manifest.json"]),
-		true,
-	);
-});
-
 for (const path of [
 	"docs-site/src/content/docs/deployment/docker-compose.mdx",
 	"docs-site/src/content/docs/clients/example.mdx",
 	"docs-site/package-lock.json",
+	".release-please-manifest.json",
 	".github/workflows/pages.yml",
 ]) {
-	test(`ordinary and fork PR changes to ${path} still register Pages checks`, () => {
-		assert.equal(triggeredByPaths("pull_request", [path]), true);
-		assert.equal(
-			evaluates(condition("build"), pullRequest("docs/update-guide")),
-			true,
-		);
-		assert.equal(
-			evaluates(
-				condition("build"),
-				pullRequest("docs/update-guide", "external-contributor/sample-app"),
-			),
-			true,
-		);
+	test(`Pages publishes main changes to ${path}`, () => {
+		assert.equal(triggeredByMainPush([path]), true);
 	});
 }
+
+test("unrelated main changes do not register Pages", () => {
+	assert.equal(
+		triggeredByMainPush(["mix.lock", "lib/sample.ex", "CHANGELOG.md"]),
+		false,
+	);
+});

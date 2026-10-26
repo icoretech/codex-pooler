@@ -3,18 +3,13 @@ name: pages
 # Publishes docs-site/ to GitHub Pages: the landing page at the site root
 # and the docs under /docs.
 on:
-  # Release PRs change the manifest, not docs sources. The merged manifest
-  # rebuilds the version-derived install snippet through the push trigger.
-  pull_request:
-    paths:
-      - 'docs-site/**'
-      - '.github/workflows/pages.yml'
   push:
+    branches:
+      - 'main'
     paths:
       - 'docs-site/**'
       - '.release-please-manifest.json'
       - '.github/workflows/pages.yml'
-  workflow_dispatch:
 
 concurrency:
   group: pages-${{ github.workflow }}-${{ github.ref }}
@@ -22,7 +17,6 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -63,14 +57,12 @@ jobs:
           test -z "$(find docs-site/dist/pagefind -maxdepth 1 -type f -empty)"
 
       - name: Upload Pages artifact
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         uses: actions/upload-pages-artifact@v5.0.0
         with:
           name: github-pages-${{ github.run_attempt }}
           path: docs-site/dist
 
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     needs: build
     runs-on: ubuntu-26.04
     permissions:
