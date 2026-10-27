@@ -358,6 +358,63 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(stale_view, "#alert-rule-state option[selected][value='disabled']")
   end
 
+  @tag :stale_alert_editor_disable
+  test "disabling from a stale rule editor cannot refresh away another tab's revision", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-rule-disable", name: "Stale rule disable"})
+    rule = alert_rule_fixture(pool, created_by_user_id: scope.user.id, display_name: "Original rule")
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts")
+    stale_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    stale_view |> form("#alerts-rule-form", alert_rule: %{display_name: "Unsaved stale rule edit"}) |> render_change()
+    current_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    current_view |> form("#alerts-rule-form", alert_rule: %{display_name: "Current rule name", cooldown_minutes: "60"}) |> render_submit()
+    current = Repo.get!(AlertRule, rule.id)
+    events = audit_events_for_target(rule.id)
+
+    disable_html = stale_view |> element("#alert-rule-disable-#{rule.id}") |> render_click()
+    stale_view |> form("#alerts-rule-form") |> render_submit()
+
+    assert Repo.get!(AlertRule, rule.id).display_name == "Current rule name"
+    assert Repo.get!(AlertRule, rule.id) == current
+    assert audit_events_for_target(rule.id) == events
+    assert disable_html =~ "Alert rule changed. Reopen it before disabling"
+    assert has_element?(stale_view, "#alert-rule-display-name[value='Unsaved stale rule edit']")
+    assert has_element?(stale_view, "#alerts-rule-form-panel", "changed since you opened")
+
+    stale_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    stale_view |> element("#alert-rule-disable-#{rule.id}") |> render_click()
+    assert Repo.get!(AlertRule, rule.id).state == AlertRule.disabled_state()
+    assert Repo.get!(AlertRule, rule.id).display_name == "Current rule name"
+  end
+
+  @tag :stale_alert_editor_disable
+  test "disabling from a stale channel editor cannot refresh away another tab's revision", %{conn: conn, scope: scope} do
+    {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Original channel", state: AlertChannel.active_state(), email_to: "alerts@example.com"})
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    stale_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    stale_view |> form("#alerts-channel-form", alert_channel: %{display_name: "Unsaved stale channel edit"}) |> render_change()
+    current_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    current_view |> form("#alerts-channel-form", alert_channel: %{display_name: "Current channel name", email_to: "current@example.com"}) |> render_submit()
+    current = Repo.get!(AlertChannel, channel.id)
+    events = audit_events_for_target(channel.id)
+
+    disable_html = stale_view |> element("#alert-channel-disable-#{channel.id}") |> render_click()
+    stale_view |> form("#alerts-channel-form") |> render_submit()
+
+    assert Repo.get!(AlertChannel, channel.id).display_name == "Current channel name"
+    assert Repo.get!(AlertChannel, channel.id) == current
+    assert audit_events_for_target(channel.id) == events
+    assert disable_html =~ "Alert channel changed. Reopen it before disabling"
+    assert has_element?(stale_view, "#alert-channel-display-name[value='Unsaved stale channel edit']")
+    assert has_element?(stale_view, "#alerts-channel-form-panel", "changed since you opened")
+
+    stale_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    stale_view |> element("#alert-channel-disable-#{channel.id}") |> render_click()
+    assert Repo.get!(AlertChannel, channel.id).state == AlertChannel.disabled_state()
+    assert Repo.get!(AlertChannel, channel.id).display_name == "Current channel name"
+  end
+
   test "disabling another rule preserves the open rule editor", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "independent-rule-editor", name: "Independent rule editor"})
     editing = alert_rule_fixture(pool, created_by_user_id: scope.user.id)

@@ -327,14 +327,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   end
 
   defp disable_rule(socket, %{"id" => rule_id}) do
-    case Alerts.update_rule(socket.assigns.current_scope, rule_id, %{
-           state: AlertRule.disabled_state()
-         }) do
+    opts = disable_revision_opts(socket.assigns.editing_rule, rule_id)
+
+    case Alerts.update_rule(socket.assigns.current_scope, rule_id, %{state: AlertRule.disabled_state()}, opts) do
       {:ok, rule} ->
         socket
         |> assign_alert_state()
         |> refresh_disabled_rule_editor(rule)
         |> put_flash(:info, "Alert rule disabled")
+
+      {:error, %{code: :stale_update}} ->
+        socket
+        |> assign_alert_state()
+        |> put_flash(:error, "Alert rule changed. Reopen it before disabling")
 
       {:error, _reason} ->
         socket
@@ -445,14 +450,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   end
 
   defp disable_channel(socket, %{"id" => channel_id}) do
-    case Alerts.update_channel(socket.assigns.current_scope, channel_id, %{
-           state: AlertChannel.disabled_state()
-         }) do
+    opts = disable_revision_opts(socket.assigns.editing_channel, channel_id)
+
+    case Alerts.update_channel(socket.assigns.current_scope, channel_id, %{state: AlertChannel.disabled_state()}, opts) do
       {:ok, channel} ->
         socket
         |> assign_alert_state()
         |> refresh_disabled_channel_editor(channel)
         |> put_flash(:info, "Alert channel disabled")
+
+      {:error, %{code: :stale_update}} ->
+        socket
+        |> assign_alert_state()
+        |> put_flash(:error, "Alert channel changed. Reopen it before disabling")
 
       {:error, _reason} ->
         socket
@@ -460,6 +470,9 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> put_flash(:error, "Alert channel could not be disabled")
     end
   end
+
+  defp disable_revision_opts(%{id: id, updated_at: updated_at}, id), do: [expected_updated_at: updated_at]
+  defp disable_revision_opts(_editor, _id), do: []
 
   defp refresh_disabled_channel_editor(%{assigns: %{editing_channel: %{id: id}}} = socket, %{id: id} = channel) do
     params = Map.put(socket.assigns.channel_form.params, "state", channel.state)
