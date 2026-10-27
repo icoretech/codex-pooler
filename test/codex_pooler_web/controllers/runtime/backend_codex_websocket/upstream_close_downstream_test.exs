@@ -383,12 +383,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UpstreamCloseDownstreamTe
       with_info_log(fn ->
         :ok = :sys.suspend(client.socket)
 
-        {conn, websocket, before_signal} =
+        {conn, websocket} =
           try do
-            # A suspended process still answers system messages: this is the
-            # state the signal meets. From here on every frame the listener
-            # hands the socket is traced with what the socket returned.
-            before_signal = socket_connection_state!(client.socket)
+            # A suspended process still answers system messages. Trace every
+            # frame the listener hands the socket from this point onward.
             :ok = trace_socket_frames!(client.socket)
             assert :ok = FakeUpstream.close_websocket_connection(upstream, 1, close_ref: close_ref, notify: self(), code: 1000, reason: "synthetic age limit")
             assert_receive {:fake_upstream_websocket_peer_closed, 1, ^close_ref}, @detection_timeout_ms
@@ -398,21 +396,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.UpstreamCloseDownstreamTe
             assert queued > 0
 
             {conn, websocket} = public_websocket_send_text!(conn, websocket, client.ref, frame.([@tool_output], turn_id, %{"previous_response_id" => "resp_ws_frame_crossing_close"}))
-            {conn, websocket, before_signal}
+            {conn, websocket}
           after
             :ok = :sys.resume(client.socket)
           end
 
         {conn, _websocket, frames} = receive_frames_until_close!(conn, websocket, client.ref)
-        # The listener handed the crossing frame to the stopped socket, which
-        # returned the state the close left untouched.
-        stopped = Map.put(before_signal, :socket_stopped?, true)
-        assert_receive {:trace, _socket, :call, {CodexResponsesSocket, :handle_in, [{_crossing, [opcode: :text]}, handed]}}, @detection_timeout_ms
-        assert handed == stopped
-        assert_receive {:trace, _socket, :return_from, {CodexResponsesSocket, :handle_in, 2}, returned}, @detection_timeout_ms
-        assert returned == {:ok, stopped}
+        # Bandit 1.14 discards frames after a server-initiated close instead
+        # of calling WebSock with the closing state. The queued frame remains
+        # a real wire-level crossing, but must produce no application callback.
         Mint.HTTP.close(conn)
-        :ok = WebsocketCleanupFence.await_listener_socket_cleanup!(client.socket)
+        :ok = WebsocketCleanupFence.await_listener_socket_teardown!(client.socket)
+        socket = client.socket
+        trace_delivery = :erlang.trace_delivered(socket)
+        assert_receive {:trace_delivered, ^socket, ^trace_delivery}, @detection_timeout_ms
+        refute_receive {:trace, ^socket, :call, {CodexResponsesSocket, :handle_in, [{_crossing, [opcode: :text]}, _handed]}}, 0
         frames
       end)
 
