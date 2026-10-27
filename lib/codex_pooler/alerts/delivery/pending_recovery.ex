@@ -82,6 +82,9 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
     _error in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :storage_unavailable}
   end
 
+  defp interruption(%{"delivery_adapter" => "email"}, "channel_deleted"),
+    do: {"email", "alert_delivery_channel_deleted", "alert channel was deleted before delivery completed"}
+
   defp interruption(_metadata, "channel_deleted"),
     do: {"webhook", "alert_delivery_channel_deleted", "alert channel was deleted before delivery completed"}
 
@@ -93,10 +96,14 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
     do: {"webhook", "alert_webhook_execution_interrupted", "webhook execution ended; delivery outcome unknown"}
 
   defp disposition(job, attempt) do
-    case Execution.decode(attempt.response_metadata) do
-      :unlinked -> {:unresolved, "legacy_unlinked"}
-      :invalid -> {:unresolved, "invalid_execution"}
-      {:ok, binding} -> linked_disposition(job, binding, attempt)
+    if is_nil(attempt.channel_id) do
+      {:revoked, false, "channel_deleted"}
+    else
+      case Execution.decode(attempt.response_metadata) do
+        :unlinked -> {:unresolved, "legacy_unlinked"}
+        :invalid -> {:unresolved, "invalid_execution"}
+        {:ok, binding} -> linked_disposition(job, binding, attempt)
+      end
     end
   end
 
@@ -104,7 +111,6 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
 
   defp linked_disposition(job, binding, attempt) do
     cond do
-      is_nil(attempt.channel_id) -> {:revoked, false, "channel_deleted"}
       not Execution.related?(job, attempt.incident_id, attempt.channel_id) -> {:unresolved, "job_mismatch"}
       Execution.matches?(job, binding, attempt.incident_id, attempt.channel_id) -> :current
       revoked?(job, binding) -> {:revoked, binding["job_attempt"] < job.max_attempts and job.state not in ~w(completed cancelled discarded), "execution_revoked"}

@@ -4,6 +4,7 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
   import CodexPooler.PoolerFixtures
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.AlertIncidentRelationships
+  alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Delivery.{AttemptLifecycle, Execution, PendingRecovery}
   alias CodexPooler.Alerts.Schemas.AlertDeliveryAttempt
   alias CodexPooler.Jobs.AlertDeliveryWorker
@@ -25,6 +26,54 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
     assert recovered.failure_code == "alert_delivery_channel_deleted"
     assert recovered.failure_message == "alert channel was deleted before delivery completed"
     assert job.state == "executing"
+  end
+
+  test "real channel deletion terminalizes malformed and pruned email and webhook receipts" do
+    for adapter <- ["email", "webhook"] do
+      for kind <- [:claimed, :unlinked, :malformed, :pruned] do
+        %{user: owner} = bootstrap_owner_fixture()
+        {incident, channel, job, pending} = fixture!(%{"delivery_adapter" => adapter})
+        channel = Repo.update!(Ecto.Changeset.change(channel, created_by_user_id: owner.id))
+        assert {:ok, _deleted} = Alerts.delete_channel(Scope.for_user(owner), channel.id)
+
+        metadata =
+          case kind do
+            :claimed -> pending.response_metadata
+            :unlinked -> %{"delivery_adapter" => adapter}
+            :malformed -> %{"delivery_adapter" => adapter, "delivery_execution" => %{"job_id" => "invalid"}}
+            :pruned -> pending.response_metadata
+          end
+
+        pending
+        |> Ecto.Changeset.change(response_metadata: metadata, created_at: DateTime.add(DateTime.utc_now(), -60))
+        |> Repo.update!()
+
+        if kind in [:unlinked, :malformed, :pruned], do: Repo.delete!(job)
+
+        detached = Repo.get!(AlertDeliveryAttempt, pending.id)
+        assert detached.channel_id == nil
+        assert {:ok, recovered} = PendingRecovery.recover_one(detached, DateTime.utc_now())
+        assert recovered.status == "failed"
+        assert recovered.failure_code == "alert_delivery_channel_deleted"
+        assert recovered.failure_metadata["delivery_adapter"] == adapter
+        assert {:ok, :unchanged} = PendingRecovery.recover_one(recovered, DateTime.utc_now())
+        assert {:error, %{code: "alert_delivery_execution_superseded"}} = AttemptLifecycle.mark_sent_attempt(detached, DateTime.utc_now(), %{})
+        assert incident.id == recovered.incident_id
+      end
+    end
+  end
+
+  test "batch recovery converges detached email and webhook receipts" do
+    for adapter <- ["email", "webhook"] do
+      %{user: owner} = bootstrap_owner_fixture()
+      {_incident, channel, _job, pending} = fixture!(%{"delivery_adapter" => adapter})
+      channel = Repo.update!(Ecto.Changeset.change(channel, created_by_user_id: owner.id))
+      assert {:ok, _deleted} = Alerts.delete_channel(Scope.for_user(owner), channel.id)
+      pending |> Ecto.Changeset.change(created_at: DateTime.add(DateTime.utc_now(), -60)) |> Repo.update!()
+    end
+
+    assert {:ok, summary} = PendingRecovery.recover()
+    assert summary.alert_deliveries_recovered >= 2
   end
 
   test "normal completion preserves provenance and stale callbacks cannot reopen a recovery winner" do
@@ -218,7 +267,25 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
   defp fixture!(metadata \\ %{}) do
     pool = pool_fixture()
     incident = alert_incident_fixture(pool: pool)
-    channel = alert_channel_fixture()
+
+    channel_attrs =
+      if Map.get(metadata, "delivery_adapter") == "webhook" do
+        %{
+          channel_type: "webhook",
+          email_to: nil,
+          endpoint_scheme: "https",
+          endpoint_host: "hooks.example.com",
+          endpoint_path_prefix: "/alerts",
+          endpoint_fingerprint: "sha256:example",
+          webhook_signing_secret_ciphertext: <<1, 2, 3>>,
+          webhook_signing_secret_nonce: <<4, 5, 6>>,
+          webhook_signing_secret_key_version: "v1"
+        }
+      else
+        %{}
+      end
+
+    channel = alert_channel_fixture(channel_attrs)
     queue = "recovery_#{System.unique_integer([:positive])}"
     job = %{"alert_incident_id" => incident.id, "alert_channel_id" => channel.id} |> AlertDeliveryWorker.new(queue: queue) |> Repo.insert!()
     conf = Oban.config()
