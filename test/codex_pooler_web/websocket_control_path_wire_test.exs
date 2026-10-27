@@ -187,11 +187,11 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
   end
 
   # The released Codex client writes its first `response.create` right after
-  # the 101 without waiting for anything else, so a refused init always meets
-  # that frame while Bandit is closing: Bandit still hands it to `handle_in/2`
-  # with the state init returned, which used to start a response task on the
-  # refused connection (plain) or raise in the control path (owner forwarding)
-  # (findings#255).
+  # the 101 without waiting for anything else, so a refused init can meet that
+  # frame while Bandit is closing. Bandit 1.14 discards non-close frames once
+  # the connection enters its closing state; this test keeps the historical
+  # zero-reservation and owner-refusal assertions while requiring no callback
+  # after the socket DOWN fence (findings#255).
   for forwarding? <- [false, true] do
     @tag capture_log: true
     test "a client frame racing an owner refusal at init is ignored (owner forwarding #{forwarding?})" do
@@ -207,7 +207,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
       result = refused_upgrade_with_racing_frame!(%{auth: %{api_key: key, pool: pool}, test_parent: self(), opts: opts})
 
       assert {:close, 1011, "websocket owner is unavailable"} = result.close
-      assert [{refused_state, {:ok, refused_state}}] = result.handled_in
+      assert result.handled_in == []
       assert result.control_failures == []
       assert ["websocket init failed before request reservation " <> _] = warning_lines(result.logs)
       assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     result = refused_upgrade_with_racing_frame!(%{auth: %{api_key: key, pool: pool}, test_parent: self(), opts: RequestOptions.for_websocket(%{})})
 
     assert {:close, 1011, "websocket initialization unavailable"} = result.close
-    assert [{refused_state, {:ok, refused_state}}] = result.handled_in
+    assert result.handled_in == []
     assert [%{phase: :init, reason: :database_error}] = result.control_failures
     assert ["websocket control path failed phase=init reason=database_error"] = warning_lines(result.logs)
     assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
@@ -296,7 +296,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
       end)
 
     assert_received {:stopped_socket, socket, session_id}
-    assert [{stopped_state, {:ok, stopped_state}}] = for({:socket_handled_in, ^socket, state_in, result} <- drain_messages(), do: {state_in, result})
+    assert [] = for({:socket_handled_in, ^socket, state_in, result} <- drain_messages(), do: {state_in, result})
     assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session_id)
     logs = WebsocketCleanupFence.without_deferred_cleanup(logs)
     refute logs =~ "websocket control path failed"
