@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.16...codex-pooler-v0.13.17) (2026-10-27)
+
+
+### Bug Fixes
+
+* **compat:** accept request-level twelve-hour cache TTLs ([95936af](https://github.com/icoretech/codex-pooler/commit/95936afbd6b542096ead78a2108677841ab93de6))
+
+
+### Dependencies
+
+* update dependency apexcharts to v8.5.0 ([#540](https://github.com/icoretech/codex-pooler/issues/540)) ([a35c617](https://github.com/icoretech/codex-pooler/commit/a35c617ace59a6a413b5db5ba37e428cccd1a84b))
+* update helm release codex-pooler to v0.14.11 ([#570](https://github.com/icoretech/codex-pooler/issues/570)) ([ed20941](https://github.com/icoretech/codex-pooler/commit/ed209417a20f1e67e949f71a979f04c9d1e6b91d))
+* update helm release codex-pooler to v0.14.13 ([#573](https://github.com/icoretech/codex-pooler/issues/573)) ([d3440fa](https://github.com/icoretech/codex-pooler/commit/d3440faa78705418c819badd117ca09c15d21638))
+
+
+### Tests
+
+* **gateway:** cover hosted search options with image inputs ([2b58ec0](https://github.com/icoretech/codex-pooler/commit/2b58ec0fa348b235576aba224770b2307007b6ea))
+
 ## [0.13.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.15...codex-pooler-v0.13.16) (2026-10-25)
 
 
