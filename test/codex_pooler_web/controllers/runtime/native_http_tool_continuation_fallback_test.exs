@@ -68,15 +68,23 @@ defmodule CodexPoolerWeb.Runtime.NativeHttpToolContinuationFallbackTest do
     headers = [{"authorization", setup.authorization}, {"x-codex-turn-state", thread}, {"session-id", thread}, {"thread-id", thread}, {"x-codex-turn-metadata", encoded}]
     headers = if mode == "lite", do: [{"x-openai-internal-codex-responses-lite", "true"} | headers], else: headers
     response = Req.post!("http://127.0.0.1:#{port}#{@path}", json: body, headers: headers, retry: false, receive_timeout: @budget)
-    assert response.status == 200
-    assert [successor] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id and r.id != ^legacy.request.id)
-    {:ok, expected} = ClientRetry.deterministic_failed_predecessor_claim(legacy_key, legacy.request.id)
-    same_chain? = successor.correlation_id == expected
-    assert same_chain?
     assert legacy.request.native_client_retry_digest == legacy_digest
-    assert FakeUpstream.http_request_count(upstream) == 1
-    if legacy_state == :accepted, do: assert({:ok, _} = Accounting.finalize_reserved_request_failure(legacy.request, %{last_error_code: "owner_drained"}))
-    if directory = System.get_env("TOOL_IDENTITY_EVIDENCE"), do: File.write!(Path.join(directory, "#{mode}-legacy-#{legacy_state}.json"), CodexPooler.JSON.encode!(%{legacy_primary_preserved: true, legacy_stored_witness_preserved: true, successor_uses_existing_chain: same_chain?, http_status: response.status, new_provider_calls: 1, root_count: 1}))
+
+    if legacy_state == :accepted do
+      assert response.status == 409
+      assert response.body["error"]["code"] == "duplicate_turn"
+      refute Repo.exists?(from r in Request, where: r.pool_id == ^setup.pool.id and r.id != ^legacy.request.id)
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert {:ok, _} = Accounting.finalize_reserved_request_failure(legacy.request, %{last_error_code: "owner_drained"})
+    else
+      assert response.status == 200
+      assert [successor] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id and r.id != ^legacy.request.id)
+      {:ok, expected} = ClientRetry.deterministic_failed_predecessor_claim(legacy_key, legacy.request.id)
+      assert successor.correlation_id == expected
+      assert FakeUpstream.http_request_count(upstream) == 1
+    end
+
+    if directory = System.get_env("TOOL_IDENTITY_EVIDENCE"), do: File.write!(Path.join(directory, "#{mode}-legacy-#{legacy_state}.json"), CodexPooler.JSON.encode!(%{legacy_primary_preserved: true, legacy_stored_witness_preserved: true, successor_uses_existing_chain: legacy_state == :zero_output_terminal, http_status: response.status, new_provider_calls: FakeUpstream.http_request_count(upstream), root_count: 1}))
     :ok = ThousandIsland.stop(listener)
     assert_receive {:DOWN, ^monitor, :process, ^listener, _}, @budget
   end

@@ -647,24 +647,37 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         {claim, nil}
 
       %Request{} = predecessor ->
-        scope = native_turn_resend_scope(session, context) |> Map.put(:auth_epoch, context.api_key.runtime_revocation_epoch)
+        recover_native_turn_chain(session, context, claim, predecessor, depth)
+    end
+  end
 
-        case AdmissionExecutionRecovery.recover_native_retry(predecessor, scope, now(context.opts)) do
-          {:ok, recovered, markers} ->
-            native_admission_successor!(session, context, claim, recovered, markers, depth)
+  defp recover_native_turn_chain(session, context, claim, predecessor, depth) do
+    scope = native_turn_resend_scope(session, context) |> Map.put(:auth_epoch, context.api_key.runtime_revocation_epoch)
 
-          {:error, disposition} ->
-            Repo.rollback(duplicate_request_error(disposition))
+    case AdmissionExecutionRecovery.recover_native_retry(predecessor, scope, now(context.opts)) do
+      {:ok, recovered, markers} ->
+        native_admission_successor!(session, context, claim, recovered, markers, depth)
 
-          :unchanged ->
-            :ok = retire_forwarded_chain!(predecessor)
+      {:error, disposition} ->
+        Repo.rollback(duplicate_request_error(disposition))
 
-            if unfinished_http_mailbox_predecessor?(predecessor, context) or websocket_resend_predecessor?(predecessor) or delivered_provider_output?(predecessor) do
-              resolve_native_turn_resend!(session, context, claim)
-            else
-              step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
-            end
-        end
+      :unchanged ->
+        unchanged_native_turn_chain(session, context, claim, predecessor, depth)
+    end
+  end
+
+  defp unchanged_native_turn_chain(session, context, claim, predecessor, depth) do
+    :ok = retire_forwarded_chain!(predecessor)
+
+    cond do
+      unfinished_http_predecessor?(predecessor, context) ->
+        Repo.rollback(duplicate_request_error(:active_predecessor))
+
+      websocket_resend_predecessor?(predecessor) or delivered_provider_output?(predecessor) ->
+        resolve_native_turn_resend!(session, context, claim)
+
+      true ->
+        step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
     end
   end
 
@@ -689,16 +702,30 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end
   end
 
-  # An actual mailbox preemption can resend before the HTTP executor enters
-  # settlement. Such a predecessor is still live, not proof of zero output:
-  # resolve its existing claim so the lifecycle fence refuses it until settled.
-  # Apply on every chain hop; generic zero-output retry policy stays separate.
-  defp unfinished_http_mailbox_predecessor?(%Request{transport: "http_sse", request_metadata: %{"native_http_claim_arm" => arm}} = request, %{opts: opts}) when arm in ["opening", "steered_continuation", "tool_continuation", "post_compaction_resume"] do
+  # No output yet is not proof of a finished zero-output execution. Fence an
+  # unfinished HTTP predecessor at every chain hop, including a recovered
+  # opening successor with no mailbox witness. The shared session lock orders
+  # this check with admission before another reservation or dispatch.
+  defp unfinished_http_predecessor?(%Request{transport: "http_sse", id: request_id} = request, context) do
     (is_nil(request.completed_at) or request.status in ["accepted", "in_progress"]) and
-      match?(%ClientRetry.OriginalWitness{mailbox: [_first | _rest]}, attr(opts, :native_client_retry_witness))
+      (not native_turn_visible_output?(request_id) or native_http_mailbox_witness?(request, context))
   end
 
-  defp unfinished_http_mailbox_predecessor?(_predecessor, _context), do: false
+  defp unfinished_http_predecessor?(_predecessor, _context), do: false
+
+  defp native_http_mailbox_witness?(%Request{request_metadata: %{"native_http_claim_arm" => arm}}, %{opts: opts})
+       when arm in ["opening", "steered_continuation", "tool_continuation", "post_compaction_resume"] do
+    match?(%ClientRetry.OriginalWitness{mailbox: [_first | _rest]}, attr(opts, :native_client_retry_witness))
+  end
+
+  defp native_http_mailbox_witness?(_request, _context), do: false
+
+  defp native_turn_visible_output?(request_id) do
+    Repo.exists?(
+      from turn in CodexTurn,
+        where: turn.request_id == ^request_id and not is_nil(turn.first_visible_output_at)
+    )
+  end
 
   # A live websocket cannot prove zero output; its existing lifecycle fence
   # must judge the fallback. A retryable terminal uses the verified linked
@@ -799,9 +826,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # "output reached the client and was cut" from "the provider refused before
   # producing anything".
   #
-  # What this deliberately serves rather than refuses: a predecessor left live
-  # by a killed node (`completed_at` stays null until the `*/15` `runtime_cleanup`
-  # cron finalizes it), a pre-attempt drain, a pre-first-event idle timeout,
+  # Once settled, this deliberately serves a pre-attempt drain, a
+  # pre-first-event idle timeout,
   # `no_eligible_backend`, and every zero-output provider refusal such as
   # `rate_limit_exceeded`, a relayed 4xx, or a retryable first-event verdict.
   defp delivered_provider_output?(%Request{completed_at: nil}), do: false
