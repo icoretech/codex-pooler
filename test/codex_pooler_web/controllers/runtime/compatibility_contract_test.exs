@@ -1209,6 +1209,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                request_options_field: "prompt_cache_options",
                content_breakpoint_field: "prompt_cache_breakpoint",
                breakpoint_mode: "explicit",
+               request_ttls: ["30m", "12h"],
+               breakpoint_ttls: ["30m", "12h"],
+               omitted_breakpoint_ttl: "request_default",
                routing_input: false,
                accepted_public_surfaces: ["/v1/responses", "/v1/chat/completions"],
                account_backed_upstream_payload: %{

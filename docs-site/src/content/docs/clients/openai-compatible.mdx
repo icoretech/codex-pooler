@@ -187,9 +187,10 @@ account-backed requests, it adapts the explicit controls automatically before
 upstream dispatch while preserving `prompt_cache_key` independently from Pool
 routing affinity. Supported content-part `prompt_cache_breakpoint` objects
 accept an optional `ttl` of `"30m"` or `"12h"`; the top-level
-`prompt_cache_options.ttl` accepts `"30m"` only. Account-backed dispatch removes
-these explicit controls, so accepting `"12h"` does not guarantee a twelve-hour
-provider cache lifetime. GPT-6 model ids are passed through to the Pool catalog and
+`prompt_cache_options.ttl` accepts the same values. A breakpoint can omit its
+`ttl` to use the request default. Account-backed dispatch removes these explicit
+controls, so accepting `"12h"` does not guarantee a twelve-hour provider cache
+lifetime. GPT-6 model ids are passed through to the Pool catalog and
 assignment policy; naming one here does not guarantee that every Pool has an
 eligible account for that model.
 

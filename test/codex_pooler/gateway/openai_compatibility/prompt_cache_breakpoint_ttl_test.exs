@@ -69,12 +69,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PromptCacheBreakpointTTLTest d
     end
   end
 
-  test "12h remains unsupported as the request-level TTL" do
-    for adapter <- [Responses, Chat] do
-      payload = adapter_payload(adapter, breakpoint(:absent)) |> Map.put("prompt_cache_options", %{"ttl" => "12h"})
+  for request_ttl <- ["30m", "12h"], breakpoint_ttl <- [:absent, "30m", "12h"], adapter <- [Responses, Chat] do
+    test "#{adapter} keeps request TTL #{request_ttl} and breakpoint TTL #{breakpoint_ttl}" do
+      assert_request_and_breakpoint_ttl!(unquote(adapter), unquote(request_ttl), unquote(breakpoint_ttl))
+    end
+  end
+
+  test "unsupported request-level TTLs remain rejected" do
+    for ttl <- [nil, "1h", "24h", 12, true, %{}, []], adapter <- [Responses, Chat] do
+      payload = adapter_payload(adapter, breakpoint(:absent)) |> Map.put("prompt_cache_options", %{"ttl" => ttl})
 
       assert {:error, %{status: 400, code: "invalid_request", param: "prompt_cache_options.ttl"}} = adapter.coerce(payload)
     end
+  end
+
+  defp breakpoint_parts(%{"input" => input}), do: for(%{"content" => content} <- input, part <- content, Map.has_key?(part, "prompt_cache_breakpoint"), do: part["prompt_cache_breakpoint"])
+  defp breakpoint_parts(%{}), do: []
+
+  defp assert_request_and_breakpoint_ttl!(adapter, request_ttl, breakpoint_ttl) do
+    breakpoint = breakpoint(breakpoint_ttl)
+
+    payload =
+      adapter_payload(adapter, breakpoint)
+      |> Map.put("prompt_cache_options", %{"mode" => "explicit", "ttl" => request_ttl})
+
+    assert {:ok, result} = adapter.coerce(payload)
+    assert result.payload["prompt_cache_options"] == %{"mode" => "explicit", "ttl" => request_ttl}
+    assert breakpoint_parts(result.payload) == [breakpoint]
   end
 
   defp breakpoint(:absent), do: %{"mode" => "explicit"}

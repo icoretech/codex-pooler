@@ -376,6 +376,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_prompt_cache_ttl(:error), do: :ok
   defp validate_prompt_cache_ttl({:ok, "30m"}), do: :ok
+  defp validate_prompt_cache_ttl({:ok, "12h"}), do: :ok
 
   defp validate_prompt_cache_ttl(_ttl),
     do:
