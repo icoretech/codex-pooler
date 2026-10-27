@@ -146,7 +146,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
              attempts: [delivery_attempt]
            } = row.delivery_summary
 
-    assert is_binary(delivery_label)
+    assert delivery_label == "1 attempt · 1 sent · latest sent"
 
     assert delivery_attempt.id == attempt.id
     assert delivery_attempt.channel_id == channel.id
@@ -160,6 +160,32 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
 
     refute inspect(page) =~ raw_prompt
     refute inspect(page) =~ raw_url
+  end
+
+  test "delivery summaries preserve attention and empty labels", %{scope: scope} do
+    pool = pool_fixture(%{slug: "alert-incidents-delivery-labels-#{unique_suffix()}"})
+    rule = alert_rule_fixture(pool)
+    channel = alert_channel_fixture(%{display_name: "Delivery labels channel"})
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    attention_incident =
+      alert_incident_fixture(pool: pool, last_seen_at: DateTime.add(now, 1, :second))
+
+    empty_incident =
+      alert_incident_fixture(pool: pool, last_seen_at: now)
+
+    alert_incident_target_fixture(attention_incident, rule, pool)
+    alert_incident_target_fixture(empty_incident, rule, pool)
+
+    delivery_attempt_fixture(attention_incident, channel, status: AlertDeliveryAttempt.failed_status())
+
+    labels =
+      AlertIncidentsReadModel.load(scope, %{})
+      |> Map.fetch!(:incidents)
+      |> Map.new(&{&1.id, &1.delivery_summary.label})
+
+    assert labels[attention_incident.id] == "1 attempt · 0 sent · 1 needs attention · latest failed"
+    assert labels[empty_incident.id] == "No delivery attempts"
   end
 
   # The incident detail names the assignment states the evaluation recorded,

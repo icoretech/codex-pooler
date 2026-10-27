@@ -406,7 +406,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     [
       pluralize(total_count, "attempt", "attempts"),
       pluralize(sent_count, "sent", "sent"),
-      attention_count > 0 && pluralize(attention_count, "needs attention", "needs attention"),
+      if(attention_count > 0, do: pluralize(attention_count, "needs attention", "needs attention")),
       latest_status && "latest #{delivery_status_label(latest_status)}"
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
