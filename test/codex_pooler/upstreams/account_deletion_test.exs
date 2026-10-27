@@ -43,6 +43,21 @@ defmodule CodexPooler.Upstreams.AccountDeletionTest do
     refute Repo.get(UpstreamIdentity, identity.id)
   end
 
+  test "a stale definitive rejection cannot revive a permanently deleting account", %{scope: scope} do
+    alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
+    Application.put_env(:codex_pooler, :upstream_deletion_immediate_row_limit, 0)
+    %{identity: identity, assignment: assignment} = active_upstream_assignment_fixture(pool_fixture())
+    {:ok, _identity, fence} = CredentialFencing.allocate_usage_probe(identity)
+    remove_from_pool(assignment)
+
+    assert {:deleting, _receipt} = Upstreams.delete_account_for_scope(scope, identity.id)
+    assert {:ok, :superseded, current} = CredentialFencing.mark_definitive_rejection(identity, fence)
+    assert current.status == "deleted"
+    assert current.metadata["permanent_deletion_requested_at"]
+    assert Repo.get!(UpstreamIdentity, identity.id).status == "deleted"
+    assert Repo.get!(PoolUpstreamAssignment, assignment.id).status == "deleted"
+  end
+
   test "failed deletion enqueue returns a bounded error and rolls back the marker", %{scope: scope} do
     identity = active_upstream_identity_fixture()
     Repo.query!("CREATE FUNCTION pg_temp.reject_upstream_deletion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.worker = 'CodexPooler.Jobs.UpstreamDeletionWorker' THEN RAISE EXCEPTION 'sample insert failure' USING ERRCODE = 'object_not_in_prerequisite_state'; END IF; RETURN NEW; END $$")

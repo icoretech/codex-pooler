@@ -315,44 +315,59 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   @spec mark_definitive_rejection(UpstreamIdentity.t() | Ecto.UUID.t(), fence()) ::
           {:ok, guarded_result(), UpstreamIdentity.t()} | {:error, term()}
   def mark_definitive_rejection(identity_or_id, fence) do
+    identity_or_id
+    |> definitive_rejection_transaction(fence)
+    |> finalize_definitive_rejection()
+  end
+
+  defp definitive_rejection_transaction(identity_or_id, fence) do
     Repo.transaction(fn ->
-      identity = lock_credential_replacement(identity_or_id)
-
-      cond do
-        is_nil(identity) ->
-          Repo.rollback(:upstream_identity_not_found)
-
-        not current_fence?(identity, fence) or not definitive_rejection_applicable?(identity) ->
-          {:superseded, identity}
-
-        true ->
-          timestamp = now()
-          assignments = provider_auth_rejection_assignments(identity.id)
-
-          metadata =
-            identity.metadata
-            |> applied_metadata(fence)
-            |> provider_rejection_metadata(timestamp)
-            |> put_provider_auth_recovery_probe_ceiling()
-            |> put_provider_auth_recovery("terminal", timestamp)
-            |> put_provider_auth_recovery_assignment_ids(assignments)
-
-          identity =
-            identity
-            |> UpstreamIdentity.changeset(%{
-              status: @reauth_required,
-              disabled_at: timestamp,
-              updated_at: timestamp,
-              metadata: metadata
-            })
-            |> Repo.update!()
-
-          demote_assignments_for_provider_auth_rejection!(assignments, timestamp)
-
-          {:applied, identity}
-      end
+      identity_or_id
+      |> lock_credential_replacement()
+      |> apply_definitive_rejection(fence)
     end)
-    |> case do
+  end
+
+  defp apply_definitive_rejection(nil, _fence), do: Repo.rollback(:upstream_identity_not_found)
+
+  defp apply_definitive_rejection(identity, fence) do
+    if definitive_rejection_superseded?(identity, fence) do
+      {:superseded, identity}
+    else
+      timestamp = now()
+      assignments = provider_auth_rejection_assignments(identity.id)
+
+      metadata =
+        identity.metadata
+        |> applied_metadata(fence)
+        |> provider_rejection_metadata(timestamp)
+        |> put_provider_auth_recovery_probe_ceiling()
+        |> put_provider_auth_recovery("terminal", timestamp)
+        |> put_provider_auth_recovery_assignment_ids(assignments)
+
+      identity =
+        identity
+        |> UpstreamIdentity.changeset(%{
+          status: @reauth_required,
+          disabled_at: timestamp,
+          updated_at: timestamp,
+          metadata: metadata
+        })
+        |> Repo.update!()
+
+      demote_assignments_for_provider_auth_rejection!(assignments, timestamp)
+
+      {:applied, identity}
+    end
+  end
+
+  defp definitive_rejection_superseded?(identity, fence) do
+    Map.has_key?(identity.metadata || %{}, "permanent_deletion_requested_at") or
+      not current_fence?(identity, fence) or not definitive_rejection_applicable?(identity)
+  end
+
+  defp finalize_definitive_rejection(transaction_result) do
+    case transaction_result do
       {:ok, {:applied, identity}} ->
         identity = Repo.reload!(identity)
         broadcast_upstream_change(identity, "upstream_account_reauth_required")
