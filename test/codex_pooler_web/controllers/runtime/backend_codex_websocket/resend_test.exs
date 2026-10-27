@@ -503,9 +503,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     # The conclusion rests on circuits being keyed per assignment: the refused
     # connect does call `begin_candidate_circuit/2`, and it is the key that
     # keeps the sibling out of it, not the absence of a write.
-    port = reserve_closed_port!()
-    refused = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
-
     healthy =
       start_upstream(
         FakeUpstream.websocket_text_frames([
@@ -523,6 +520,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
           })
         ])
       )
+
+    # Keep the healthy listener bound before reserving the refused endpoint.
+    # `reserve_closed_port!/0` necessarily closes its probe socket; allocating
+    # the healthy port afterwards leaves a TOCTOU window where the OS can reuse
+    # the supposedly refused port and turn the first attempt into a healthy
+    # connection (the CI failure then reports one attempt instead of a
+    # refused-connect failover pair).
+    port = reserve_closed_port!()
+    refused = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
+    assert URI.parse(FakeUpstream.url(healthy)).port != port
 
     {setup, healthy_assignment} =
       refused |> gateway_setup() |> with_returned_failover_candidate!(healthy)

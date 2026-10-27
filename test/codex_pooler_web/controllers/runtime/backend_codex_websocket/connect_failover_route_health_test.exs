@@ -84,8 +84,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ConnectFailoverRouteHealt
   # The preferred candidate fails with nothing received; the second one is
   # healthy and carries the ordering demotion that keeps the first preferred.
   defp failing_then_served!(shape, mode, circuit, marker) do
-    failing = failing_upstream(shape)
-
     # Strict: the healthy candidate serves the turn on its first connection,
     # once.
     served =
@@ -104,6 +102,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ConnectFailoverRouteHealt
           )
         ])
       )
+
+    # Keep the healthy listener bound before reserving the refused endpoint.
+    # `reserve_closed_port!/0` closes its probe socket; allocating the healthy
+    # listener afterwards leaves a TOCTOU window in which the OS can reuse the
+    # supposedly refused port and bypass the connect-failover arm.
+    failing = failing_upstream(shape)
+    assert URI.parse(FakeUpstream.url(served)).port != URI.parse(failing.url).port
 
     {setup, second} = websocket_failover_candidates!(failing, served, mode)
     refused_circuit = if circuit == :half_open, do: half_open_websocket_circuit!(setup, setup.assignment)
