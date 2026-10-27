@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
        stats_dashboard_running?: false,
        stats_dashboard_rerun?: false,
        stats_dashboard_reason: :explicit,
+       stats_dashboard_pending_reason: nil,
        stats_dashboard_preparation: nil
      )
      |> NotificationCenterHooks.follow_viewer_visibility()}
@@ -289,9 +290,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     filters = stats_filters(params)
     generation = socket.assigns.stats_dashboard_generation + 1
     reset_dashboard? = params != socket.assigns.current_params
-    # An event for the same requested view must not demote a queued filter or
-    # permission refresh while the previous generation is still running.
-    reason = if socket.assigns.stats_dashboard_running? and socket.assigns.stats_dashboard_reason == :explicit, do: :explicit, else: reason
+    running? = socket.assigns.stats_dashboard_running?
+    reason = stats_dashboard_request_reason(socket, reason)
 
     case prepare_dashboard_with_telemetry(socket.assigns.current_scope, filters) do
       {:ok, preparation} ->
@@ -299,7 +299,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
         |> assign(
           current_params: params,
           stats_dashboard_generation: generation,
-          stats_dashboard_reason: reason,
+          stats_dashboard_reason: if(running?, do: socket.assigns.stats_dashboard_reason, else: reason),
+          stats_dashboard_pending_reason: if(running?, do: reason, else: nil),
           stats_dashboard_preparation: preparation,
           dashboard: if(reset_dashboard?, do: nil, else: socket.assigns.dashboard),
           dashboard_loading?: true,
@@ -384,7 +385,10 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp maybe_start_pending_stats_dashboard(socket) do
     if socket.assigns.stats_dashboard_rerun? and
          not is_nil(socket.assigns.stats_dashboard_preparation) do
-      if socket.assigns.stats_dashboard_reason == :automatic and LiveUpdatesHooks.paused?(socket) do
+      reason = socket.assigns.stats_dashboard_pending_reason || socket.assigns.stats_dashboard_reason
+      socket = assign(socket, stats_dashboard_reason: reason, stats_dashboard_pending_reason: nil)
+
+      if reason == :automatic and LiveUpdatesHooks.paused?(socket) do
         hold_stats_dashboard(socket)
       else
         start_stats_dashboard(socket, socket.assigns.stats_dashboard_generation)
@@ -392,6 +396,10 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     else
       socket
     end
+  end
+
+  defp stats_dashboard_request_reason(socket, reason) do
+    if socket.assigns.stats_dashboard_pending_reason == :explicit, do: :explicit, else: reason
   end
 
   defp hold_stats_dashboard(socket) do

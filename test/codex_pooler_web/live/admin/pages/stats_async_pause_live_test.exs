@@ -43,6 +43,37 @@ defmodule CodexPoolerWeb.Admin.StatsAsyncPauseLiveTest do
     end
   end
 
+  test "a queued automatic rebuild stays held when an explicit build finishes while paused", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{name: "Queued automatic sample", slug: "queued-automatic-sample"})
+    %{api_key: key} = api_key_fixture(pool)
+    request_fixture(%{pool: pool, api_key: key})
+    {:ok, view, _} = live(conn, ~p"/admin/stats")
+    render_async(view)
+    assert has_element?(view, "#stats-kpi-requests", "1")
+
+    with_barrier(view, fn barrier ->
+      view
+      |> element("#stats-filter-form")
+      |> render_submit(%{"filters" => %{"pool_id" => pool.id, "window" => "24h"}})
+
+      assert_receive {^barrier, explicit_task}, 5_000
+      request_fixture(%{pool: pool, api_key: key})
+      reload(view)
+      render_hook(view, "set_live_updates", %{"paused" => true})
+      assert state(view).stats_dashboard_rerun?
+
+      send(explicit_task, {barrier, :release})
+      render_async(view)
+      assert state(view).live_updates_page_held?
+      refute state(view).dashboard_loading?
+    end)
+
+    render_hook(view, "set_live_updates", %{"paused" => false})
+    render_async(view)
+    assert has_element?(view, "#stats-kpi-requests", "2")
+    refute state(view).stats_dashboard_rerun?
+  end
+
   test "a queued explicit filter retains priority over automatic reloads while paused", %{conn: conn, scope: scope} do
     {:ok, first} = Pools.create_pool(scope, %{name: "First sample", slug: "first-sample"})
     {:ok, second} = Pools.create_pool(scope, %{name: "Second sample", slug: "second-sample"})
