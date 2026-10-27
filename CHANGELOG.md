@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.18](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.17...codex-pooler-v0.13.18) (2026-10-27)
+
+
+### Dependencies
+
+* refresh documentation and native build dependency locks ([28c3748](https://github.com/icoretech/codex-pooler/commit/28c374818a973c39eaa8ca1d6320f2d1519ee904))
+* update Bandit to 1.14.0 ([de41568](https://github.com/icoretech/codex-pooler/commit/de41568d452a80c269844032f1d80227a7e10ed1))
+
+
+### Tests
+
+* **gateway:** bind healthy listeners before selecting refused ports ([89814cf](https://github.com/icoretech/codex-pooler/commit/89814cf39acf99f9f9def67fe9e9863541356dbb))
+
 ## [0.13.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.16...codex-pooler-v0.13.17) (2026-10-27)
 
 
