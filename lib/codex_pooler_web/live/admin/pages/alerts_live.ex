@@ -320,6 +320,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
       {:error, %{code: code}} ->
         socket
+        |> refresh_after_stale_update(code)
         |> assign(:rule_form, rule_form(socket, params, access_errors(code)))
         |> put_flash(:error, access_error_message(code))
     end
@@ -329,9 +330,10 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     case Alerts.update_rule(socket.assigns.current_scope, rule_id, %{
            state: AlertRule.disabled_state()
          }) do
-      {:ok, _rule} ->
+      {:ok, rule} ->
         socket
         |> assign_alert_state()
+        |> refresh_disabled_rule_editor(rule)
         |> put_flash(:info, "Alert rule disabled")
 
       {:error, _reason} ->
@@ -340,6 +342,13 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> put_flash(:error, "Alert rule could not be disabled")
     end
   end
+
+  defp refresh_disabled_rule_editor(%{assigns: %{editing_rule: %{id: id}}} = socket, %{id: id} = rule) do
+    params = Map.put(socket.assigns.rule_form.params, "state", rule.state)
+    assign(socket, editing_rule: rule, rule_form: AlertRuleForm.edit_form(rule, params))
+  end
+
+  defp refresh_disabled_rule_editor(socket, _rule), do: socket
 
   defp open_delete_rule(socket, %{"id" => rule_id}) do
     case find_visible_rule(socket.assigns.rules, rule_id) do
@@ -358,13 +367,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   end
 
   defp confirm_delete_rule(socket, %{"alert_rule_delete" => %{"id" => rule_id}}) do
-    case Alerts.delete_rule(socket.assigns.current_scope, rule_id) do
+    case Alerts.delete_rule(socket.assigns.current_scope, rule_id, expected_updated_at: socket.assigns.deleting_rule && socket.assigns.deleting_rule.updated_at) do
       {:ok, _rule} ->
         socket
         |> assign(deleting_rule: nil, rule_delete_form: AlertRuleForm.delete_form(nil))
         |> assign_alert_state()
         |> reset_rule_form()
         |> put_flash(:info, "Alert rule deleted")
+
+      {:error, %{code: :stale_update}} ->
+        socket
+        |> assign(deleting_rule: nil, rule_delete_form: AlertRuleForm.delete_form(nil))
+        |> assign_alert_state()
+        |> put_flash(:error, "Alert rule changed before it could be deleted. Reopen the dialog to review the latest values")
 
       {:error, _reason} ->
         socket
@@ -423,6 +438,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
       {:error, %{code: code}} ->
         socket
+        |> refresh_after_stale_update(code)
         |> assign(:channel_form, channel_form(socket, params, channel_access_errors(code)))
         |> put_flash(:error, channel_access_error_message(code))
     end
@@ -432,9 +448,10 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     case Alerts.update_channel(socket.assigns.current_scope, channel_id, %{
            state: AlertChannel.disabled_state()
          }) do
-      {:ok, _channel} ->
+      {:ok, channel} ->
         socket
         |> assign_alert_state()
+        |> refresh_disabled_channel_editor(channel)
         |> put_flash(:info, "Alert channel disabled")
 
       {:error, _reason} ->
@@ -443,6 +460,13 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> put_flash(:error, "Alert channel could not be disabled")
     end
   end
+
+  defp refresh_disabled_channel_editor(%{assigns: %{editing_channel: %{id: id}}} = socket, %{id: id} = channel) do
+    params = Map.put(socket.assigns.channel_form.params, "state", channel.state)
+    assign(socket, editing_channel: channel, channel_form: AlertChannelForm.edit_form(channel, params))
+  end
+
+  defp refresh_disabled_channel_editor(socket, _channel), do: socket
 
   defp open_delete_channel(socket, %{"id" => channel_id}) do
     case find_visible_channel(socket.assigns.channels, channel_id) do
@@ -467,13 +491,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   end
 
   defp confirm_delete_channel(socket, %{"alert_channel_delete" => %{"id" => channel_id}}) do
-    case Alerts.delete_channel(socket.assigns.current_scope, channel_id) do
+    case Alerts.delete_channel(socket.assigns.current_scope, channel_id, expected_updated_at: socket.assigns.deleting_channel && socket.assigns.deleting_channel.updated_at) do
       {:ok, _channel} ->
         socket
         |> assign(deleting_channel: nil, channel_delete_form: AlertChannelForm.delete_form(nil))
         |> assign_alert_state()
         |> reset_channel_form()
         |> put_flash(:info, "Alert channel deleted")
+
+      {:error, %{code: :stale_update}} ->
+        socket
+        |> assign(deleting_channel: nil, channel_delete_form: AlertChannelForm.delete_form(nil))
+        |> assign_alert_state()
+        |> put_flash(:error, "Alert channel changed before it could be deleted. Reopen the dialog to review the latest values")
 
       {:error, _reason} ->
         socket
@@ -533,7 +563,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   end
 
   defp save_rule(:edit, scope, %AlertRule{} = rule, attrs),
-    do: Alerts.update_rule(scope, rule, attrs)
+    do: Alerts.update_rule(scope, rule, drop_unchanged_state(attrs, rule), expected_updated_at: rule.updated_at)
 
   defp save_rule(_mode, scope, _rule, attrs), do: Alerts.create_rule(scope, attrs)
 
@@ -559,10 +589,16 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     AlertChannelForm.create_form(params, errors: errors)
   end
 
-  defp save_channel(:edit, scope, %{id: channel_id}, attrs),
-    do: Alerts.update_channel(scope, channel_id, attrs)
+  defp save_channel(:edit, scope, %{id: channel_id} = channel, attrs),
+    do: Alerts.update_channel(scope, channel_id, drop_unchanged_state(attrs, channel), expected_updated_at: channel.updated_at)
 
   defp save_channel(_mode, scope, _channel, attrs), do: Alerts.create_channel(scope, attrs)
+
+  defp drop_unchanged_state(%{"state" => state} = attrs, %{state: state}), do: Map.delete(attrs, "state")
+  defp drop_unchanged_state(attrs, _entity), do: attrs
+
+  defp refresh_after_stale_update(socket, :stale_update), do: assign_alert_state(socket)
+  defp refresh_after_stale_update(socket, _code), do: socket
 
   defp success_message(:edit), do: "Alert rule updated"
   defp success_message(_mode), do: "Alert rule created"
@@ -579,6 +615,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   defp access_errors(:capability_denied), do: [pool_id: {"Pool is not available", []}]
   defp access_errors(:rule_not_found), do: [pool_id: {"Rule is not available", []}]
+  defp access_errors(:stale_update), do: [display_name: {"Rule changed since you opened it. Reopen it to review the latest values", []}]
 
   defp access_errors(:channel_not_found),
     do: [display_name: {"Delivery channel is not available", []}]
@@ -588,13 +625,17 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   defp access_error_message(:capability_denied), do: "Pool is not available for this operator"
   defp access_error_message(:rule_not_found), do: "Alert rule was not found"
   defp access_error_message(:channel_not_found), do: "Delivery channel was not found"
+  defp access_error_message(:stale_update), do: "Alert rule changed. Reopen it before saving"
   defp access_error_message(_code), do: "Alert rule could not be saved"
 
   defp channel_access_errors(:channel_not_found),
     do: [display_name: {"Channel is not available", []}]
 
+  defp channel_access_errors(:stale_update), do: [display_name: {"Channel changed since you opened it. Reopen it to review the latest values", []}]
+
   defp channel_access_errors(_code), do: [display_name: {"Channel could not be saved", []}]
 
   defp channel_access_error_message(:channel_not_found), do: "Alert channel was not found"
+  defp channel_access_error_message(:stale_update), do: "Alert channel changed. Reopen it before saving"
   defp channel_access_error_message(_code), do: "Alert channel could not be saved"
 end

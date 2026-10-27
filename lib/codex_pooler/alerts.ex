@@ -52,10 +52,12 @@ defmodule CodexPooler.Alerts do
   defdelegate create_rule(scope, attrs), to: RuleManagement
 
   @spec update_rule(term(), AlertRule.t() | Ecto.UUID.t(), map()) :: rule_result()
-  defdelegate update_rule(scope, rule, attrs), to: RuleManagement
+  @spec update_rule(term(), AlertRule.t() | Ecto.UUID.t(), map(), keyword()) :: rule_result()
+  defdelegate update_rule(scope, rule, attrs, opts \\ []), to: RuleManagement
 
   @spec delete_rule(term(), AlertRule.t() | Ecto.UUID.t()) :: rule_result()
-  defdelegate delete_rule(scope, rule), to: RuleManagement
+  @spec delete_rule(term(), AlertRule.t() | Ecto.UUID.t(), keyword()) :: rule_result()
+  defdelegate delete_rule(scope, rule, opts \\ []), to: RuleManagement
 
   @spec list_channels(term(), keyword()) ::
           {:ok, [channel_projection()]} | {:error, access_error()}
@@ -65,10 +67,12 @@ defmodule CodexPooler.Alerts do
   defdelegate create_channel(scope, attrs), to: ChannelManagement
 
   @spec update_channel(term(), AlertChannel.t() | Ecto.UUID.t(), map()) :: channel_result()
-  defdelegate update_channel(scope, channel, attrs), to: ChannelManagement
+  @spec update_channel(term(), AlertChannel.t() | Ecto.UUID.t(), map(), keyword()) :: channel_result()
+  defdelegate update_channel(scope, channel, attrs, opts \\ []), to: ChannelManagement
 
   @spec delete_channel(term(), AlertChannel.t() | Ecto.UUID.t()) :: channel_result()
-  defdelegate delete_channel(scope, channel), to: ChannelManagement
+  @spec delete_channel(term(), AlertChannel.t() | Ecto.UUID.t(), keyword()) :: channel_result()
+  defdelegate delete_channel(scope, channel, opts \\ []), to: ChannelManagement
 
   @spec list_incidents(term(), keyword()) ::
           {:ok, [incident_projection()]} | {:error, access_error()}

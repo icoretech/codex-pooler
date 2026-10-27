@@ -11,6 +11,22 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
   alias Ecto.Adapters.SQL
   alias Oban.Engines.Basic
 
+  test "pending detached attempts converge to a bounded channel-deleted failure" do
+    {_incident, _channel, job, pending} = fixture!()
+    now = DateTime.utc_now()
+
+    pending
+    |> Ecto.Changeset.change(channel_id: nil, channel_deleted_at: now)
+    |> Repo.update!()
+
+    assert {:ok, recovered} = PendingRecovery.recover_one(Repo.get!(AlertDeliveryAttempt, pending.id), now)
+    assert recovered.status == "failed"
+    refute recovered.retryable
+    assert recovered.failure_code == "alert_delivery_channel_deleted"
+    assert recovered.failure_message == "alert channel was deleted before delivery completed"
+    assert job.state == "executing"
+  end
+
   test "normal completion preserves provenance and stale callbacks cannot reopen a recovery winner" do
     {incident, channel, job, pending} = fixture!()
     binding = pending.response_metadata["delivery_execution"]

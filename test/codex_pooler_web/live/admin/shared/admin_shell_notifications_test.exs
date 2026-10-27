@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
   alias CodexPooler.Alerts.Schemas.AlertIncidentReceipt
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.AlertIncidentsReadModel
 
   setup :register_and_log_in_user
 
@@ -173,7 +174,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     |> element("#admin-notification-open-#{incident.id}")
     |> render_click()
 
-    assert_redirect(view, "/admin/alerts?tab=incidents#alert-incident-#{incident.id}")
+    assert_redirect(view, "/admin/alerts?incident_id=#{incident.id}&tab=incidents#alert-incident-#{incident.id}")
 
     receipt =
       Repo.get_by!(AlertIncidentReceipt, operator_id: scope.user.id, incident_id: incident.id)
@@ -182,6 +183,33 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     assert Repo.get!(AlertIncident, incident.id).state == incident.state
 
     {:ok, alerts_view, _html} = live(conn, ~p"/admin/alerts?tab=incidents")
+    assert has_element?(alerts_view, "#alerts-tab-incidents[aria-selected='true']")
+    assert has_element?(alerts_view, "#alert-incident-#{incident.id}")
+  end
+
+  test "primary notification action reveals an incident beyond the newest 50 incidents", %{conn: conn, scope: scope} do
+    pool = pool_fixture()
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    incident = shell_incident_fixture(pool, %{severity: "critical", last_seen_at: DateTime.add(observed_at, -60)})
+
+    for _ <- 1..50 do
+      alert_incident_fixture(pool: pool, state: "resolved", last_seen_at: observed_at, resolved_at: observed_at)
+    end
+
+    page = AlertIncidentsReadModel.load(scope, %{"tab" => "incidents"})
+    assert page.total_count == 51
+    assert length(page.incidents) == 50
+    refute Enum.any?(page.incidents, &(&1.id == incident.id))
+
+    {:ok, view, _html} = live(conn, ~p"/admin/settings")
+    assert has_element?(view, "#admin-notification-open-#{incident.id}")
+    result = view |> element("#admin-notification-open-#{incident.id}") |> render_click()
+
+    receipt = Repo.get_by!(AlertIncidentReceipt, operator_id: scope.user.id, incident_id: incident.id)
+    assert Alerts.incident_notification_read?(incident, receipt)
+    assert Repo.get!(AlertIncident, incident.id).state == incident.state
+
+    {:ok, alerts_view, _html} = follow_redirect(result, conn)
     assert has_element?(alerts_view, "#alerts-tab-incidents[aria-selected='true']")
     assert has_element?(alerts_view, "#alert-incident-#{incident.id}")
   end
@@ -224,6 +252,28 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     refute has_element?(first_view, "#admin-notification-row-#{incident.id}")
     refute has_element?(second_view, "#admin-notification-row-#{incident.id}")
     assert Repo.get!(AlertIncident, incident.id).state == incident.state
+  end
+
+  test "hidden, unknown, and malformed notification actions fail without navigation or receipts", %{scope: scope} do
+    visible_pool = pool_fixture()
+    hidden_pool = pool_fixture()
+    visible = shell_incident_fixture(visible_pool, %{})
+    hidden = shell_incident_fixture(hidden_pool, %{})
+
+    %{user: admin, temporary_password: password} = operator_fixture(scope, %{"email" => unique_user_email(), "role" => "instance_admin", "password_change_required" => "false"})
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: scope.user.id)
+    assert {:ok, %{token: token}} = Accounts.login_user(%{"email" => admin.email, "password" => password})
+    {:ok, view, _html} = live(log_in_user(build_conn(), admin, token), ~p"/admin/settings")
+
+    for incident_id <- [hidden.id, Ecto.UUID.generate(), "invalid", "", [], %{}, nil],
+        action <- ["open_alert_notification_incident", "mark_alert_notification_read", "dismiss_alert_notification"] do
+      render_click(view, action, %{"id" => incident_id})
+      refute_redirected(view)
+      assert has_element?(view, "#flash-error", "Notification could not be updated")
+      assert has_element?(view, "#admin-notification-row-#{visible.id}")
+      refute has_element?(view, "#admin-notification-row-#{hidden.id}")
+      assert Repo.aggregate(AlertIncidentReceipt, :count) == 0
+    end
   end
 
   @tag slow: "mounts independent operator notification surfaces and verifies dismiss-all ownership across two pools"

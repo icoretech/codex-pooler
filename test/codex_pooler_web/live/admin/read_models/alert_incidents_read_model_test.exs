@@ -2,6 +2,9 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import CodexPooler.AccountsFixtures
+
+  alias CodexPooler.Accounts.Scope
 
   alias CodexPooler.Alerts.Schemas.{
     AlertDeliveryAttempt,
@@ -82,6 +85,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
              ])
 
     assert page.filter_values == %{
+             "incident_id" => "",
              "pool_id" => pool.id,
              "severity" => "critical",
              "state" => "open",
@@ -194,6 +198,57 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
              "state" => "open",
              "channel_id" => "channel-1"
            }
+  end
+
+  test "incident id selects an older incident before the bounded page window", %{scope: scope} do
+    pool = pool_fixture()
+    rule = alert_rule_fixture(pool)
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    incident = alert_incident_fixture(pool: pool, state: "resolved", resolved_at: observed_at, last_seen_at: DateTime.add(observed_at, -60))
+    alert_incident_target_fixture(incident, rule, pool)
+    insert_incident_history!(pool, rule, 55)
+
+    page = AlertIncidentsReadModel.load(scope, %{"incident_id" => incident.id})
+    assert page.filter_errors == []
+    assert page.total_count == 1
+    assert page.page_size == 50
+    assert [%{id: id, state: "resolved"}] = page.incidents
+    assert id == incident.id
+    assert page.filter_values["incident_id"] == incident.id
+    assert AlertIncidentsReadModel.query_params(page.filter_values) == %{"tab" => "incidents", "incident_id" => incident.id}
+
+    assert %{incidents: [], total_count: 0} = AlertIncidentsReadModel.load(scope, %{"incident_id" => incident.id, "state" => "open"})
+
+    for params <- [%{}, %{"incident_id" => ""}, %{"incident_id" => " "}] do
+      assert %{incidents: rows, total_count: 56, page_size: 50} = AlertIncidentsReadModel.load(scope, params)
+      assert length(rows) == 50
+      refute Enum.any?(rows, &(&1.id == incident.id))
+    end
+  end
+
+  test "incident id keeps hidden and unknown incidents outside the viewer scope", %{scope: scope} do
+    visible_pool = pool_fixture()
+    hidden_pool = pool_fixture()
+    visible = alert_incident_fixture(pool: visible_pool)
+    hidden = alert_incident_fixture(pool: hidden_pool)
+    %{user: admin} = operator_fixture(scope, %{"email" => unique_user_email(), "role" => "instance_admin"})
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: scope.user.id)
+    admin_scope = Scope.for_user(admin)
+
+    assert [%{id: visible_id}] = AlertIncidentsReadModel.load(admin_scope, %{"incident_id" => visible.id}).incidents
+    assert visible_id == visible.id
+
+    for incident_id <- [hidden.id, Ecto.UUID.generate()] do
+      assert %{incidents: [], total_count: 0, filter_errors: []} = AlertIncidentsReadModel.load(admin_scope, %{"incident_id" => incident_id})
+    end
+  end
+
+  test "malformed incident ids fail closed instead of loading the default window", %{scope: scope} do
+    alert_incident_fixture(pool: pool_fixture())
+
+    for incident_id <- ["invalid", [], %{}, 123] do
+      assert %{incidents: [], total_count: 0, filter_errors: [%{field: :incident_id}]} = AlertIncidentsReadModel.load(scope, %{"incident_id" => incident_id})
+    end
   end
 
   @tag slow: "compares real database query and result-row budgets with 2000 incident/target pairs"

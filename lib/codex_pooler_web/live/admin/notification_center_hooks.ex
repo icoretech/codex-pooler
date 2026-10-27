@@ -174,7 +174,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   end
 
   defp alert_incident_path(incident_id) do
-    ~p"/admin/alerts?#{%{"tab" => "incidents"}}" <> "#alert-incident-#{incident_id}"
+    ~p"/admin/alerts?#{%{"tab" => "incidents", "incident_id" => incident_id}}" <> "#alert-incident-#{incident_id}"
   end
 
   defp notification_center(%Scope{} = scope) do

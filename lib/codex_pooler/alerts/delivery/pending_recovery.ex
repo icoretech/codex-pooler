@@ -70,7 +70,7 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
             %{response_metadata: Map.put(current.response_metadata, "delivery_recovery", %{"state" => "unresolved", "reason" => reason, "checked_at" => DateTime.to_iso8601(now)}), updated_at: now}
 
           {:revoked, retryable, reason} ->
-            {adapter, code, message} = interruption(current.response_metadata)
+            {adapter, code, message} = interruption(current.response_metadata, reason)
             metadata = current.response_metadata |> Map.put("delivery_outcome", "unknown") |> Map.put("delivery_recovery", %{"state" => "recovered", "reason" => reason, "checked_at" => DateTime.to_iso8601(now)})
             %{status: if(retryable, do: "retryable", else: "failed"), completed_at: now, retryable: retryable, next_retry_at: if(retryable and job.state in ~w(available scheduled retryable), do: job.scheduled_at), failure_code: code, failure_message: message, response_metadata: metadata, failure_metadata: %{"delivery_adapter" => adapter, "failure_code" => code, "retryable" => retryable}, updated_at: now}
         end
@@ -82,11 +82,14 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
     _error in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :storage_unavailable}
   end
 
-  defp interruption(%{"delivery_adapter" => "email"}),
+  defp interruption(_metadata, "channel_deleted"),
+    do: {"webhook", "alert_delivery_channel_deleted", "alert channel was deleted before delivery completed"}
+
+  defp interruption(%{"delivery_adapter" => "email"}, _reason),
     do: {"email", "alert_email_execution_interrupted", "email execution ended; delivery outcome unknown"}
 
   # Existing pending receipts without adapter metadata came from webhook delivery.
-  defp interruption(_metadata),
+  defp interruption(_metadata, _reason),
     do: {"webhook", "alert_webhook_execution_interrupted", "webhook execution ended; delivery outcome unknown"}
 
   defp disposition(job, attempt) do
@@ -101,6 +104,7 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
 
   defp linked_disposition(job, binding, attempt) do
     cond do
+      is_nil(attempt.channel_id) -> {:revoked, false, "channel_deleted"}
       not Execution.related?(job, attempt.incident_id, attempt.channel_id) -> {:unresolved, "job_mismatch"}
       Execution.matches?(job, binding, attempt.incident_id, attempt.channel_id) -> :current
       revoked?(job, binding) -> {:revoked, binding["job_attempt"] < job.max_attempts and job.state not in ~w(completed cancelled discarded), "execution_revoked"}

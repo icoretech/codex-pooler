@@ -221,6 +221,29 @@ defmodule CodexPooler.Admin.AlertIncidentRelationshipsTest do
     assert Enum.any?(projections.linked_rules_by_incident[row.id], &(&1.value == root_rule.id))
   end
 
+  test "deleted channel attempts remain visible only to the owner and original creator" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: creator} = operator_fixture(owner, %{"email" => unique_user_email(), "role" => "instance_admin", "password_change_required" => "false"})
+    %{user: other} = operator_fixture(owner, %{"email" => unique_user_email(), "role" => "instance_admin", "password_change_required" => "false"})
+    pool = pool_fixture()
+    operator_pool_assignment_fixture(creator, pool, created_by_user_id: owner.id)
+    incident = alert_incident_fixture(pool: pool)
+    channel = alert_channel_fixture(%{created_by_user_id: creator.id, display_name: "Deleted history channel"})
+    attempt = delivery_attempt_fixture(incident, channel, status: AlertDeliveryAttempt.failed_status())
+
+    assert {:ok, _deleted} = CodexPooler.Alerts.delete_channel(Scope.for_user(creator), channel.id)
+    assert Repo.get(CodexPooler.Alerts.Schemas.AlertChannel, channel.id) == nil
+
+    for scope <- [Scope.for_user(owner, ["instance_owner"]), Scope.for_user(creator)] do
+      assert {:ok, incidents} = AlertIncidentRelationships.list_incidents(scope, %{})
+      summary = AlertIncidentRelationships.incident_relationship_projections(scope, incidents).delivery_summaries_by_incident[incident.id]
+      assert Enum.any?(summary.attempts, &(&1.id == attempt.id))
+    end
+
+    assert {:ok, other_incidents} = AlertIncidentRelationships.list_incidents(Scope.for_user(other), %{})
+    assert AlertIncidentRelationships.incident_relationship_projections(Scope.for_user(other), other_incidents).delivery_summaries_by_incident == %{}
+  end
+
   defp link_rule_channel!(rule, channel) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

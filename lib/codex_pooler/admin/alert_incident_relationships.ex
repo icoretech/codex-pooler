@@ -41,6 +41,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   ]
 
   @type incident_filters :: %{
+          optional(:incident_id) => Ecto.UUID.t() | nil,
           optional(:channel_id) => Ecto.UUID.t() | nil,
           optional(:pool_id) => Ecto.UUID.t() | nil,
           optional(:rule_id) => Ecto.UUID.t() | nil,
@@ -102,7 +103,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   end
 
   defp incident_options(filters) do
-    Enum.reduce([:pool_id, :state, :severity, :rule_id, :channel_id], [], fn key, opts -> maybe_put_opt(opts, key, Map.get(filters, key)) end)
+    Enum.reduce([:incident_id, :pool_id, :state, :severity, :rule_id, :channel_id], [], fn key, opts -> maybe_put_opt(opts, key, Map.get(filters, key)) end)
   end
 
   @spec incident_relationship_projections(Scope.t(), [Alerts.incident_projection()]) ::
@@ -120,7 +121,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
 
       %{
         linked_rules_by_incident: linked_rules_by_incident(incident_ids, visible_pool_ids, visible_channel_ids),
-        delivery_summaries_by_incident: delivery_summaries(incident_ids, channels)
+        delivery_summaries_by_incident: delivery_summaries(scope, incident_ids, channels)
       }
     else
       _reason -> empty_relationship_projections()
@@ -211,26 +212,37 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
     end)
   end
 
-  defp delivery_summaries(_incident_ids, []), do: %{}
-
-  defp delivery_summaries(incident_ids, channels) do
+  defp delivery_summaries(scope, incident_ids, channels) do
     visible_channel_ids = Enum.map(channels, & &1.id)
     channel_lookup = Map.new(channels, &{&1.id, &1})
+    deleted_owner_ids = if CodexPooler.Pools.owner?(scope), do: nil, else: [scope.user.id]
 
     incident_ids
-    |> delivery_attempt_rows(visible_channel_ids)
+    |> delivery_attempt_rows(visible_channel_ids, deleted_owner_ids)
     |> Enum.group_by(& &1.incident_id)
     |> Map.new(fn {incident_id, attempts} ->
       {incident_id, delivery_summary(attempts, channel_lookup)}
     end)
   end
 
-  defp delivery_attempt_rows(_incident_ids, []), do: []
+  defp delivery_attempt_rows(incident_ids, visible_channel_ids, deleted_owner_ids) do
+    deleted_condition =
+      if is_nil(deleted_owner_ids) do
+        dynamic([attempt], is_nil(attempt.channel_id))
+      else
+        dynamic([attempt], is_nil(attempt.channel_id) and attempt.channel_created_by_user_id in ^deleted_owner_ids)
+      end
 
-  defp delivery_attempt_rows(incident_ids, visible_channel_ids) do
+    visibility_condition =
+      dynamic(
+        [attempt],
+        attempt.incident_id in ^incident_ids and
+          (attempt.channel_id in ^visible_channel_ids or ^deleted_condition)
+      )
+
     ranked_query =
       from attempt in AlertDeliveryAttempt,
-        where: attempt.incident_id in ^incident_ids and attempt.channel_id in ^visible_channel_ids,
+        where: ^visibility_condition,
         windows: [
           incident_attempts: [
             partition_by: attempt.incident_id,
@@ -244,6 +256,9 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
           id: attempt.id,
           incident_id: attempt.incident_id,
           channel_id: attempt.channel_id,
+          channel_created_by_user_id: attempt.channel_created_by_user_id,
+          channel_display_name: attempt.channel_display_name,
+          channel_type: attempt.channel_type,
           status: attempt.status,
           attempt_number: attempt.attempt_number,
           max_attempts: attempt.max_attempts,
@@ -289,7 +304,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
       id: attempt.id,
       incident_id: attempt.incident_id,
       channel_id: attempt.channel_id,
-      channel_label: delivery_channel_label(Map.get(channel_lookup, attempt.channel_id)),
+      channel_label: delivery_channel_label(Map.get(channel_lookup, attempt.channel_id), attempt),
       status: attempt.status,
       attempt_number: attempt.attempt_number,
       max_attempts: attempt.max_attempts,
@@ -304,10 +319,13 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
     }
   end
 
-  defp delivery_channel_label(%{display_name: label}) when is_binary(label) and label != "",
+  defp delivery_channel_label(%{display_name: label}, _attempt) when is_binary(label) and label != "",
     do: label
 
-  defp delivery_channel_label(_channel), do: "Visible channel"
+  defp delivery_channel_label(_channel, %{channel_display_name: label}) when is_binary(label) and label != "",
+    do: label
+
+  defp delivery_channel_label(_channel, _attempt), do: "Deleted channel"
 
   defp safe_attempt_metadata(%{} = metadata) do
     metadata

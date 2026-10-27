@@ -281,6 +281,133 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     refute has_element?(view, "#alert-rule-disable-#{rule.id}")
   end
 
+  @tag :stale_alert_editor
+  test "saving an open rule editor preserves a row disable and unsaved edits", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-rule", name: "Stale rule"})
+    rule = alert_rule_fixture(pool, created_by_user_id: scope.user.id, state: AlertRule.active_state())
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts")
+
+    view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    view |> form("#alerts-rule-form", alert_rule: %{display_name: "Unsaved rule rename"}) |> render_change()
+    view |> element("#alert-rule-disable-#{rule.id}") |> render_click()
+    disabled = Repo.get!(AlertRule, rule.id)
+    assert disabled.state == AlertRule.disabled_state()
+    assert has_element?(view, "#alert-rule-state option[selected][value='disabled']")
+
+    view |> form("#alerts-rule-form") |> render_submit()
+
+    saved = Repo.get!(AlertRule, rule.id)
+    assert saved.state == AlertRule.disabled_state()
+    assert saved.disabled_at == disabled.disabled_at
+    assert saved.display_name == "Unsaved rule rename"
+    assert has_element?(view, "#alert-rule-row-#{rule.id}-state", "Disabled")
+
+    view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    view |> form("#alerts-rule-form", alert_rule: %{state: AlertRule.active_state()}) |> render_submit()
+    enabled = Repo.get!(AlertRule, rule.id)
+    assert enabled.state == AlertRule.active_state()
+    assert is_nil(enabled.disabled_at)
+  end
+
+  @tag :stale_alert_editor
+  test "saving an open channel editor preserves a row disable and unsaved edits", %{conn: conn, scope: scope} do
+    {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Stale channel", state: AlertChannel.active_state(), email_to: "alerts@example.com"})
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+
+    view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    view |> form("#alerts-channel-form", alert_channel: %{display_name: "Unsaved channel rename"}) |> render_change()
+    view |> element("#alert-channel-disable-#{channel.id}") |> render_click()
+    disabled = Repo.get!(AlertChannel, channel.id)
+    assert disabled.state == AlertChannel.disabled_state()
+    assert has_element?(view, "#alert-channel-state option[selected][value='disabled']")
+
+    view |> form("#alerts-channel-form") |> render_submit()
+
+    saved = Repo.get!(AlertChannel, channel.id)
+    assert saved.state == AlertChannel.disabled_state()
+    assert saved.disabled_at == disabled.disabled_at
+    assert saved.display_name == "Unsaved channel rename"
+    assert has_element?(view, "#alert-channel-row-#{channel.id}-state", "Disabled")
+
+    view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    view |> form("#alerts-channel-form", alert_channel: %{state: AlertChannel.active_state()}) |> render_submit()
+    enabled = Repo.get!(AlertChannel, channel.id)
+    assert enabled.state == AlertChannel.active_state()
+    assert is_nil(enabled.disabled_at)
+  end
+
+  @tag :stale_alert_editor_cross_tab
+  test "a stale rule editor cannot overwrite another tab's disable or rename", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-rule-tabs", name: "Stale rule tabs"})
+    rule = alert_rule_fixture(pool, created_by_user_id: scope.user.id, display_name: "Original rule")
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts")
+    stale_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    current_view |> element("#alert-rule-disable-#{rule.id}") |> render_click()
+    current_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    current_view |> form("#alerts-rule-form", alert_rule: %{display_name: "Current rule name"}) |> render_submit()
+    current = Repo.get!(AlertRule, rule.id)
+
+    stale_view |> form("#alerts-rule-form", alert_rule: %{display_name: "Stale rule name"}) |> render_submit()
+
+    assert Repo.get!(AlertRule, rule.id) == current
+    assert has_element?(stale_view, "#alerts-rule-form-panel", "changed since you opened")
+    assert has_element?(stale_view, "#alert-rule-display-name[value='Stale rule name']")
+    stale_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    assert has_element?(stale_view, "#alert-rule-display-name[value='Current rule name']")
+    assert has_element?(stale_view, "#alert-rule-state option[selected][value='disabled']")
+  end
+
+  test "disabling another rule preserves the open rule editor", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "independent-rule-editor", name: "Independent rule editor"})
+    editing = alert_rule_fixture(pool, created_by_user_id: scope.user.id)
+    other = alert_rule_fixture(pool, created_by_user_id: scope.user.id)
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts")
+    view |> element("#alert-rule-edit-#{editing.id}") |> render_click()
+    view |> form("#alerts-rule-form", alert_rule: %{display_name: "Retained rule edit"}) |> render_change()
+    view |> element("#alert-rule-disable-#{other.id}") |> render_click()
+    assert has_element?(view, "#alert-rule-state option[selected][value='active']")
+    view |> form("#alerts-rule-form") |> render_submit()
+    assert Repo.get!(AlertRule, editing.id).display_name == "Retained rule edit"
+    assert Repo.get!(AlertRule, editing.id).state == AlertRule.active_state()
+    assert Repo.get!(AlertRule, other.id).state == AlertRule.disabled_state()
+  end
+
+  test "disabling another channel preserves the open channel editor", %{conn: conn, scope: scope} do
+    editing = alert_channel_fixture(created_by_user_id: scope.user.id)
+    other = alert_channel_fixture(created_by_user_id: scope.user.id)
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    view |> element("#alert-channel-edit-#{editing.id}") |> render_click()
+    view |> form("#alerts-channel-form", alert_channel: %{display_name: "Retained channel edit"}) |> render_change()
+    view |> element("#alert-channel-disable-#{other.id}") |> render_click()
+    assert has_element?(view, "#alert-channel-state option[selected][value='active']")
+    view |> form("#alerts-channel-form") |> render_submit()
+    assert Repo.get!(AlertChannel, editing.id).display_name == "Retained channel edit"
+    assert Repo.get!(AlertChannel, editing.id).state == AlertChannel.active_state()
+    assert Repo.get!(AlertChannel, other.id).state == AlertChannel.disabled_state()
+  end
+
+  @tag :stale_alert_editor_cross_tab
+  test "a stale channel editor cannot overwrite another tab's disable or rename", %{conn: conn, scope: scope} do
+    {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Original channel", state: AlertChannel.active_state(), email_to: "alerts@example.com"})
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    stale_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    current_view |> element("#alert-channel-disable-#{channel.id}") |> render_click()
+    current_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    current_view |> form("#alerts-channel-form", alert_channel: %{display_name: "Current channel name"}) |> render_submit()
+    current = Repo.get!(AlertChannel, channel.id)
+
+    stale_view |> form("#alerts-channel-form", alert_channel: %{display_name: "Stale channel name"}) |> render_submit()
+
+    assert Repo.get!(AlertChannel, channel.id) == current
+    assert has_element?(stale_view, "#alerts-channel-form-panel", "changed since you opened")
+    assert has_element?(stale_view, "#alert-channel-display-name[value='Stale channel name']")
+    stale_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    assert has_element?(stale_view, "#alert-channel-display-name[value='Current channel name']")
+    assert has_element?(stale_view, "#alert-channel-state option[selected][value='disabled']")
+  end
+
   test "deletes an alert rule through the confirmation form", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "alerts-delete", name: "Alerts Delete"})
 
@@ -306,6 +433,24 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     refute Repo.get(AlertRule, rule.id)
     refute has_element?(view, "#alert-rule-row-#{rule.id}")
     refute has_element?(view, "#alert-rule-delete-dialog")
+  end
+
+  @tag :stale_alert_editor_cross_tab
+  test "a stale rule delete dialog keeps the updated rule and asks for review", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-rule-delete", name: "Stale rule delete"})
+    rule = alert_rule_fixture(pool, created_by_user_id: scope.user.id, display_name: "Original rule")
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts")
+
+    stale_view |> element("#alert-rule-delete-#{rule.id}") |> render_click()
+    current_view |> element("#alert-rule-edit-#{rule.id}") |> render_click()
+    current_view |> form("#alerts-rule-form", alert_rule: %{display_name: "Current rule"}) |> render_submit()
+
+    stale_view |> element("#alert-rule-delete-form") |> render_submit(%{"alert_rule_delete" => %{"id" => rule.id}})
+
+    assert Repo.get!(AlertRule, rule.id).display_name == "Current rule"
+    assert has_element?(stale_view, "#alert-rule-row-#{rule.id}", "Current rule")
+    assert has_element?(stale_view, "#flash-error", "changed before it could be deleted")
   end
 
   test "assigned admin cannot create a rule for a hidden Pool and hidden Pool data is not rendered",
@@ -541,6 +686,23 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert {:ok, []} = Alerts.list_channels(scope)
     refute has_element?(view, "#alert-channel-row-#{channel.id}")
     refute has_element?(view, "#alert-channel-delete-dialog")
+  end
+
+  @tag :stale_alert_editor_cross_tab
+  test "a stale channel delete dialog keeps the updated channel and asks for review", %{conn: conn, scope: scope} do
+    {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Original channel", state: AlertChannel.active_state(), email_to: "alerts@example.com"})
+    {:ok, stale_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    {:ok, current_view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+
+    stale_view |> element("#alert-channel-delete-#{channel.id}") |> render_click()
+    current_view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    current_view |> form("#alerts-channel-form", alert_channel: %{display_name: "Current channel"}) |> render_submit()
+
+    stale_view |> element("#alert-channel-delete-form") |> render_submit(%{"alert_channel_delete" => %{"id" => channel.id}})
+
+    assert Repo.get!(AlertChannel, channel.id).display_name == "Current channel"
+    assert has_element?(stale_view, "#alert-channel-row-#{channel.id}", "Current channel")
+    assert has_element?(stale_view, "#flash-error", "changed before it could be deleted")
   end
 
   test "incidents workspace renders filtered owner incident metadata without raw evidence", %{

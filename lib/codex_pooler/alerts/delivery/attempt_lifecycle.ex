@@ -106,7 +106,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
       :invalid -> Repo.rollback(execution_error())
     end
 
-    attrs = %{incident_id: incident.id, channel_id: channel.id, attempt_number: number, status: "pending", scheduled_at: timestamp, attempted_at: timestamp, retryable: false, response_metadata: metadata, failure_metadata: %{}, created_at: timestamp, updated_at: timestamp}
+    attrs = %{incident_id: incident.id, channel_id: channel.id, channel_created_by_user_id: channel.created_by_user_id, channel_display_name: channel.display_name, channel_type: channel.channel_type, attempt_number: number, status: "pending", scheduled_at: timestamp, attempted_at: timestamp, retryable: false, response_metadata: metadata, failure_metadata: %{}, created_at: timestamp, updated_at: timestamp}
 
     case insert_attempt(attrs) do
       {:ok, attempt} -> attempt
@@ -137,6 +137,9 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     insert_attempt(%{
       incident_id: incident.id,
       channel_id: channel.id,
+      channel_created_by_user_id: channel.created_by_user_id,
+      channel_display_name: channel.display_name,
+      channel_type: channel.channel_type,
       attempt_number: attempt_number,
       status: AlertDeliveryAttempt.sent_status(),
       scheduled_at: timestamp,

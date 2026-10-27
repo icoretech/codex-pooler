@@ -62,44 +62,75 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
   @spec update_rule(term(), AlertRule.t() | Ecto.UUID.t(), map()) :: rule_result()
-  def update_rule(%Scope{} = scope, %AlertRule{id: id}, attrs) when is_map(attrs), do: update_rule(scope, id, attrs)
+  @spec update_rule(term(), AlertRule.t() | Ecto.UUID.t(), map(), keyword()) :: rule_result()
+  def update_rule(scope, rule, attrs, opts \\ [])
 
-  def update_rule(%Scope{} = scope, rule_id, attrs) when is_binary(rule_id) and is_map(attrs) do
-    case Repo.transact(fn -> update_rule_in_transaction(scope, rule_id, attrs) end) do
+  def update_rule(%Scope{} = scope, %AlertRule{id: id}, attrs, opts) when is_map(attrs) and is_list(opts), do: update_rule(scope, id, attrs, opts)
+
+  def update_rule(%Scope{} = scope, rule_id, attrs, opts) when is_binary(rule_id) and is_map(attrs) and is_list(opts) do
+    case Repo.transact(fn -> update_rule_in_transaction(scope, rule_id, attrs, opts) end) do
       {:ok, {previous, updated}} -> AlertAudit.audit_rule_update({:ok, updated}, scope, previous, attrs)
       {:error, _reason} = error -> error
     end
   end
 
-  def update_rule(_scope, _rule, _attrs),
+  def update_rule(_scope, _rule, _attrs, _opts),
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
   @spec delete_rule(term(), AlertRule.t() | Ecto.UUID.t()) :: rule_result()
-  def delete_rule(%Scope{} = scope, %AlertRule{} = rule) do
-    with {:ok, _decision} <- Authorization.authorize_pool_operation(scope, rule.pool_id) do
-      delete_rule_transaction(rule)
-      |> AlertAudit.audit_rule_delete(scope)
-    end
+  @spec delete_rule(term(), AlertRule.t() | Ecto.UUID.t(), keyword()) :: rule_result()
+  def delete_rule(scope, rule, opts \\ [])
+
+  def delete_rule(%Scope{} = scope, %AlertRule{id: id}, opts) when is_list(opts),
+    do: delete_rule(scope, id, opts)
+
+  def delete_rule(%Scope{} = scope, rule_id, opts) when is_binary(rule_id) and is_list(opts) do
+    delete_rule_transaction(scope, rule_id, opts)
+    |> AlertAudit.audit_rule_delete(scope)
   end
 
-  def delete_rule(%Scope{} = scope, rule_id) when is_binary(rule_id) do
-    case Repo.get(AlertRule, rule_id) do
-      %AlertRule{} = rule -> delete_rule(scope, rule)
-      nil -> {:error, Authorization.access_error(:rule_not_found, "alert rule was not found")}
-    end
-  end
-
-  def delete_rule(_scope, _rule),
+  def delete_rule(_scope, _rule, _opts),
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
-  defp update_rule_in_transaction(scope, rule_id, attrs) do
+  defp delete_rule_transaction(scope, rule_id, opts) do
+    NotificationEvents.invalidate_after_cascade({:rule, rule_id}, fn ->
+      Repo.transact(fn -> delete_rule_in_transaction(scope, rule_id, opts) end)
+    end)
+  end
+
+  defp delete_rule_in_transaction(scope, rule_id, opts) do
     case Repo.one(from rule in AlertRule, where: rule.id == ^rule_id, lock: "FOR UPDATE") do
-      %AlertRule{} = rule -> update_locked_rule(scope, rule, attrs)
+      %AlertRule{} = rule -> delete_locked_rule(scope, rule, opts)
+      nil -> Repo.rollback(Authorization.access_error(:rule_not_found, "alert rule was not found"))
+    end
+  end
+
+  defp delete_locked_rule(scope, rule, opts) do
+    with {:ok, _decision} <- Authorization.authorize_pool_operation(scope, rule.pool_id),
+         :ok <- check_delete_revision(rule, opts),
+         {:ok, deleted_rule} <- Repo.delete(rule) do
+      {:ok, deleted_rule}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp check_delete_revision(rule, opts) do
+    case Keyword.fetch(opts, :expected_updated_at) do
+      :error -> :ok
+      {:ok, expected} when expected == rule.updated_at -> :ok
+      {:ok, _expected} -> {:error, Authorization.access_error(:stale_update, "alert rule changed since it was opened")}
+    end
+  end
+
+  defp update_rule_in_transaction(scope, rule_id, attrs, opts) do
+    case Repo.one(from rule in AlertRule, where: rule.id == ^rule_id, lock: "FOR UPDATE") do
+      %AlertRule{} = rule -> update_locked_rule(scope, rule, attrs, opts)
       nil -> {:error, Authorization.access_error(:rule_not_found, "alert rule was not found")}
     end
   end
 
-  defp update_locked_rule(scope, rule, attrs) do
+  defp update_locked_rule(scope, rule, attrs, opts) do
     target_pool_id = Map.get(attrs, :pool_id) || Map.get(attrs, "pool_id") || rule.pool_id
     timestamp = now()
     normalized = rule_update_attrs(rule, attrs, target_pool_id, timestamp)
@@ -107,6 +138,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
 
     with {:ok, _existing} <- Authorization.authorize_pool_operation(scope, rule.pool_id),
          {:ok, _target} <- Authorization.authorize_pool_operation(scope, target_pool_id),
+         :ok <- check_update_revision(rule, opts),
          {:ok, updated} <- Repo.update(changeset),
          {:ok, _channels} <- maybe_sync_rule_channels(scope, updated, normalized, timestamp) do
       if Enum.any?(@condition_fields, &Ecto.Changeset.changed?(changeset, &1)) do
@@ -117,17 +149,11 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
     end
   end
 
-  # The rule's incident targets go with it by database cascade.
-  defp delete_rule_transaction(rule) do
-    NotificationEvents.invalidate_after_cascade({:rule, rule.id}, fn ->
-      Repo.transaction(fn -> delete_rule_in_transaction(rule) end)
-    end)
-  end
-
-  defp delete_rule_in_transaction(rule) do
-    case Repo.delete(rule) do
-      {:ok, deleted_rule} -> deleted_rule
-      {:error, reason} -> Repo.rollback(reason)
+  defp check_update_revision(rule, opts) do
+    case Keyword.fetch(opts, :expected_updated_at) do
+      :error -> :ok
+      {:ok, expected} when expected == rule.updated_at -> :ok
+      {:ok, _expected} -> {:error, Authorization.access_error(:stale_update, "alert rule changed since it was opened")}
     end
   end
 

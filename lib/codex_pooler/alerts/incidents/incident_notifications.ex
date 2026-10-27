@@ -96,6 +96,7 @@ defmodule CodexPooler.Alerts.Incidents.IncidentNotifications do
          {:ok, relationship_pool_ids} <- relationship_pool_ids(scope, pool_ids, opts) do
       query =
         incident_query(pool_ids, opts)
+        |> maybe_filter_incident_id(Keyword.get(opts, :incident_id))
         |> maybe_filter_incident_severity(Keyword.get(opts, :severity))
         |> maybe_filter_incident_rule(relationship_pool_ids, Keyword.get(opts, :rule_id))
         |> maybe_filter_incident_channel(scope, relationship_pool_ids, Keyword.get(opts, :channel_id))
@@ -111,7 +112,7 @@ defmodule CodexPooler.Alerts.Incidents.IncidentNotifications do
     if is_integer(limit) and limit in 1..500 and is_integer(offset) and offset >= 0 and
          Keyword.get(opts, :state) in [nil | AlertIncident.states()] and
          Keyword.get(opts, :severity) in [nil | AlertIncident.severities()] and
-         Enum.all?([:rule_id, :channel_id], &valid_optional_uuid?(Keyword.get(opts, &1))) do
+         Enum.all?([:incident_id, :rule_id, :channel_id], &valid_optional_uuid?(Keyword.get(opts, &1))) do
       :ok
     else
       {:error, Authorization.access_error(:invalid_request, "incident filters or window are invalid")}
@@ -143,6 +144,9 @@ defmodule CodexPooler.Alerts.Incidents.IncidentNotifications do
 
   defp maybe_filter_incident_severity(query, nil), do: query
   defp maybe_filter_incident_severity(query, severity), do: where(query, [incident], incident.severity == ^severity)
+
+  defp maybe_filter_incident_id(query, nil), do: query
+  defp maybe_filter_incident_id(query, incident_id), do: where(query, [incident], incident.id == ^incident_id)
 
   defp maybe_filter_incident_rule(query, _pool_ids, nil), do: query
 
@@ -368,9 +372,11 @@ defmodule CodexPooler.Alerts.Incidents.IncidentNotifications do
     do: [read_at: timestamp, dismissed_at: timestamp, updated_at: timestamp]
 
   defp load_incident(incident_or_id) do
-    case incident_id(incident_or_id) do
-      {:ok, incident_id} -> Repo.get(AlertIncident, incident_id)
-      {:error, _reason} -> nil
+    with {:ok, incident_id} <- incident_id(incident_or_id),
+         {:ok, incident_id} <- Ecto.UUID.cast(incident_id) do
+      Repo.get(AlertIncident, incident_id)
+    else
+      _invalid -> nil
     end
   end
 

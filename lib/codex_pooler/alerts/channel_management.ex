@@ -8,6 +8,7 @@ defmodule CodexPooler.Alerts.ChannelManagement do
   alias CodexPooler.Alerts.AuditLog, as: AlertAudit
   alias CodexPooler.Alerts.Authorization
   alias CodexPooler.Alerts.Schemas.AlertChannel
+  alias CodexPooler.Alerts.Schemas.AlertDeliveryAttempt
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
@@ -66,46 +67,110 @@ defmodule CodexPooler.Alerts.ChannelManagement do
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
 
   @spec update_channel(term(), AlertChannel.t() | Ecto.UUID.t(), map()) :: channel_result()
-  def update_channel(%Scope{} = scope, %AlertChannel{} = channel, attrs) when is_map(attrs) do
-    with {:ok, channel} <- authorize_access(scope, channel) do
-      channel
-      |> AlertChannel.changeset(channel_update_attrs(attrs, now()))
-      |> Repo.update()
-      |> AlertAudit.audit_channel_update(scope, channel, attrs)
-      |> project_channel_result()
+  @spec update_channel(term(), AlertChannel.t() | Ecto.UUID.t(), map(), keyword()) :: channel_result()
+  def update_channel(scope, channel, attrs, opts \\ [])
+
+  def update_channel(%Scope{} = scope, %AlertChannel{id: id}, attrs, opts) when is_map(attrs) and is_list(opts), do: update_channel(scope, id, attrs, opts)
+
+  def update_channel(%Scope{} = scope, channel_id, attrs, opts)
+      when is_binary(channel_id) and is_map(attrs) and is_list(opts) do
+    case Repo.transact(fn -> update_channel_in_transaction(scope, channel_id, attrs, opts) end) do
+      {:ok, {previous, updated}} ->
+        {:ok, updated}
+        |> AlertAudit.audit_channel_update(scope, previous, attrs)
+        |> project_channel_result()
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  def update_channel(%Scope{} = scope, channel_id, attrs)
-      when is_binary(channel_id) and is_map(attrs) do
-    case Repo.get(AlertChannel, channel_id) do
-      %AlertChannel{} = channel -> update_channel(scope, channel, attrs)
-      nil -> {:error, not_found_error()}
-    end
-  end
-
-  def update_channel(_scope, _channel, _attrs),
+  def update_channel(_scope, _channel, _attrs, _opts),
     do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
+
+  defp update_channel_in_transaction(scope, channel_id, attrs, opts) do
+    case Repo.one(from channel in AlertChannel, where: channel.id == ^channel_id, lock: "FOR UPDATE") do
+      %AlertChannel{} = channel ->
+        with {:ok, channel} <- authorize_access(scope, channel),
+             :ok <- check_update_revision(channel, opts),
+             {:ok, updated} <- channel |> AlertChannel.changeset(channel_update_attrs(attrs, now())) |> Repo.update() do
+          {:ok, {channel, updated}}
+        end
+
+      nil ->
+        {:error, not_found_error()}
+    end
+  end
+
+  defp check_update_revision(channel, opts) do
+    case Keyword.fetch(opts, :expected_updated_at) do
+      :error -> :ok
+      {:ok, expected} when expected == channel.updated_at -> :ok
+      {:ok, _expected} -> {:error, Authorization.access_error(:stale_update, "alert channel changed since it was opened")}
+    end
+  end
 
   @spec delete_channel(term(), AlertChannel.t() | Ecto.UUID.t()) :: channel_result()
-  def delete_channel(%Scope{} = scope, %AlertChannel{} = channel) do
-    with {:ok, channel} <- authorize_access(scope, channel) do
-      channel
-      |> Repo.delete()
-      |> AlertAudit.audit_channel_delete(scope)
-      |> project_channel_result()
+  @spec delete_channel(term(), AlertChannel.t() | Ecto.UUID.t(), keyword()) :: channel_result()
+  def delete_channel(scope, channel, opts \\ [])
+
+  def delete_channel(%Scope{} = scope, %AlertChannel{id: id}, opts) when is_list(opts),
+    do: delete_channel(scope, id, opts)
+
+  def delete_channel(%Scope{} = scope, channel_id, opts) when is_binary(channel_id) and is_list(opts) do
+    result = Repo.transact(fn -> delete_channel_in_transaction(scope, channel_id, opts) end)
+
+    result
+    |> AlertAudit.audit_channel_delete(scope)
+    |> project_channel_result()
+  end
+
+  def delete_channel(_scope, _channel, _opts),
+    do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
+
+  defp delete_channel_in_transaction(scope, channel_id, opts) do
+    with {:ok, channel} <- locked_channel(scope, channel_id),
+         :ok <- check_delete_revision(channel, opts),
+         {:ok, channel} <- preserve_attempt_history(channel),
+         {:ok, deleted} <- Repo.delete(channel) do
+      {:ok, deleted}
+    else
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 
-  def delete_channel(%Scope{} = scope, channel_id) when is_binary(channel_id) do
-    case Repo.get(AlertChannel, channel_id) do
-      %AlertChannel{} = channel -> delete_channel(scope, channel)
+  defp check_delete_revision(channel, opts) do
+    case Keyword.fetch(opts, :expected_updated_at) do
+      :error -> :ok
+      {:ok, expected} when expected == channel.updated_at -> :ok
+      {:ok, _expected} -> {:error, Authorization.access_error(:stale_update, "alert channel changed since it was opened")}
+    end
+  end
+
+  defp locked_channel(scope, channel_id) do
+    case Repo.one(from c in AlertChannel, where: c.id == ^channel_id, lock: "FOR UPDATE") do
+      %AlertChannel{} = channel -> authorize_access(scope, channel)
       nil -> {:error, not_found_error()}
     end
   end
 
-  def delete_channel(_scope, _channel),
-    do: {:error, Authorization.access_error(:invalid_request, "user scope is required")}
+  defp preserve_attempt_history(%AlertChannel{} = channel) do
+    now = now()
+
+    Repo.update_all(
+      from(attempt in AlertDeliveryAttempt, where: attempt.channel_id == ^channel.id),
+      set: [
+        channel_id: nil,
+        channel_created_by_user_id: channel.created_by_user_id,
+        channel_display_name: channel.display_name,
+        channel_type: channel.channel_type,
+        channel_deleted_at: now,
+        updated_at: now
+      ]
+    )
+
+    {:ok, channel}
+  end
 
   @spec scope_query(Scope.t()) :: Ecto.Query.t()
   def scope_query(%Scope{} = scope) do

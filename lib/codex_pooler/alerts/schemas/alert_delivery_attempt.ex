@@ -14,6 +14,10 @@ defmodule CodexPooler.Alerts.Schemas.AlertDeliveryAttempt do
   schema "alert_delivery_attempts" do
     field :incident_id, :binary_id
     field :channel_id, :binary_id
+    field :channel_created_by_user_id, :binary_id
+    field :channel_display_name, :string
+    field :channel_type, :string
+    field :channel_deleted_at, :utc_datetime_usec
     field :attempt_number, :integer
     field :max_attempts, :integer, default: @fixed_max_attempts
     field :status, :string, default: "pending"
@@ -37,6 +41,10 @@ defmodule CodexPooler.Alerts.Schemas.AlertDeliveryAttempt do
     |> cast(attrs, [
       :incident_id,
       :channel_id,
+      :channel_created_by_user_id,
+      :channel_display_name,
+      :channel_type,
+      :channel_deleted_at,
       :attempt_number,
       :max_attempts,
       :status,
@@ -57,7 +65,6 @@ defmodule CodexPooler.Alerts.Schemas.AlertDeliveryAttempt do
     |> update_change(:failure_message, &trim_optional_string/1)
     |> validate_required([
       :incident_id,
-      :channel_id,
       :attempt_number,
       :max_attempts,
       :status,

@@ -636,7 +636,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert fk_action("alert_incident_targets_rule_id_fkey") == {"c", "a"}
     assert fk_action("alert_incident_targets_pool_id_fkey") == {"c", "a"}
     assert fk_action("alert_delivery_attempts_incident_id_fkey") == {"c", "a"}
-    assert fk_action("alert_delivery_attempts_channel_id_fkey") == {"c", "a"}
+    assert fk_action("alert_delivery_attempts_channel_id_fkey") == {"n", "a"}
     assert fk_action("upstream_oauth_flows_pool_id_fkey") == {"c", "a"}
     assert fk_action("upstream_oauth_flows_upstream_identity_id_fkey") == {"n", "a"}
     assert fk_action("upstream_oauth_flows_requested_by_user_id_fkey") == {"a", "a"}
@@ -790,6 +790,10 @@ defmodule CodexPooler.SchemaContractTest do
     assert Map.take(attempt_columns, [
              "incident_id",
              "channel_id",
+             "channel_created_by_user_id",
+             "channel_display_name",
+             "channel_type",
+             "channel_deleted_at",
              "attempt_number",
              "max_attempts",
              "status",
@@ -801,7 +805,11 @@ defmodule CodexPooler.SchemaContractTest do
              "failure_metadata"
            ]) == %{
              "incident_id" => {"uuid", "NO"},
-             "channel_id" => {"uuid", "NO"},
+             "channel_id" => {"uuid", "YES"},
+             "channel_created_by_user_id" => {"uuid", "YES"},
+             "channel_display_name" => {"text", "YES"},
+             "channel_type" => {"text", "YES"},
+             "channel_deleted_at" => {"timestamp without time zone", "YES"},
              "attempt_number" => {"integer", "NO"},
              "max_attempts" => {"integer", "NO"},
              "status" => {"text", "NO"},

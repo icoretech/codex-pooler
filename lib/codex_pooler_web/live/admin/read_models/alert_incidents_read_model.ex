@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   @spec query_params(map()) :: map()
   def query_params(params) when is_map(params) do
     params
-    |> Map.take(~w(pool_id severity state rule_id channel_id))
+    |> Map.take(~w(incident_id pool_id severity state rule_id channel_id))
     |> Enum.reject(fn {_key, value} -> blank?(value) end)
     |> Map.new()
     |> Map.put("tab", "incidents")
@@ -168,6 +168,8 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   end
 
   defp parse_filters(params, pools, rules, channels) do
+    {incident_id, incident_error} = parse_incident_id(Map.get(params, "incident_id"))
+
     form_values = %{
       "pool_id" => string_param(params, "pool_id"),
       "severity" => string_param(params, "severity"),
@@ -211,6 +213,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       )
 
     filters = %{
+      incident_id: incident_id,
       pool_id: pool_id,
       severity: severity,
       state: state,
@@ -219,6 +222,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     }
 
     form_values = %{
+      "incident_id" => incident_id || "",
       "pool_id" => pool_id || "",
       "severity" => severity || "",
       "state" => state || "",
@@ -227,10 +231,28 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     }
 
     errors =
-      Enum.reject([pool_error, severity_error, state_error, rule_error, channel_error], &is_nil/1)
+      Enum.reject([incident_error, pool_error, severity_error, state_error, rule_error, channel_error], &is_nil/1)
 
     {filters, form_values, errors}
   end
+
+  defp parse_incident_id(nil), do: {nil, nil}
+
+  defp parse_incident_id(value) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        {nil, nil}
+
+      id ->
+        case Ecto.UUID.cast(id) do
+          {:ok, incident_id} -> {incident_id, nil}
+          :error -> invalid_incident_id()
+        end
+    end
+  end
+
+  defp parse_incident_id(_value), do: invalid_incident_id()
+  defp invalid_incident_id, do: {nil, %{field: :incident_id, message: "Incident filter is not valid"}}
 
   defp parse_pool_id(nil, _pools), do: {nil, nil}
   defp parse_pool_id("", _pools), do: {nil, nil}
