@@ -330,6 +330,184 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
     Admission.release(recovered)
   end
 
+  test "live max_concurrency contractions stay enforced when a lease release drains the queue" do
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 2,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    Admission.reset_for_test()
+    attach_telemetry()
+    assert {:ok, held_one} = Admission.acquire("proxy_stream", %{request_id: "held-one"})
+    assert {:ok, held_two} = Admission.acquire("proxy_stream", %{request_id: "held-two"})
+
+    waiter = Task.async(fn -> Admission.acquire("proxy_stream", %{request_id: "waiter"}) end)
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "waiter"}}
+
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 1,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    assert OperationalSettings.current().bulkheads["proxy_stream"].max_concurrency == 1
+    Admission.release(held_one)
+
+    assert {:ok, snapshot} = Admission.saturation()
+    assert snapshot["proxy_stream"] == %{running: 1, queued: 1}
+    refute_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued], _measurements, %{request_id: "waiter"}}
+
+    Admission.release(held_two)
+    assert {:ok, queued_lease} = Task.await(waiter, @detection_timeout_ms)
+    Admission.release(queued_lease)
+  end
+
+  test "owner DOWN honors a live max_concurrency contraction before dequeuing" do
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 2,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    Admission.reset_for_test()
+    attach_telemetry()
+    parent = self()
+
+    owner =
+      spawn(fn ->
+        assert {:ok, lease} = Admission.acquire("proxy_stream", %{request_id: "owner"})
+        send(parent, {:owner_lease, self(), lease})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:owner_lease, ^owner, owner_lease}
+    assert {:ok, held} = Admission.acquire("proxy_stream", %{request_id: "held"})
+    waiter = Task.async(fn -> Admission.acquire("proxy_stream", %{request_id: "waiter"}) end)
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "waiter"}}
+
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 1,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    owner_monitor = Process.monitor(owner)
+    Process.exit(owner, :shutdown)
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :shutdown}
+    _state = :sys.get_state(Admission)
+
+    assert {:ok, snapshot} = Admission.saturation()
+    assert snapshot["proxy_stream"] == %{running: 1, queued: 1}
+    refute_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued], _measurements, %{request_id: "waiter"}}
+
+    Admission.release(held)
+    assert {:ok, queued_lease} = Task.await(waiter, @detection_timeout_ms)
+    Admission.release(queued_lease)
+    Admission.release(owner_lease)
+  end
+
+  test "duplicate and unknown releases never dequeue a waiting request" do
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 1,
+        queue_limit: 2,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    Admission.reset_for_test()
+    attach_telemetry()
+    assert {:ok, held} = Admission.acquire("proxy_stream", %{request_id: "held"})
+    parent = self()
+
+    first_waiter =
+      Task.async(fn ->
+        result = Admission.acquire("proxy_stream", %{request_id: "first"})
+        send(parent, {:waiter_result, :first, self(), result})
+
+        receive do
+          :finish -> result
+        end
+      end)
+
+    second_waiter =
+      Task.async(fn ->
+        result = Admission.acquire("proxy_stream", %{request_id: "second"})
+        send(parent, {:waiter_result, :second, self(), result})
+
+        receive do
+          :finish -> result
+        end
+      end)
+
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "first"}}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "second"}}
+
+    Admission.release(%{server: Admission, route_class: "proxy_stream", ref: make_ref()})
+    Admission.release(%{server: Admission, route_class: "proxy_magic", ref: make_ref()})
+
+    assert {:ok, snapshot} = Admission.saturation()
+    assert snapshot["proxy_stream"] == %{running: 1, queued: 2}
+    refute_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued], _measurements, _metadata}
+
+    Admission.release(held)
+    assert_receive {:waiter_result, :first, first_pid, {:ok, first_lease}}
+
+    Admission.release(held)
+    assert {:ok, snapshot} = Admission.saturation()
+    assert snapshot["proxy_stream"] == %{running: 1, queued: 1}
+
+    Admission.release(first_lease)
+    assert_receive {:waiter_result, :second, second_pid, {:ok, second_lease}}
+    Admission.release(second_lease)
+    send(first_pid, :finish)
+    send(second_pid, :finish)
+    assert {:ok, ^first_lease} = Task.await(first_waiter, @detection_timeout_ms)
+    assert {:ok, ^second_lease} = Task.await(second_waiter, @detection_timeout_ms)
+  end
+
+  test "capacity expansions drain existing waiters before admitting later arrivals" do
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 1,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    Admission.reset_for_test()
+    attach_telemetry()
+    assert {:ok, held} = Admission.acquire("proxy_stream", %{request_id: "held"})
+    waiter = Task.async(fn -> Admission.acquire("proxy_stream", %{request_id: "waiter"}) end)
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "waiter"}}
+
+    setup_settings(
+      put_in(settings().bulkheads["proxy_stream"], %{
+        max_concurrency: 2,
+        queue_limit: 1,
+        queue_timeout_ms: 1_000
+      })
+    )
+
+    assert {:ok, later} = Admission.acquire("proxy_stream", %{request_id: "later"})
+    assert {:ok, queued_lease} = Task.await(waiter, @detection_timeout_ms)
+    assert {:ok, snapshot} = Admission.saturation()
+    assert snapshot["proxy_stream"] == %{running: 2, queued: 0}
+
+    Admission.release(held)
+    Admission.release(later)
+    Admission.release(queued_lease)
+  end
+
   defp settings do
     %OperationalSettings{
       bulkheads:

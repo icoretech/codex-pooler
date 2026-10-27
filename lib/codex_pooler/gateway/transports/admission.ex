@@ -70,11 +70,12 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   def acquire(route_class, metadata, opts) when route_class in @route_classes do
     server = Map.get(opts, :server, __MODULE__)
+    settings_override? = Map.has_key?(opts, :settings)
     settings = Map.get(opts, :settings, OperationalSettings.current())
 
     GenServer.call(
       server,
-      {:acquire, route_class, sanitize_metadata(metadata), settings, server},
+      {:acquire, route_class, sanitize_metadata(metadata), settings, settings_override?, server},
       :infinity
     )
   end
@@ -122,7 +123,8 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   def handle_call(:saturation, _from, state), do: {:reply, saturation_snapshot(state), state}
 
-  def handle_call({:acquire, route_class, metadata, settings, server}, from, state) do
+  def handle_call({:acquire, route_class, metadata, settings, settings_override?, server}, from, state) do
+    state = dequeue_available(state, route_class)
     config = bulkhead_config(settings, route_class)
     class = class_state(state, route_class)
 
@@ -136,7 +138,16 @@ defmodule CodexPooler.Gateway.Transports.Admission do
         {:reply, {:ok, lease}, put_class(state, route_class, class)}
 
       :queue.len(class.queue) < config.queue_limit ->
-        queued = queued_request(server, route_class, from, metadata, config.queue_timeout_ms)
+        queued =
+          queued_request(
+            server,
+            route_class,
+            from,
+            metadata,
+            config.queue_timeout_ms,
+            settings,
+            settings_override?
+          )
 
         class = %{
           class
@@ -164,9 +175,10 @@ defmodule CodexPooler.Gateway.Transports.Admission do
   @impl GenServer
   def handle_cast({:release, route_class, ref}, state) do
     class = class_state(state, route_class)
-    class = release_active_lease(class, ref)
+    {class, released?} = release_active_lease(class, ref)
+    state = put_class(state, route_class, class)
 
-    {:noreply, dequeue_next(put_class(state, route_class, class), route_class)}
+    {:noreply, if(released?, do: dequeue_available(state, route_class), else: state)}
   end
 
   @impl GenServer
@@ -214,41 +226,56 @@ defmodule CodexPooler.Gateway.Transports.Admission do
         {:noreply, state}
 
       {route_class, ref} ->
-        class =
+        {class, released?} =
           state
           |> class_state(route_class)
           |> release_active_lease(ref, demonitor: false)
 
-        {:noreply, dequeue_next(put_class(state, route_class, class), route_class)}
+        state = put_class(state, route_class, class)
+
+        {:noreply, if(released?, do: dequeue_available(state, route_class), else: state)}
     end
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp dequeue_available(state, route_class) do
+    case dequeue_next(state, route_class) do
+      {:ok, state} -> dequeue_available(state, route_class)
+      {:none, state} -> state
+    end
+  end
 
   defp dequeue_next(state, route_class) do
     class = class_state(state, route_class)
 
     case :queue.out(class.queue) do
       {{:value, queued}, queue} ->
-        Process.cancel_timer(queued.timer, async: false, info: false)
-        Process.demonitor(queued.monitor, [:flush])
+        config = bulkhead_config(dequeue_settings(queued), route_class)
 
-        lease = lease(queued.server, route_class)
-        class = %{class | queue: queue, monitors: Map.delete(class.monitors, queued.monitor)}
-        class = track_active_lease(class, lease, queued.from)
+        if class.running < config.max_concurrency do
+          Process.cancel_timer(queued.timer, async: false, info: false)
+          Process.demonitor(queued.monitor, [:flush])
 
-        GenServer.reply(queued.from, {:ok, lease})
+          lease = lease(queued.server, route_class)
+          class = %{class | queue: queue, monitors: Map.delete(class.monitors, queued.monitor)}
+          class = track_active_lease(class, lease, queued.from)
 
-        emit(:dequeued, route_class, queued.metadata, %{queued_ms: elapsed_ms(queued.enqueued_at)})
+          GenServer.reply(queued.from, {:ok, lease})
 
-        put_class(state, route_class, class)
+          emit(:dequeued, route_class, queued.metadata, %{queued_ms: elapsed_ms(queued.enqueued_at)})
+
+          {:ok, put_class(state, route_class, class)}
+        else
+          {:none, state}
+        end
 
       {:empty, _queue} ->
-        state
+        {:none, state}
     end
   end
 
-  defp queued_request(server, route_class, from, metadata, timeout_ms) do
+  defp queued_request(server, route_class, from, metadata, timeout_ms, settings, settings_override?) do
     ref = make_ref()
     {pid, _tag} = from
 
@@ -257,6 +284,8 @@ defmodule CodexPooler.Gateway.Transports.Admission do
       server: server,
       from: from,
       metadata: metadata,
+      settings: settings,
+      settings_override?: settings_override?,
       enqueued_at: System.monotonic_time(:millisecond),
       timer: Process.send_after(self(), {:queue_timeout, route_class, ref}, timeout_ms),
       monitor: Process.monitor(pid)
@@ -296,17 +325,23 @@ defmodule CodexPooler.Gateway.Transports.Admission do
         Process.demonitor(monitor, [:flush])
       end
 
-      %{
-        class
-        | running: max(class.running - 1, 0),
-          leases: MapSet.delete(class.leases, ref),
-          lease_owners: Map.delete(class.lease_owners, ref),
-          lease_monitors: Map.delete(class.lease_monitors, monitor)
+      {
+        %{
+          class
+          | running: max(class.running - 1, 0),
+            leases: MapSet.delete(class.leases, ref),
+            lease_owners: Map.delete(class.lease_owners, ref),
+            lease_monitors: Map.delete(class.lease_monitors, monitor)
+        },
+        true
       }
     else
-      class
+      {class, false}
     end
   end
+
+  defp dequeue_settings(%{settings_override?: true, settings: settings}), do: settings
+  defp dequeue_settings(_queued), do: OperationalSettings.current()
 
   defp find_active_monitor(state, monitor) do
     Enum.find_value(state.classes, {nil, nil}, fn {route_class, class} ->
