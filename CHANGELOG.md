@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.19](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.18...codex-pooler-v0.13.19) (2026-10-27)
+
+
+### Tests
+
+* **websocket:** assert dropped frames after server close ([6661130](https://github.com/icoretech/codex-pooler/commit/6661130555f2fd4d47fda16bafaf65a145f73c5c))
+
 ## [0.13.18](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.17...codex-pooler-v0.13.18) (2026-10-27)
 
 
