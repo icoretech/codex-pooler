@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.21](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.20...codex-pooler-v0.13.21) (2026-10-28)
+
+
+### Bug Fixes
+
+* **auth:** fit TOTP controls within narrow login cards ([fd20d2e](https://github.com/icoretech/codex-pooler/commit/fd20d2e581f57dd08eea15c8a5f505e8f2f511e1))
+* **auth:** focus the first TOTP field on login ([a40377b](https://github.com/icoretech/codex-pooler/commit/a40377bc1e4de428617d970557ae82aa02a0c3f5))
+
 ## [0.13.20](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.19...codex-pooler-v0.13.20) (2026-10-28)
 
 
