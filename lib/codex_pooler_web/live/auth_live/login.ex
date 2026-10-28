@@ -103,6 +103,7 @@ defmodule CodexPoolerWeb.AuthLive.Login do
                 </div>
                 <.otp_input
                   field={@form[:totp_code]}
+                  autofocus
                   label="Six-digit code"
                   hint="Enter the six digits from your authenticator app."
                   autocomplete="one-time-code"

@@ -273,6 +273,19 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert html =~ ~s(autocomplete="one-time-code")
     assert html =~ ~s(inputmode="numeric")
     assert html =~ ~s(maxlength="6")
+
+    document = LazyHTML.from_document(html)
+
+    assert document
+           |> LazyHTML.query("#user_totp_code_digit_0[autofocus]")
+           |> Enum.count() == 1
+
+    assert document
+           |> LazyHTML.query("[data-otp-slot][autofocus]")
+           |> Enum.count() == 1
+
+    assert document |> LazyHTML.query("#user_totp_code[autofocus]") |> Enum.empty?()
+
     refute html =~ ~s(name="user[email]")
     refute html =~ ~s(name="user[password]")
     refute html =~ ~s(name="user[recovery_code]")
@@ -304,6 +317,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
     assert recovery_html =~ ~s(id="login-recovery-panel")
     assert recovery_html =~ ~s(name="user[recovery_code]")
+    assert LazyHTML.from_document(recovery_html) |> LazyHTML.query("[autofocus]") |> Enum.empty?()
     refute recovery_html =~ ~s(name="user[totp_code]")
 
     conn =

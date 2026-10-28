@@ -246,6 +246,7 @@ defmodule CodexPoolerWeb.CoreComponents do
   attr :value, :any
   attr :field, FormField
   attr :length, :integer, default: 6
+  attr :autofocus, :boolean, default: false
   attr :hint, :string, default: nil
   attr :class, :any, default: nil
   attr :errors, :list, default: []
@@ -314,6 +315,7 @@ defmodule CodexPoolerWeb.CoreComponents do
                 pattern="[0-9]*"
                 maxlength={if index == 0, do: @length, else: 1}
                 autocomplete={if index == 0, do: @rest[:autocomplete] || "one-time-code", else: "off"}
+                autofocus={@autofocus && index == 0}
                 placeholder=" "
                 aria-label={"Digit #{index + 1} of #{@length}"}
                 data-otp-slot={index}
