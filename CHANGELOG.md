@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.13.20](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.19...codex-pooler-v0.13.20) (2026-10-28)
+
+
+### Bug Fixes
+
+* **accounting:** fence live native http predecessors ([e679121](https://github.com/icoretech/codex-pooler/commit/e67912195bd5cb44a61c1032a485da2d1eef820d))
+* **admin:** hold queued stats refreshes while paused ([6b44d60](https://github.com/icoretech/codex-pooler/commit/6b44d606e366f385ea47815a148d88bdc3385d18))
+* **admin:** omit absent delivery attention labels ([8196713](https://github.com/icoretech/codex-pooler/commit/819671383567f3cb9fe8871944d9fbc980c3b136))
+* **alerts:** check editor revisions before disabling ([70538cd](https://github.com/icoretech/codex-pooler/commit/70538cd0f4963b890321aed3d72378866558ee08))
+* **alerts:** fence stale writes and retain delivery history ([c1a1ac3](https://github.com/icoretech/codex-pooler/commit/c1a1ac3d36cd480b2ab42471c029e2a5b88ca70e))
+* **alerts:** recover detached deliveries without job records ([c496950](https://github.com/icoretech/codex-pooler/commit/c4969506961a1bb200516a13a1d9aa596320f6e5))
+* **gateway:** honor live admission capacity during dequeue ([41cbc5b](https://github.com/icoretech/codex-pooler/commit/41cbc5b695075b8e6c712e119ebdc7b7d5953cf7))
+* **upstreams:** fence rejection during account deletion ([514194a](https://github.com/icoretech/codex-pooler/commit/514194ab3edfe80a292aba0617d3560cff4eac81))
+
+
+### Dependencies
+
+* update Codex client to 0.165.0 ([9c4a746](https://github.com/icoretech/codex-pooler/commit/9c4a7469450661854de14176536c8c04b8e36619))
+* update Codex smoke image to 0.165.0 ([268f6cc](https://github.com/icoretech/codex-pooler/commit/268f6cc119c02b32bdb9f760d506bdbe45e7f688))
+
 ## [0.13.19](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.18...codex-pooler-v0.13.19) (2026-10-27)
 
 
