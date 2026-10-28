@@ -1380,42 +1380,35 @@ body {
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip {
-  border-color: color-mix(
-    in oklab,
-    var(--color-base-content) 16%,
-    transparent
-  ) !important;
-  background: var(--color-base-100) !important;
-  color: var(--color-base-content) !important;
-  padding: 0.45rem 0.55rem !important;
-  border-radius: var(--radius-field) !important;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.18) !important;
+  border-color: color-mix(in oklab, var(--color-base-content) 16%, transparent);
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-field);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.18);
 }
 
+/* ApexCharts writes native title/text typography inline; those font overrides need priority. */
 .admin-apex-bar-chart .apexcharts-tooltip-title {
-  margin: 0 0 0.35rem !important;
-  border-bottom: 0 !important;
-  background: transparent !important;
-  padding: 0 !important;
-  color: color-mix(
-    in oklab,
-    var(--color-base-content) 62%,
-    transparent
-  ) !important;
+  margin: 0 0 0.35rem;
+  border-bottom: 0;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent);
   font-family: inherit !important;
   font-size: 0.7rem !important;
-  font-weight: 600 !important;
+  font-weight: 600;
 }
 
-.admin-apex-bar-chart .apexcharts-tooltip-series-group {
-  gap: 0.45rem !important;
-  padding: 0.12rem 0 !important;
+.admin-apex-bar-chart .apexcharts-tooltip .apexcharts-tooltip-series-group {
+  gap: 0.45rem;
+  padding: 0.12rem 0;
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip-marker {
-  width: 0.5rem !important;
-  height: 0.5rem !important;
-  margin-right: 0 !important;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0;
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip-text {
@@ -1424,20 +1417,16 @@ body {
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip-y-group {
-  padding: 0 !important;
+  padding: 0;
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip-text-y-label {
-  color: color-mix(
-    in oklab,
-    var(--color-base-content) 72%,
-    transparent
-  ) !important;
+  color: color-mix(in oklab, var(--color-base-content) 72%, transparent);
 }
 
 .admin-apex-bar-chart .apexcharts-tooltip-text-y-value {
-  color: var(--color-base-content) !important;
-  font-weight: 700 !important;
+  color: var(--color-base-content);
+  font-weight: 700;
 }
 
 @media (width < 48rem) {
@@ -1618,17 +1607,17 @@ body {
 }
 
 .btn.btn-primary:is(:hover, :focus-visible):not(:disabled, [disabled]) {
-  border-color: var(--codex-primary-border) !important;
-  background-color: var(--codex-primary-hover) !important;
-  color: var(--color-primary-content) !important;
+  border-color: var(--codex-primary-border);
+  background-color: var(--codex-primary-hover);
+  color: var(--color-primary-content);
   outline: 2px solid color-mix(in oklab, var(--color-primary) 35%, transparent);
   outline-offset: 2px;
 }
 
 .btn.btn-primary:active:not(:disabled, [disabled]) {
-  border-color: var(--codex-primary-active) !important;
-  background-color: var(--codex-primary-active) !important;
-  color: var(--color-primary-content) !important;
+  border-color: var(--codex-primary-active);
+  background-color: var(--codex-primary-active);
+  color: var(--color-primary-content);
 }
 
 .btn.btn-primary:disabled,
@@ -2228,7 +2217,7 @@ body {
   }
 
   #observatory-outcomes-table .observatory-outcome-status-chip {
-    padding: 0 !important;
+    padding: 0;
     border: 0;
     background: transparent;
   }
