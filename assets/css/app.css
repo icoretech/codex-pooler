@@ -714,7 +714,6 @@ body {
     padding: 0;
     border: 0;
   }
-
 }
 
 /* Live-updates toggle. Which icon shows is decided by an attribute the root
@@ -1328,7 +1327,7 @@ body {
    sweep on top, the stripes underneath (kept static by the second position
    layer in the admin-progress-shine keyframes). */
 .admin-token-burn-active
-.admin-live-progress.progress-striped::-webkit-progress-value {
+  .admin-live-progress.progress-striped::-webkit-progress-value {
   background-image:
     linear-gradient(
       105deg,
@@ -1644,13 +1643,15 @@ body {
 
 .codex-otp-groups {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: center;
-  gap: 0.625rem;
+  gap: clamp(0.25rem, 2vw, 0.625rem);
 }
 
 .codex-otp-group {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
   filter: drop-shadow(0 1px 0 rgb(0 0 0 / 0.04));
 }
@@ -1658,6 +1659,7 @@ body {
 .codex-otp-slot {
   position: relative;
   z-index: 0;
+  min-width: 0;
   width: 2.75rem;
   height: 2.75rem;
   margin-left: -1px;
@@ -1715,6 +1717,7 @@ body {
 }
 
 .codex-otp-separator {
+  flex-shrink: 0;
   width: 0.875rem;
   height: 1px;
   border-radius: 999px;
@@ -2342,8 +2345,9 @@ body {
    re-render while editing) and the saved-reset dialog behave identically
    and instantly. */
 #saved-reset-policy-form:has(
-  #saved-reset-policy-auto-redeem-enabled:not(:checked)
-) [data-role="saved-reset-policy-tunables"] {
+    #saved-reset-policy-auto-redeem-enabled:not(:checked)
+  )
+  [data-role="saved-reset-policy-tunables"] {
   opacity: 0.55;
 }
 
@@ -2434,7 +2438,7 @@ body {
    actually blocks the submit; this only stops the button from lying about it.
    `:placeholder-shown` is exactly "the operator has typed nothing". */
 #oauth-link-dialog:has(#oauth-link-callback-url:placeholder-shown)
-#oauth-link-submit-callback,
+  #oauth-link-submit-callback,
 #oauth-relink-dialog:has(#oauth-relink-callback-url:placeholder-shown)
   #oauth-relink-submit-callback {
   pointer-events: none;
@@ -2911,7 +2915,7 @@ body {
    reject. The field id carries a form version, so the selector goes through the
    form: it holds exactly one text input. */
 #api-key-delete-dialog:has(#api-key-delete-form input[type="text"]:invalid)
-#api-key-delete-submit,
+  #api-key-delete-submit,
 #pool-delete-dialog:has(#pool-delete-form input[type="text"]:invalid)
   #pool-delete-submit,
 #delete-upstream-account-dialog:has(
@@ -2986,9 +2990,17 @@ body {
   display: none;
 }
 
-.pool-routing-profiles:has(.strategy-radio[value="bridge_ring"]:checked) [data-routing-profile="bridge_ring"],
-.pool-routing-profiles:has(.strategy-radio[value="deterministic_rotation"]:checked) [data-routing-profile="deterministic_rotation"],
-.pool-routing-profiles:has(.strategy-radio[value="least_recent_success"]:checked) [data-routing-profile="least_recent_success"],
-.pool-routing-profiles:has(.strategy-radio[value="quota_first"]:checked) [data-routing-profile="quota_first"] {
+.pool-routing-profiles:has(.strategy-radio[value="bridge_ring"]:checked)
+  [data-routing-profile="bridge_ring"],
+.pool-routing-profiles:has(
+    .strategy-radio[value="deterministic_rotation"]:checked
+  )
+  [data-routing-profile="deterministic_rotation"],
+.pool-routing-profiles:has(
+    .strategy-radio[value="least_recent_success"]:checked
+  )
+  [data-routing-profile="least_recent_success"],
+.pool-routing-profiles:has(.strategy-radio[value="quota_first"]:checked)
+  [data-routing-profile="quota_first"] {
   display: grid;
 }

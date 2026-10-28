@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.AuthLive.Login do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope} auth_surface>
       <section class="mx-auto grid min-h-[calc(100svh-10rem)] w-full max-w-4xl items-center px-4 py-10">
-        <div class="grid overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-sm lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div class="grid grid-cols-1 overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-sm lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <div class="grid content-between gap-8 border-b border-base-300 bg-base-200/60 p-6 sm:p-8 lg:border-b-0 lg:border-r">
             <div class="space-y-3">
               <Layouts.public_logo id="login-logo" />
@@ -21,7 +21,7 @@ defmodule CodexPoolerWeb.AuthLive.Login do
             </div>
           </div>
 
-          <div class="p-6 sm:p-8">
+          <div class={["min-w-0 sm:p-8", if(@mfa?, do: "p-4", else: "p-6")]}>
             <div :if={@mfa?} class="mb-6 space-y-2">
               <h2 class="text-xl font-semibold text-base-content">
                 Second factor
@@ -33,10 +33,10 @@ defmodule CodexPoolerWeb.AuthLive.Login do
 
             <div :if={@mfa?} class="alert alert-warning mb-5 items-start" role="status">
               <.icon name="hero-key" class="size-5 shrink-0" />
-              <div>
+              <div class="min-w-0">
                 <p class="font-semibold">Second factor required</p>
                 <p class="text-sm leading-6">
-                  Signing in as <span class="font-semibold">{@pending_mfa_email}</span>.
+                  Signing in as <span class="break-all font-semibold">{@pending_mfa_email}</span>.
                 </p>
               </div>
             </div>
@@ -88,7 +88,7 @@ defmodule CodexPoolerWeb.AuthLive.Login do
                 id="login-totp-panel"
                 role="tabpanel"
                 aria-labelledby="login-mfa-tab-totp"
-                class="grid gap-4 rounded-box border border-base-300 bg-base-200/40 p-4"
+                class="grid gap-4 rounded-box border border-base-300 bg-base-200/40 p-3 sm:p-4"
               >
                 <div class="flex items-start gap-3 text-base-content/70">
                   <span class="grid size-8 shrink-0 place-items-center rounded-box bg-primary/10 text-primary">
