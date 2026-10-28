@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.22](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.21...codex-pooler-v0.13.22) (2026-10-28)
+
+
+### Bug Fixes
+
+* recover mailbox continuations after interrupted executions ([ae375f3](https://github.com/icoretech/codex-pooler/commit/ae375f3be9edd8c758ff1b0d8e3008121779f488))
+
+
+### Tests
+
+* establish waiter enqueue order before checking release semantics ([5da30a4](https://github.com/icoretech/codex-pooler/commit/5da30a4c217ea867127b075e072caf57a6bd1fa3))
+
 ## [0.13.21](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.20...codex-pooler-v0.13.21) (2026-10-28)
 
 
