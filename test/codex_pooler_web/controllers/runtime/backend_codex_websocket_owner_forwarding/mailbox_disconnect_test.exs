@@ -36,6 +36,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
     assert logs =~ "gateway settlement completed after a transient database failure stage=finalize_partial_stream_failure request_id=#{predecessor.id}"
   end
 
+  for mode <- ["full", "lite"] do
+    @tag slow: "boots a real second BEAM node and cancels an actual receipt COMMIT"
+    test "a mailbox cut retries its original delivery receipt after transient persistence cancellation (#{mode})" do
+      {predecessor, logs} = with_info_log(fn -> run_scenario(:peer, unquote(mode), receipt_stall?: true, historical_mailbox_runs: 22) end)
+      assert logs =~ "gateway delivery receipt met a transient database failure; retrying stage=delivery_receipt request_id=#{predecessor.id}"
+      assert logs =~ "gateway delivery receipt completed after a transient database failure stage=delivery_receipt request_id=#{predecessor.id}"
+      assert length(Regex.scan(~r/websocket downstream terminal pushed request_id=#{predecessor.id} /, logs)) == 1
+      refute logs =~ "downstream delivery receipt not persisted"
+    end
+  end
+
   for topology <- [:local, :peer], mode <- ["full", "lite"] do
     @tag topology: topology, mode: mode
     if topology == :peer, do: @tag(slow: "boots a real second BEAM node and shares committed fixture rows")
@@ -73,12 +84,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
       )
 
     setup = topology_setup!(topology, upstream)
-    stall = if Keyword.get(opts, :settlement_stall?, false), do: install_settlement_stall!(setup.pool.id)
+    {stall, receipt_stall} = install_stall!(setup, opts)
     set_model_serving_mode!(model_serving_scope(), setup, mode)
     :ok = Events.subscribe_pool(setup.pool.id, ["request_logs"])
     port = start_public_endpoint!()
     {conn_a, ws_a, ref_a} = connect!(port, setup, mode)
-    original_history = [user_item("question"), function_call(), function_output()]
+    original_history = original_history(opts)
     {conn_a, ws_a} = public_websocket_send_text!(conn_a, ws_a, ref_a, encode(payload(setup, original_history, "turn-mailbox")))
     assert_receive {:fake_upstream_timeout_barrier, :before_terminal, predecessor_handler, ^predecessor_gate}, @detection_timeout_ms
     predecessor_monitor = Process.monitor(predecessor_handler)
@@ -100,32 +111,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
         observe_socket_cancellation!(socket_a)
       end
 
-    hold = if is_nil(stall), do: hold_session_cleanup!(socket_a)
+    hold = if is_nil(stall) and is_nil(receipt_stall), do: hold_session_cleanup!(socket_a)
 
     # The mailbox update arrives after reasoning is done but before the whole
     # response completes. Hold A's detach so B really overlaps its cleanup.
     _closed = Mint.HTTP.close(conn_a)
 
-    cleanup =
-      if stall do
-        first = await_stalled_commit!(stall, 1)
-        assert %{rows: [[true]]} = Postgrex.query!(stall.observer, "SELECT pg_cancel_backend($1)", [first])
-        second = await_stalled_commit!(stall, 2)
-        assert %{rows: [[true]]} = Postgrex.query!(stall.observer, "SELECT pg_cancel_backend($1)", [second])
-        _third = await_stalled_commit!(stall, 3)
-        # Release only after the closing socket actually tried cancellation
-        # after its drain and the registry preserved the settling executor.
-        assert_receive {^cancellation_observer, {:settling, _deadline}}, @detection_timeout_ms
-
-        assert %{rows: [[true]]} = Postgrex.query!(stall.holder, "SELECT pg_advisory_unlock($1)", [stall.key])
-        assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "failed"}}}, @detection_timeout_ms
-        [request] = request_logs(setup.pool.id)
-        await_interrupted_receipt!(request.id)
-        nil
-      else
-        assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
-        cleanup
-      end
+    cleanup = finish_cut!(setup, receipt_stall, stall, cancellation_observer, hold)
 
     {conn_b, ws_b, ref_b} = connect!(port, setup, mode)
     history = original_history ++ [reasoning_item(), mailbox_item()]
@@ -169,13 +161,72 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
     assert first.websocket_connection_id != second.websocket_connection_id
     # Lite prepends its declared tools and instruction messages on both sends.
     prefix_count = if mode == "lite", do: 2, else: 0
-    assert length(first.json["input"]) == 3 + prefix_count
-    assert length(second.json["input"]) == 5 + prefix_count
+    assert length(first.json["input"]) == length(original_history) + prefix_count
+    assert length(second.json["input"]) == length(original_history) + 2 + prefix_count
     refute Map.has_key?(second.json, "previous_response_id")
     assert FakeUpstream.count(upstream) == 2
     assert :ok = FakeUpstream.verify!(upstream)
-    CodexPooler.TestDiagnostics.puts(fn -> CodexPooler.JSON.encode!(%{scenario: "mailbox_owner_physical_disconnect", topology: topology, mode: mode, actual_remote_owner: node(owner) != node(), provider_down_observed: true, terminal_reason: "client_disconnected", physical_sends: 2, request_count: 2, settlements_per_request: 1, provider_connections_distinct: first.websocket_connection_id != second.websocket_connection_id}) end)
+    CodexPooler.TestDiagnostics.puts(fn -> CodexPooler.JSON.encode!(%{scenario: "mailbox_owner_physical_disconnect", topology: topology, mode: mode, receipt_retry: not is_nil(receipt_stall), mailbox_runs: Keyword.get(opts, :historical_mailbox_runs, 0) + 1, actual_remote_owner: node(owner) != node(), provider_down_observed: true, terminal_reason: "client_disconnected", physical_sends: 2, request_count: 2, settlements_per_request: 1, provider_connections_distinct: first.websocket_connection_id != second.websocket_connection_id}) end)
     hd(request_logs(setup.pool.id))
+  end
+
+  defp finish_cut!(setup, receipt_stall, _stall, _observer, _hold) when not is_nil(receipt_stall) do
+    first = await_stalled_commit!(receipt_stall, 1)
+    [request] = request_logs(setup.pool.id)
+    [attempt] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+    {_token, initial} = delivery_entry(attempt.id)
+    assert %{rows: [[true]]} = Postgrex.query!(receipt_stall.observer, "SELECT pg_cancel_backend($1)", [first])
+    second = await_stalled_commit!(receipt_stall, 2)
+    assert first != second
+    assert is_nil(attempt.response_metadata["downstream_delivery"])
+    {_token, pending} = delivery_entry(attempt.id)
+    assert Process.alive?(pending.actor)
+    assert pending.finished? == false
+    assert pending.deadline_ms == initial.deadline_ms
+    assert pending.envelope == initial.envelope
+    assert pending.envelope.context.attempt_id == attempt.id
+    assert pending.envelope.receipt["completed_items"] == 1
+    assert %{rows: [[true]]} = Postgrex.query!(receipt_stall.holder, "SELECT pg_advisory_unlock($1)", [receipt_stall.key])
+    await_interrupted_receipt!(request.id)
+    assert Repo.reload!(attempt).response_metadata["downstream_delivery"] == initial.envelope.receipt
+    nil
+  end
+
+  defp finish_cut!(setup, nil, stall, cancellation_observer, _hold) when not is_nil(stall) do
+    first = await_stalled_commit!(stall, 1)
+    assert %{rows: [[true]]} = Postgrex.query!(stall.observer, "SELECT pg_cancel_backend($1)", [first])
+    second = await_stalled_commit!(stall, 2)
+    assert %{rows: [[true]]} = Postgrex.query!(stall.observer, "SELECT pg_cancel_backend($1)", [second])
+    _third = await_stalled_commit!(stall, 3)
+    # Release only after cancellation observes the settling executor.
+    assert_receive {^cancellation_observer, {:settling, _deadline}}, @detection_timeout_ms
+    assert %{rows: [[true]]} = Postgrex.query!(stall.holder, "SELECT pg_advisory_unlock($1)", [stall.key])
+    assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "failed"}}}, @detection_timeout_ms
+    [request] = request_logs(setup.pool.id)
+    await_interrupted_receipt!(request.id)
+    nil
+  end
+
+  defp finish_cut!(_setup, nil, nil, _observer, hold) do
+    assert_receive {^hold, :held, cleanup}, @detection_timeout_ms
+    cleanup
+  end
+
+  defp delivery_entry(attempt_id), do: Enum.find(:sys.get_state(ActivityRegistry).delivery_receipts, fn {_token, entry} -> entry.identity.attempt_id == attempt_id end)
+
+  defp original_history(opts) do
+    runs = Keyword.get(opts, :historical_mailbox_runs, 0)
+
+    history =
+      if runs > 0 do
+        Enum.flat_map(1..runs, fn index ->
+          [Map.put(reasoning_item(), "id", "rs_historical_#{index}"), mailbox_item()]
+        end)
+      else
+        []
+      end
+
+    [user_item("question")] ++ history ++ [function_call(), function_output()]
   end
 
   defp observe_socket_cancellation!(socket) do
@@ -198,19 +249,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
   defp observe_socket_cancellation(observer, _event, _name), do: observer
 
   defp install_settlement_stall!(pool_id) do
+    install_database_stall!("requests", "NEW.pool_id = '#{pool_id}'::uuid AND NEW.status = 'failed' AND OLD.status IS DISTINCT FROM NEW.status")
+  end
+
+  defp install_stall!(setup, opts) do
+    cond do
+      Keyword.get(opts, :settlement_stall?, false) -> {install_settlement_stall!(setup.pool.id), nil}
+      Keyword.get(opts, :receipt_stall?, false) -> {nil, install_receipt_stall!(setup.model.id)}
+      true -> {nil, nil}
+    end
+  end
+
+  defp install_receipt_stall!(model_id) do
+    install_database_stall!("attempts", "NEW.model_id = '#{model_id}'::uuid AND NEW.response_metadata ? 'downstream_delivery' AND NOT COALESCE(OLD.response_metadata ? 'downstream_delivery', false)")
+  end
+
+  defp install_database_stall!(table, condition) do
     suffix = System.unique_integer([:positive])
     name = "mailbox_settlement_gate_#{suffix}"
     key = 336_000_000 + suffix
 
     UnboxedFixture.register_unboxed_cleanup!(fn ->
-      Repo.query!("DROP TRIGGER IF EXISTS #{name} ON requests")
+      Repo.query!("DROP TRIGGER IF EXISTS #{name} ON #{table}")
       Repo.query!("DROP FUNCTION IF EXISTS #{name}()")
       Repo.query!("DROP SEQUENCE IF EXISTS #{name}_passes")
     end)
 
     Repo.query!("CREATE SEQUENCE #{name}_passes")
     Repo.query!("CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('#{name}_passes'); PERFORM pg_advisory_xact_lock(#{key}); RETURN NULL; END $$")
-    Repo.query!("CREATE CONSTRAINT TRIGGER #{name} AFTER UPDATE ON requests DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.pool_id = '#{pool_id}'::uuid AND NEW.status = 'failed' AND OLD.status IS DISTINCT FROM NEW.status) EXECUTE FUNCTION #{name}()")
+    Repo.query!("CREATE CONSTRAINT TRIGGER #{name} AFTER UPDATE ON #{table} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (#{condition}) EXECUTE FUNCTION #{name}()")
     options = Repo.config() |> Keyword.take([:hostname, :port, :username, :password, :database, :socket_dir])
     observer = start_supervised!({Postgrex, options}, id: {:observer, key})
     holder = start_supervised!({Postgrex, options}, id: {:holder, key})
@@ -331,7 +398,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MailboxDis
         "thread_id" => @thread_id,
         "turn_id" => turn_id,
         "x-codex-window-id" => @window_id,
-        "x-codex-turn-metadata" => encode(%{"session_id" => @thread_id, "thread_id" => @thread_id, "turn_id" => turn_id, "request_kind" => "turn"})
+        "x-codex-turn-metadata" => encode(%{"session_id" => @thread_id, "thread_id" => @thread_id, "turn_id" => turn_id, "request_kind" => "turn", "agent_name" => "/root"})
       },
       "input" => input
     }

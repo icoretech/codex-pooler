@@ -31,9 +31,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
     with nil <- Map.get(payload, "previous_response_id"),
          "turn" <- NativeTurnContinuation.request_kind(payload, options),
          %{"agent_name" => agent} when is_binary(agent) and byte_size(agent) in 1..256 <-
-           payload |> NativeTurnContinuation.canonical_document(options) |> NativeTurnContinuation.canonical_metadata_map(),
-         runs when length(runs) <= @max_mailbox_runs <- mailbox_runs(input, agent) do
-      build_candidates(semantic_key, witness_payloads(payload, options), input, runs)
+           payload |> NativeTurnContinuation.canonical_document(options) |> NativeTurnContinuation.canonical_metadata_map() do
+      build_candidates(semantic_key, witness_payloads(payload, options), input, mailbox_runs(input, agent))
     else
       _ineligible -> []
     end
@@ -142,7 +141,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
   defp history_boundary?(_item), do: false
 
   defp extend_run([{start, index} | rest], index), do: [{start, index + 1} | rest]
-  defp extend_run(runs, index), do: [{index, index + 1} | runs]
+
+  # Keep recent recovery boundaries bounded without discarding their complete
+  # history from the prefix witness. An omitted historical edge stays fenced.
+  defp extend_run(runs, index), do: [{index, index + 1} | Enum.take(runs, @max_mailbox_runs - 1)]
 
   defp incoming?(%{"type" => "agent_message", "author" => author, "recipient" => agent, "content" => [_first | _rest] = content}, agent)
        when is_binary(author) and byte_size(author) in 1..256 and author != agent,

@@ -41,6 +41,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
   alias CodexPooler.Repo
   alias CodexPooler.UnboxedFixture
   alias CodexPoolerWeb.Runtime.CleanupProofRace
+  alias CodexPoolerWeb.Runtime.MailboxPrefixRaceSupport
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -59,6 +60,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
 
   for mode <- ["full", "lite"] do
     @tag serving_mode: mode
+    @tag slow: "physically closes a socket and holds its cleanup after the executor terminal proof"
     test "#{mode}: the resend identical to a turn cut after a completed item, claimed between the stopped task's proven end and its cleanup's interrupt, finds the receipt and is served as the dead execution's one successor", ctx do
       window = cut_and_hold!(ctx.serving_mode, :item_done)
       resend = resend!(window, window.payload)
@@ -76,12 +78,61 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
     end
   end
 
+  for mode <- ["full", "lite"], historical_runs <- [0, 22] do
+    @tag serving_mode: mode, historical_runs: historical_runs
+    @tag slow: "physically closes a socket and verifies mailbox refusal and recovery inside its held cleanup"
+    test("#{mode}: a proven stopped execution admits retained reasoning and mailbox once after #{historical_runs} historical runs", ctx, do: assert_dead_mailbox_recovery!(ctx.serving_mode, ctx.historical_runs))
+  end
+
+  defp assert_dead_mailbox_recovery!(mode, historical_runs) do
+    peer = if historical_runs > 0, do: MailboxPrefixRaceSupport.start_http_peer!()
+    peer_port = if peer, do: MailboxPrefixRaceSupport.start_peer_listener!(peer)
+    window = cut_and_hold!(mode, :mailbox, historical_runs)
+    winner_window = if peer_port, do: %{window | port: peer_port}, else: window
+    candidate = Map.update!(window.payload, "input", &(&1 ++ [reasoning_item(), mailbox_item()]))
+
+    try do
+      assert window.request_status == "in_progress"
+      assert %{"outcome" => "aborted", "terminal_class" => "none", "highest_frame_class" => "item_done", "completed_items" => 1} = window.receipt
+
+      changed = update_in(candidate["input"], &List.update_at(&1, length(window.payload["input"]), fn item -> Map.put(item, "encrypted_content", "synthetic changed reasoning") end))
+      assert %{"type" => "error", "status" => 409} = resend!(window, changed)
+      assert FakeUpstream.count(window.upstream) == 1
+      winner = Task.async(fn -> resend!(winner_window, candidate) end)
+      assert_receive {:fake_upstream_frame_barrier, 0, handler, gate}, @timeout_ms
+      assert gate == window.successor_gate
+
+      try do
+        # Each socket owns its Mint mailbox. Long-history recovery runs on a
+        # second BEAM node; hold its admitted successor while the original
+        # node tries the same continuation against their shared database.
+        assert %{"type" => "error", "status" => 409} = resend!(window, candidate)
+        assert :ok = FakeUpstream.release_remaining_frames(window.upstream, gate)
+        assert %{"type" => "response.completed"} = Task.await(winner, @timeout_ms)
+      after
+        if Process.alive?(handler), do: FakeUpstream.release_remaining_frames(window.upstream, gate)
+        if Process.alive?(winner.pid), do: Task.shutdown(winner, :brutal_kill)
+      end
+
+      :ok = await_all_settled!(window.setup.pool.id)
+      assert [%Request{id: original_id, last_error_code: "dead_execution_recovered"}, %Request{id: successor_id, status: "succeeded"}] = pool_requests(window.setup.pool.id)
+      assert original_id == window.request_id
+      if peer, do: assert(Repo.get_by!(Attempt, request_id: successor_id).owner_instance_id == Atom.to_string(peer))
+      assert [%RequestClientRetryLink{successor_request_id: ^successor_id}] = Repo.all(from link in RequestClientRetryLink, where: link.predecessor_request_id == ^original_id)
+      assert_one_settlement_each!([original_id, successor_id])
+      assert FakeUpstream.count(window.upstream) == 2
+    after
+      :ok = release!(window)
+    end
+  end
+
   # A turn whose client was shown nothing before the cut (its input carries the
   # compaction item the released client sends after a compaction; the provider
   # holds its answer) is resent identically, and inside the window its
   # recovered request is the resend's predecessor as before.
   for mode <- ["full", "lite"] do
     @tag serving_mode: mode
+    @tag slow: "physically closes a socket and holds its cleanup after the executor terminal proof"
     test "#{mode}: the websocket resend of a turn cut before any output is served as the dead execution's one successor when it is claimed inside that window", ctx do
       window = cut_and_hold!(ctx.serving_mode, :previsible)
       resend = resend!(window, window.payload)
@@ -100,21 +151,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
 
   # Cuts the turn, holds its cleanup at the interrupt once the task is dead,
   # and proves the task's end: what a resend claimed now reads.
-  defp cut_and_hold!(mode, cut) do
+  defp cut_and_hold!(mode, cut, historical_runs \\ 0) do
     release_ref = make_ref()
+    successor_gate = if cut == :mailbox, do: make_ref()
 
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
           strict_native_request(1, first_response(cut, release_ref)),
-          successor_request()
+          successor_request(successor_gate)
         ])
       )
 
     setup = gateway_setup(upstream)
     register_unboxed_pool_cleanup!(setup)
     _revision = set_model_serving_mode!(model_serving_scope(), setup, mode)
-    payload = native_turn_payload(Ecto.UUID.generate(), setup.model.exposed_model_id, mode, cut)
+    payload = native_turn_payload(Ecto.UUID.generate(), setup.model.exposed_model_id, mode, cut) |> append_historical_mail(historical_runs)
     turn_state = Ecto.UUID.generate()
     port = start_public_endpoint!()
 
@@ -139,6 +191,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
       upstream: upstream,
       upstream_handler: upstream_handler,
       release_ref: release_ref,
+      successor_gate: successor_gate,
       port: port,
       turn_state: turn_state,
       payload: payload,
@@ -161,9 +214,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
   # The provider holds its answer at a frame barrier: after the completed item
   # (the terminal held), or before any frame.
   defp first_response(:item_done, release_ref), do: FakeUpstream.barrier_websocket_frames(item_done_frames("resp_stop_window_original"), notify: self(), release_ref: release_ref)
+  defp first_response(:mailbox, release_ref), do: FakeUpstream.barrier_websocket_frames(reasoning_frames(), notify: self(), release_ref: release_ref)
   defp first_response(:previsible, release_ref), do: FakeUpstream.websocket_close_without_terminal_barrier(notify: self(), release_ref: release_ref, code: 1001, reason: "synthetic stop window loss")
 
-  defp await_cut!(:item_done, upstream, release_ref, conn, websocket, ref) do
+  defp await_cut!(cut, upstream, release_ref, conn, websocket, ref) when cut in [:item_done, :mailbox] do
     for ordinal <- 0..2 do
       assert_receive {:fake_upstream_frame_barrier, ^ordinal, _handler, ^release_ref}, @timeout_ms
       :ok = FakeUpstream.release_frame(upstream, release_ref)
@@ -199,8 +253,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
     ExecutionProofSupport.await_terminal!(attempt, publisher)
   end
 
-  defp successor_request,
+  defp successor_request(nil),
     do: FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", respond: FakeUpstream.websocket_text_frames(item_done_frames("resp_stop_window_successor")))
+
+  defp successor_request(gate),
+    do: FakeUpstream.expect_request(method: "WEBSOCKET", path: "/backend-api/codex/responses", respond: FakeUpstream.barrier_websocket_frames(item_done_frames("resp_stop_window_successor"), notify: self(), release_ref: gate))
 
   defp resend!(window, payload) do
     {conn, websocket, ref} = public_websocket_connect!(window.port, window.setup, window.turn_state)
@@ -227,6 +284,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
     )
   end
 
+  defp reasoning_item, do: %{"id" => "rs_stop_window", "type" => "reasoning", "summary" => [], "encrypted_content" => "synthetic stopped reasoning"}
+
+  defp mailbox_item,
+    do: %{"type" => "agent_message", "author" => "/root/worker", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "synthetic task update"}]}
+
+  defp reasoning_frames do
+    item = reasoning_item()
+
+    Enum.map(
+      [
+        %{"type" => "response.created", "response" => %{"id" => "resp_stop_window_mailbox", "status" => "in_progress", "output" => []}},
+        %{"type" => "response.output_item.added", "output_index" => 0, "item" => item},
+        %{"type" => "response.output_item.done", "output_index" => 0, "item" => item},
+        %{"type" => "response.completed", "response" => %{"id" => "resp_stop_window_mailbox", "status" => "completed", "output" => [item]}}
+      ],
+      &CodexPooler.JSON.encode!/1
+    )
+  end
+
   defp native_turn_payload(thread_id, model, mode, cut) do
     turn_id = "stop-window-#{cut}"
 
@@ -235,7 +311,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
       "thread_id" => thread_id,
       "turn_id" => turn_id,
       "x-codex-window-id" => thread_id <> ":0",
-      "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"session_id" => thread_id, "thread_id" => thread_id, "turn_id" => turn_id, "request_kind" => "turn"}),
+      "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"session_id" => thread_id, "thread_id" => thread_id, "turn_id" => turn_id, "request_kind" => "turn", "agent_name" => "/root"}),
       "x-codex-ws-stream-request-start-ms" => 100
     }
 
@@ -251,7 +327,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StopWindowResendTest do
   end
 
   defp turn_input(:item_done), do: native_text_input("synthetic stop window turn")
+
+  defp turn_input(:mailbox),
+    do: native_text_input("synthetic stopped mailbox turn") ++ [%{"type" => "function_call", "call_id" => "call_stop_window", "name" => "synthetic_tool", "arguments" => "{}"}, %{"type" => "function_call_output", "call_id" => "call_stop_window", "output" => "synthetic tool result"}]
+
   defp turn_input(:previsible), do: [%{"type" => "compaction", "encrypted_content" => "synthetic-stop-window-compaction"}]
+
+  defp append_historical_mail(payload, 0), do: payload
+
+  defp append_historical_mail(payload, count) do
+    historical = Enum.flat_map(1..count, fn number -> [Map.put(reasoning_item(), "id", "rs_historical_#{number}"), mailbox_item()] end)
+    Map.update!(payload, "input", &(&1 ++ historical))
+  end
 
   defp receive_until!(conn, websocket, ref, type) do
     {conn, websocket, text} = public_websocket_receive_text!(conn, websocket, ref)

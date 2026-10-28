@@ -229,16 +229,36 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          {:ok, request, marker} <- DeadExecutionResendRecovery.recover(request, true, db_now()),
          turn <- Repo.reload!(turn),
          attempt <- lock_final_attempt(turn, request.id),
-         true <- ClientRetry.verified_dead_execution?(turn, request, attempt),
-         {:ok, previous} <- execution_predecessor(request, turn, scope),
-         shape <- if(completed_item_resend?(turn, request, attempt, scope), do: :completed_item_resend, else: :task_exception),
+         true <- ClientRetry.verified_dead_execution?(turn, request, attempt) do
+      resolve_recovered_execution(claim, scope, request, turn, attempt, marker)
+    else
+      {:error, reason} -> {:error, mailbox_refusal(reason, scope)}
+      _invalid -> {:error, mailbox_refusal(:terminal_predecessor, scope)}
+    end
+  end
+
+  defp resolve_recovered_execution(claim, scope, request, turn, attempt, marker) do
+    # Recovery can make a previously live predecessor eligible. Compute its
+    # mailbox proof only from the now-settled rows and retain that diagnostic
+    # if the changed continuation is refused.
+    scope = put_mailbox_check(scope, request)
+
+    with {:ok, previous} <- execution_predecessor(request, turn, scope),
+         shape <- execution_resend_shape(turn, request, attempt, scope),
          :ok <- validate_semantic_retry(request, shape, Map.put(scope, :semantic_claim?, true), {previous, nil}),
          :ok <- validate_retry_window(request, attempt, db_now(), scope),
          {:ok, resolved_claim} <- execution_successor_claim(claim, request) do
       {:ok, %{claim: resolved_claim, predecessor: request, predecessor_shape: shape, recovery_markers: if(marker, do: [marker], else: []), execution_recovery?: true}}
     else
       {:error, reason} -> {:error, mailbox_refusal(reason, scope)}
-      _invalid -> {:error, mailbox_refusal(:terminal_predecessor, scope)}
+    end
+  end
+
+  defp execution_resend_shape(turn, request, attempt, scope) do
+    cond do
+      mailbox_continuation?(request, scope) -> :mailbox_continuation
+      completed_item_resend?(turn, request, attempt, scope) -> :completed_item_resend
+      true -> :task_exception
     end
   end
 
@@ -989,12 +1009,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
        when family in [:provider_terminal, :task_exception],
        do: {:ok, family}
 
-  defp predecessor_shape(%Request{} = request, :dead_execution, _scope) do
+  defp predecessor_shape(%Request{} = request, :dead_execution, scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
 
     if ClientRetry.verified_dead_execution?(turn, request, attempt),
-      do: {:ok, :task_exception},
+      do: {:ok, execution_resend_shape(turn, request, attempt, scope)},
       else: {:error, :terminal_predecessor}
   end
 

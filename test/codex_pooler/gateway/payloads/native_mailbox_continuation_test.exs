@@ -131,8 +131,36 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuationTest do
   test "candidate work is bounded by mailbox runs independently of mailbox batch size" do
     many_mail = Enum.map(1..20, &mailbox(Integer.to_string(&1)))
     assert length(witness(append(payload(), [reasoning("first") | many_mail])).mailbox) == 1
-    too_many_runs = Enum.flat_map(1..17, fn n -> [reasoning(Integer.to_string(n)), mailbox(Integer.to_string(n))] end)
-    assert witness(append(payload(), too_many_runs)).mailbox == []
+    historical_runs = Enum.flat_map(1..23, fn n -> [reasoning(Integer.to_string(n)), mailbox(Integer.to_string(n))] end)
+    recent = witness(append(payload(), historical_runs)).mailbox
+    assert length(recent) == 16
+    assert Enum.count(recent, & &1.current?) == 1
+  end
+
+  for transport <- ["websocket", "http_sse"] do
+    test "#{transport}: old mailbox runs do not disable the newest proof or weaken the complete prefix" do
+      history = Enum.flat_map(1..22, fn n -> [reasoning(Integer.to_string(n)), mailbox(Integer.to_string(n))] end)
+      original = append(payload(), history)
+      output = reasoning("current")
+      continuation = append(original, [output, mailbox("current")])
+      current = witness(continuation)
+      {turn, request, attempt} = predecessor(original, output, unquote(transport))
+
+      assert length(current.mailbox) == 16
+      assert ClientRetry.verified_mailbox_continuation?(turn, request, attempt, current, nil)
+
+      altered_old_prefix = put_in(continuation, ["input", Access.at(2), "encrypted_content"], "synthetic altered old output")
+      refute ClientRetry.verified_mailbox_continuation?(turn, request, attempt, witness(altered_old_prefix), nil)
+
+      previous = append(payload(), Enum.take(history, 42))
+      {previous_turn, previous_request, previous_attempt} = predecessor(previous, reasoning("22"), unquote(transport))
+      assert ClientRetry.verified_mailbox_continuation?(previous_turn, previous_request, previous_attempt, current, request)
+      refute ClientRetry.verified_mailbox_continuation?(previous_turn, previous_request, previous_attempt, current, nil)
+
+      {old_turn, old_request, old_attempt} = predecessor(payload(), reasoning("1"), unquote(transport))
+      {_, old_successor, _} = predecessor(append(payload(), Enum.take(history, 2)), reasoning("2"), unquote(transport))
+      refute ClientRetry.verified_mailbox_continuation?(old_turn, old_request, old_attempt, current, old_successor)
+    end
   end
 
   test "mailbox intent is transient and does not change the sealed request or acceptance" do
@@ -294,7 +322,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuationTest do
       end)
 
     assert length(witness(append(payload(), runs)).mailbox) == 16
-    assert witness(append(payload(), runs ++ [first, output, first_result, mailbox("run-17")])).mailbox == []
+    assert length(witness(append(payload(), runs ++ [first, output, first_result, mailbox("run-17")])).mailbox) == 16
   end
 
   defp drained_output("reasoning"), do: reasoning("preemptible")

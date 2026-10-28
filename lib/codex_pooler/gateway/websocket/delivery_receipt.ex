@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
+  alias CodexPooler.Gateway.Runtime.Finalization.SettlementRetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
@@ -86,6 +87,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
           optional(:replay_generation) => non_neg_integer() | nil,
           optional(:delivery_failure) => CodexPooler.Gateway.Runtime.Finalization.RetainedUsage.failure() | nil
         }
+  @type persistence_option :: {:retry_timeout_ms, pos_integer()}
 
   @spec metadata_key() :: String.t()
   def metadata_key, do: @metadata_key
@@ -345,8 +347,8 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
   def persistence_timeout_ms(_context), do: @persist_timeout_ms
 
   @doc false
-  @spec record_result(context(), receipt()) :: :ok | {:error, term()}
-  def record_result(context, receipt) when is_map(context) and is_map(receipt) do
+  @spec record_result(context(), receipt(), [persistence_option()]) :: :ok | {:error, term()}
+  def record_result(context, receipt, opts \\ []) when is_map(context) and is_map(receipt) and is_list(opts) do
     request_id = DiagnosticTaxonomy.safe_correlator(Map.get(context, :request_id))
     session_id = DiagnosticTaxonomy.safe_correlator(Map.get(context, :codex_session_id))
     transport = vocabulary(receipt["transport"], @transports, @default_transport)
@@ -365,7 +367,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
 
     case Map.get(context, :attempt_id) do
       attempt_id when is_binary(attempt_id) ->
-        result = persist(attempt_id, receipt, context)
+        result = persist_result(attempt_id, receipt, context, Keyword.get(opts, :retry_timeout_ms))
         log_persist_failure(result, transport, request_id, session_id)
         result
 
@@ -373,6 +375,48 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
         :ok
     end
   end
+
+  # Only the registry-owned handoff opts into retry. Its immutable deadline
+  # bounds every actor and checkout, and each retry rechecks the same durable
+  # request/attempt/generation authority. Log the transport receipt once,
+  # independently of how many persistence transactions the database needs.
+  defp persist_result(attempt_id, receipt, %{request_id: request_id, replay_generation: generation} = context, timeout_ms)
+       when is_binary(request_id) and is_integer(generation) and generation >= 0 and is_integer(timeout_ms) and timeout_ms > 0 do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    SettlementRetry.run(
+      :delivery_receipt,
+      %{id: request_id},
+      %{id: attempt_id},
+      fn -> persist_retry_attempt(attempt_id, receipt, context, deadline) end,
+      subject: "delivery receipt",
+      fallback: "receipt_not_persisted",
+      exhaustion: :return
+    )
+  rescue
+    exception -> {:error, exception}
+  end
+
+  defp persist_result(attempt_id, receipt, context, _timeout), do: persist(attempt_id, receipt, context)
+
+  defp persist_retry_attempt(attempt_id, receipt, context, deadline) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    if remaining_ms > 0 do
+      # A cancelled COMMIT can disconnect its checked-out connection. Retry
+      # the entire checkout as well as the transaction, never that dead lease.
+      Repo.checkout(
+        fn -> persist(attempt_id, receipt, context) |> raise_database_failure() end,
+        timeout: min(remaining_ms, persistence_timeout_ms(context))
+      )
+    else
+      {:error, :receipt_deadline_expired}
+    end
+  end
+
+  defp raise_database_failure({:error, %DBConnection.ConnectionError{} = error}), do: raise(error)
+  defp raise_database_failure({:error, %Postgrex.Error{} = error}), do: raise(error)
+  defp raise_database_failure(result), do: result
 
   @doc """
   Merges the receipt under `#{@metadata_key}` with one bounded jsonb update,

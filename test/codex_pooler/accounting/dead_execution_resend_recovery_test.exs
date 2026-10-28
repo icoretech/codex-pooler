@@ -14,7 +14,7 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
   }
 
   alias CodexPooler.Accounting.RequestLifecycle
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{NativeMailboxContinuation, RequestOptions, WebsocketTurnIdentity}
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Interruption}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persistence, as: OwnerPersistence
@@ -27,6 +27,64 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
   @endpoint "/backend-api/codex/responses"
   @retry_prefix "codex-request-retry:"
   @detection_timeout_ms 15_000
+
+  test "a dead mailbox continuation requires the exact proof, output receipt, epoch and session" do
+    fixture = dead_mailbox_fixture!()
+    %{setup: setup, request: request, attempt: attempt, turn: turn, options: options} = fixture
+    assert {:ok, :recovered} = RequestLifecycle.recover_dead_execution(request, attempt, db_now())
+
+    attempt = Repo.reload!(attempt)
+    assert %{"outcome" => "aborted", "terminal_class" => "none", "completed_items" => 1, "completed_item_digests" => [_digest]} = attempt.response_metadata["downstream_delivery"]
+    altered = attempt |> Ecto.Changeset.change(owner_process_id: "<0.999999.0>") |> Repo.update!()
+    assert_dead_mailbox_refused!(fixture, options, :settlement)
+    altered |> Ecto.Changeset.change(owner_process_id: attempt.owner_process_id) |> Repo.update!()
+
+    for receipt <- [nil, %{}, %{"completed_items" => 1, "completed_item_digests" => []}] do
+      changed_metadata = Map.put(attempt.response_metadata, "downstream_delivery", receipt)
+      attempt |> Ecto.Changeset.change(response_metadata: changed_metadata) |> Repo.update!()
+      assert_dead_mailbox_refused!(fixture, options, :output_prefix)
+    end
+
+    restored_attempt = attempt |> Repo.reload!() |> Ecto.Changeset.change(response_metadata: attempt.response_metadata) |> Repo.update!()
+    assert restored_attempt.response_metadata == attempt.response_metadata
+    assert ClientRetry.mailbox_check(Repo.reload!(turn), Repo.reload!(request), restored_attempt, options.native_client_retry_witness, nil, :same_session).stage == :verified
+    changed_epoch = %{options.native_client_retry_witness | auth_epoch: setup.api_key.runtime_revocation_epoch + 1}
+    assert_dead_mailbox_refused!(fixture, %{options | native_client_retry_witness: changed_epoch}, :authorization)
+    assert_dead_mailbox_refused!(fixture, %{options | codex_session: insert_session!(setup)}, :session)
+
+    assert {:ok, %{request: successor, client_resend: %{predecessor_shape: :mailbox_continuation}}} = Accounting.claim_websocket_turn(setup.auth, setup.model, options)
+    assert Repo.get_by!(RequestClientRetryLink, predecessor_request_id: request.id).successor_request_id == successor.id
+    assert {:error, %{code: :duplicate_request}} = Accounting.claim_websocket_turn(setup.auth, setup.model, options)
+    assert_recovered!(request, attempt, turn)
+    assert ledger_kinds(request.id) == ["release", "reservation", "settlement"]
+  end
+
+  defp assert_dead_mailbox_refused!(fixture, options, stage) do
+    assert {:error, %{code: :duplicate_request, mailbox_check: ^stage}} = Accounting.claim_websocket_turn(fixture.setup.auth, fixture.setup.model, options)
+    assert Repo.aggregate(from(link in RequestClientRetryLink, where: link.predecessor_request_id == ^fixture.request.id), :count) == 0
+    assert Repo.aggregate(from(request in Request, where: request.pool_id == ^fixture.setup.pool.id), :count) == 1
+  end
+
+  defp dead_mailbox_fixture! do
+    fixture = active_dead_execution_fixture!()
+    semantic = fixture.turn.semantic_turn_digest
+    output = %{"type" => "reasoning", "id" => "rs_dead_mailbox", "summary" => [], "encrypted_content" => "synthetic dead mailbox reasoning"}
+    mail = %{"type" => "agent_message", "author" => "/root/worker", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "synthetic update"}]}
+    payload = %{"model" => fixture.setup.model.exposed_model_id, "input" => [%{"type" => "message", "role" => "user", "content" => "synthetic question"}], "client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"request_kind" => "turn", "agent_name" => "/root"})}}
+    {:ok, digest} = WebsocketTurnIdentity.replay_claim_digest(semantic, payload)
+    request = fixture.request |> Ecto.Changeset.change(native_client_retry_digest: digest) |> Repo.update!()
+    turn = fixture.turn |> Ecto.Changeset.change(first_visible_output_at: db_now()) |> Repo.update!()
+    {:ok, output_digest} = WebsocketTurnIdentity.completed_item_digest(output)
+    receipt = DeliveryReceipt.build(%{outcome: "aborted", terminal_class: nil, highest_frame_class: "item_done", frames_after_visible: 1, completed_items: 1, completed_item_digests: [output_digest]})
+    :ok = DeliveryReceipt.persist(fixture.attempt.id, receipt)
+    CodexPooler.ExecutionProofSupport.publish_terminal!(fixture.attempt)
+    candidate = Map.update!(payload, "input", &(&1 ++ [output, mail]))
+    {:ok, current_digest} = WebsocketTurnIdentity.replay_claim_digest(semantic, candidate)
+    witness = ClientRetry.original_witness!(current_digest, fixture.setup.api_key.runtime_revocation_epoch) |> NativeMailboxContinuation.attach(semantic, candidate, RequestOptions.build(%{}, @endpoint, %{}))
+    assert witness.mailbox != []
+    options = %{endpoint: @endpoint, correlation_id: request.correlation_id, codex_session: fixture.session, semantic_turn_digest: semantic, native_client_retry_witness: witness}
+    Map.merge(fixture, %{request: request, turn: turn, options: options})
+  end
 
   test "a recovered successor can die and be retried once again after session rotation" do
     fixture = active_dead_execution_fixture!()

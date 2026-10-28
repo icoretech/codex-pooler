@@ -2867,7 +2867,8 @@ defmodule CodexPooler.Accounting.ClientRetry do
       )
   end
 
-  defp mailbox_settlement?(_turn, _request, _attempt), do: false
+  defp mailbox_settlement?(turn, request, attempt),
+    do: verified_dead_execution?(turn, request, attempt) and ExecutionTerminalProofs.terminal?(attempt)
 
   defp mailbox_witness_matches?(%Request{transport: "websocket", native_client_retry_digest: digest}, %{websocket: candidates}) when is_proper_list(candidates),
     do: Enum.any?(candidates, &secure_compare(digest, &1))

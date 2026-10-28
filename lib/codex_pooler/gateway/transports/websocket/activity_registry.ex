@@ -6,7 +6,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   require Logger
 
   alias __MODULE__.{Drain, Entry}
-  alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Gateway.Websocket.DeliveryReceiptHandoff
   alias CodexPooler.Gateway.Websocket.DirectCleanup
   alias CodexPooler.Platform.ExecutionRegistry
@@ -125,7 +124,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def publish_delivery_receipt(token, context, receipt, recipient, opts \\ []), do: GenServer.call(server(opts), {:publish_delivery_receipt, token, context, receipt, recipient})
 
   @spec take_delivery_cleanup(token(), map(), map(), keyword()) :: {:ok, DeliveryReceiptHandoff.envelope()} | {:settled, term()} | {:error, atom()}
-  def take_delivery_cleanup(token, context, receipt, opts \\ []), do: GenServer.call(server(opts), {:take_delivery_cleanup, token, context, receipt}, 30_000)
+  def take_delivery_cleanup(token, context, receipt, opts \\ []) do
+    timeout = DeliveryReceiptHandoff.persistence_timeout_ms(context) + 5_000
+    GenServer.call(server(opts), {:take_delivery_cleanup, token, context, receipt}, timeout)
+  end
 
   @spec assigned_delivery_receipts(keyword()) :: [DeliveryReceiptHandoff.envelope()]
   def assigned_delivery_receipts(opts \\ []), do: GenServer.call(server(opts), :assigned_delivery_receipts)
@@ -1005,7 +1007,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   end
 
   defp start_delivery_deadline(entry, envelope) do
-    timeout = DeliveryReceipt.persistence_timeout_ms(envelope.context)
+    timeout = DeliveryReceiptHandoff.persistence_timeout_ms(envelope.context)
     deadline = System.monotonic_time(:millisecond) + timeout
     timer = Process.send_after(self(), {:delivery_receipt_deadline, envelope.token, deadline}, timeout)
     %{entry | envelope: envelope, deadline_ms: deadline, deadline_timer: timer}

@@ -160,11 +160,74 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
     end)
   end
 
+  for {scenario, sqlstate, expected} <- [
+        {:nontransient, "23514", :check_violation},
+        {:exhausted, "57014", :settlement_retry_exhausted},
+        {:legacy, "57014", :query_canceled}
+      ] do
+    test "#{scenario} receipt failure stays unproved without another write attempt" do
+      {setup, session} = fixture()
+      CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Gateway.Runtime.Finalization.SettlementRetry)
+      Application.put_env(:codex_pooler, CodexPooler.Gateway.Runtime.Finalization.SettlementRetry, window_ms: 0)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        assert {:ok, reserved} = Accounting.reserve(setup.auth, setup.model, %{}, %{transport: "websocket", requested_model: setup.model.exposed_model_id, correlation_id: Ecto.UUID.generate()})
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+        assert {:ok, _turn} = Websocket.start_codex_turn(session, reserved.request)
+        name = install_receipt_failure!(attempt.id, unquote(sqlstate))
+        registry = start_supervised!({ActivityRegistry, name: nil})
+        identity = %{request_id: reserved.request.id, attempt_id: attempt.id, replay_generation: 0}
+        receipt = DeliveryReceipt.build(%{outcome: "aborted", completed_items: 1, completed_item_digests: ["012345abcdef"]})
+
+        {result, log} =
+          ExUnit.CaptureLog.with_log(fn ->
+            if unquote(scenario) == :legacy do
+              DeliveryReceipt.record_result(Map.delete(identity, :replay_generation), receipt, retry_timeout_ms: 5_000)
+            else
+              {:ok, token} = DeliveryReceiptHandoff.enroll(self(), identity, name: registry)
+              {:ok, envelope} = ActivityRegistry.take_delivery_cleanup(token, identity, receipt, name: registry)
+              DeliveryReceiptHandoff.settle(envelope)
+            end
+          end)
+
+        case unquote(expected) do
+          :settlement_retry_exhausted -> assert result == {:error, :settlement_retry_exhausted}
+          code -> assert {:error, %Postgrex.Error{postgres: %{code: ^code}}} = result
+        end
+
+        assert %{rows: [[1, true]]} = Repo.query!("SELECT last_value, is_called FROM #{name}_passes")
+        assert is_nil(Repo.reload!(attempt).response_metadata["downstream_delivery"])
+        assert log =~ "downstream delivery receipt not persisted"
+        refute log =~ "retrying"
+      end)
+    end
+  end
+
+  defp install_receipt_failure!(attempt_id, sqlstate) do
+    name = "receipt_failure_#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.query!("DROP TRIGGER IF EXISTS #{name} ON attempts")
+        Repo.query!("DROP FUNCTION IF EXISTS #{name}()")
+        Repo.query!("DROP SEQUENCE IF EXISTS #{name}_passes")
+      end)
+    end)
+
+    Repo.query!("CREATE SEQUENCE #{name}_passes")
+    Repo.query!("CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('#{name}_passes'); RAISE EXCEPTION USING ERRCODE = '#{sqlstate}', MESSAGE = 'synthetic receipt persistence failure'; END $$")
+    Repo.query!("CREATE TRIGGER #{name} BEFORE UPDATE ON attempts FOR EACH ROW WHEN (NEW.id = '#{attempt_id}'::uuid AND NEW.response_metadata ? 'downstream_delivery') EXECUTE FUNCTION #{name}()")
+    name
+  end
+
   for mode <- [:expiry, :fallback, :force_cut, :checked_out] do
+    @tag slow: "holds real receipt SQL until its finite registry deadline or an explicit force cut"
     test "#{mode} bounds real locked receipt SQL with its original registry deadline" do
       {setup, session} = fixture()
       CodexPooler.TestAppEnv.restore_on_exit(Repo)
       Application.put_env(:codex_pooler, Repo, Keyword.put(Repo.config(), :timeout, 800))
+      CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Gateway.Runtime.Finalization.SettlementRetry)
+      Application.put_env(:codex_pooler, CodexPooler.Gateway.Runtime.Finalization.SettlementRetry, window_ms: 0)
       on_exit(fn -> Sandbox.mode(Repo, :manual) end)
       :ok = Sandbox.mode(Repo, :auto)
       registry = start_supervised!({ActivityRegistry, name: nil})
@@ -236,8 +299,16 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
                 assert %{closed?: true, producers_failed?: true} = ActivityRegistry.receipt_cohort(name: registry)
 
               mode when mode in [:expiry, :checked_out] ->
-                assert_receive {:DOWN, ^monitor, :process, ^actor, _reason}, 2_000
-                assert System.monotonic_time(:millisecond) >= deadline - 25
+                # A query timeout could otherwise end this actor before the
+                # registry deadline and leave that independent fence untested.
+                :erlang.suspend_process(actor)
+
+                try do
+                  assert_receive {:DOWN, ^monitor, :process, ^actor, :killed}, 5_000
+                  assert System.monotonic_time(:millisecond) >= deadline
+                after
+                  if Process.alive?(actor), do: :erlang.resume_process(actor)
+                end
             end
 
             await_no_receipt_waiter!(holder_backend)
@@ -253,10 +324,13 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
     end
   end
 
+  @tag slow: "holds a receipt checkout until its finite registry deadline"
   test "the first receipt deadline also cuts a worker queued for a real occupied pool" do
     {setup, _session} = fixture()
     CodexPooler.TestAppEnv.restore_on_exit(Repo)
     Application.put_env(:codex_pooler, Repo, Keyword.put(Repo.config(), :timeout, 800))
+    CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Gateway.Runtime.Finalization.SettlementRetry)
+    Application.put_env(:codex_pooler, CodexPooler.Gateway.Runtime.Finalization.SettlementRetry, window_ms: 0)
     on_exit(fn -> Sandbox.mode(Repo, :manual) end)
     :ok = Sandbox.mode(Repo, :auto)
     assert {:ok, reserved} = Accounting.reserve(setup.auth, setup.model, %{}, %{transport: "websocket", requested_model: setup.model.exposed_model_id, correlation_id: Ecto.UUID.generate()})
@@ -303,8 +377,15 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
           deadline = :sys.get_state(registry).delivery_receipts[token].deadline_ms
           await_receipt_checkout!(actor)
           assert Process.alive?(holder.pid)
-          assert_receive {:DOWN, ^monitor, :process, ^actor, :killed}, 2_000
-          assert System.monotonic_time(:millisecond) >= deadline
+          :erlang.suspend_process(actor)
+
+          try do
+            assert_receive {:DOWN, ^monitor, :process, ^actor, :killed}, 5_000
+            assert System.monotonic_time(:millisecond) >= deadline
+          after
+            if Process.alive?(actor), do: :erlang.resume_process(actor)
+          end
+
           assert is_nil(Repo.reload!(attempt).response_metadata["downstream_delivery"])
         end)
 

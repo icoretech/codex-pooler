@@ -187,12 +187,12 @@ defmodule CodexPooler.Accounting.MailboxProofCheckTest do
     assert_stage(%{websocket | attempt: %{websocket.attempt | response_metadata: proof.attempt.response_metadata}}, :output_prefix, 1)
   end
 
-  test "producer retains sixteen runs and four completed prefixes per run" do
-    runs = Enum.flat_map(1..16, fn run -> Enum.map(1..4, &reasoning("#{run}-#{&1}")) ++ [mailbox()] end)
+  test "producer retains the latest sixteen runs and four completed prefixes per run" do
+    runs = Enum.flat_map(1..23, fn run -> Enum.map(1..4, &reasoning("#{run}-#{&1}")) ++ [mailbox()] end)
     witness = witness(append(payload(), runs))
     assert length(witness.mailbox) == 64
     assert Enum.all?(witness.mailbox, &(length(&1.items) in 1..4))
-    assert witness(append(payload(), runs ++ [reasoning("seventeenth"), mailbox()])).mailbox == []
+    assert length(witness(append(payload(), runs ++ [reasoning("latest"), mailbox()])).mailbox) == 61
 
     proof = proof("websocket")
     # The evaluator does not silently discard a producer's later valid proof.

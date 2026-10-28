@@ -1,12 +1,20 @@
 defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptHandoff do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Runtime.Finalization.SettlementRetry
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Websocket.DeliveryReceipt
   alias CodexPooler.Repo
 
   @supervisor CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor
   @type envelope :: %{registry: GenServer.server(), token: reference(), context: DeliveryReceipt.context(), receipt: DeliveryReceipt.receipt()}
+
+  @doc false
+  @spec persistence_timeout_ms(DeliveryReceipt.context()) :: pos_integer()
+  def persistence_timeout_ms(%{request_id: request, replay_generation: generation}) when is_binary(request) and is_integer(generation) and generation >= 0,
+    do: SettlementRetry.budget_ms()
+
+  def persistence_timeout_ms(context), do: DeliveryReceipt.persistence_timeout_ms(context)
 
   @spec enroll(pid(), map(), keyword()) :: {:ok, reference()} | {:error, atom()}
   def enroll(socket, identity, opts \\ []) do
@@ -66,7 +74,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceiptHandoff do
     if Repo.in_transaction?() do
       {:error, :receipt_uncommitted_transaction}
     else
-      Repo.checkout(fn -> DeliveryReceipt.record_result(envelope.context, envelope.receipt) end, timeout: remaining_ms)
+      DeliveryReceipt.record_result(envelope.context, envelope.receipt, retry_timeout_ms: remaining_ms)
     end
   rescue
     _exception -> {:error, :receipt_not_persisted}
