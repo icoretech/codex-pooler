@@ -439,6 +439,8 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
         end
       end)
 
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "first"}}
+
     second_waiter =
       Task.async(fn ->
         result = Admission.acquire("proxy_stream", %{request_id: "second"})
@@ -449,7 +451,6 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
         end
       end)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "first"}}
     assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{request_id: "second"}}
 
     Admission.release(%{server: Admission, route_class: "proxy_stream", ref: make_ref()})
