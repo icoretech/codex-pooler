@@ -487,6 +487,56 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> close_if_revoked_idle()
   end
 
+  # Pending is transport control, not response output. A fresh challenge must
+  # reach the producing receive loop (through the active owner when forwarded).
+  defp handle_socket_info({:native_compaction_pending, task, ref, source, event}, state) when is_pid(task) and is_reference(ref) do
+    if pending_compaction_task?(state, task, ref, source) and valid_pending_event?(event) and current_pending_receipt?(state, task, event) do
+      previous = Map.get(Map.get(state, :native_compaction_pending, %{}), task)
+
+      if fresh_pending_event?(previous, event) do
+        challenge = make_ref()
+        entry = %{ref: ref, source: source, event: event, challenge: challenge, started_at: System.monotonic_time(:millisecond)}
+        send_pending_compaction_probe(task, entry)
+        {:ok, Map.update(state, :native_compaction_pending, %{task => entry}, &Map.put(&1, task, entry))}
+      else
+        {:ok, state}
+      end
+    else
+      {:ok, state}
+    end
+  end
+
+  defp handle_socket_info({:compaction_pending_ack, challenge, token, request_id, attempt_id, sequence, remaining_ms}, state) when is_reference(challenge) do
+    found = Enum.find(Map.get(state, :native_compaction_pending, %{}), fn {_task, entry} -> entry.challenge == challenge end)
+
+    with {task, %{event: %{token: ^token, request_id: ^request_id, attempt_id: ^attempt_id, sequence: ^sequence}} = entry} <- found,
+         true <- is_integer(remaining_ms) and remaining_ms > 0,
+         true <- System.monotonic_time(:millisecond) < entry.started_at + min(1_000, remaining_ms),
+         true <- pending_compaction_task?(state, task, entry.ref, entry.source),
+         true <- current_pending_receipt?(state, task, entry.event) do
+      entry = entry |> Map.put(:challenge, nil) |> Map.put(:deadline, entry.started_at + remaining_ms)
+      state = put_in(state.native_compaction_pending[task], entry)
+      send(self(), {:compaction_pending_written, task, token, sequence})
+      {:push, {:text, ~s({"type":"codex.compaction.pending"})}, state}
+    else
+      _stale -> {:ok, state}
+    end
+  end
+
+  defp handle_socket_info({:compaction_pending_written, task, token, sequence}, state) do
+    with %{event: %{token: ^token, sequence: ^sequence}, deadline: deadline, ref: ref, source: source} = entry <- Map.get(Map.get(state, :native_compaction_pending, %{}), task),
+         true <- pending_compaction_task?(state, task, ref, source),
+         true <- current_pending_receipt?(state, task, entry.event),
+         true <- WebsocketDownstreamWriteWatch.writes_confirmed?(),
+         remaining when remaining > 0 <- deadline - System.monotonic_time(:millisecond) do
+      if source != :direct, do: DownstreamProgress.notify_pending(task, remaining)
+      state = put_in(state.native_compaction_pending[task], Map.delete(entry, :deadline))
+      if outbound_ping_allowed?(), do: {:push, {:ping, ""}, state}, else: {:ok, state}
+    else
+      _unconfirmed -> {:ok, state}
+    end
+  end
+
   # Chunks are attributed to their producing turn by pid. A chunk from a task the
   # socket no longer tracks belongs to a turn that already settled, so it is
   # dropped rather than injected into whatever turn is running now.
@@ -2339,6 +2389,60 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.put(:websocket_owner_active_turn_reconnect?, false)
 
     {:ok, state}
+  end
+
+  defp pending_compaction_task?(state, task, ref, source) do
+    pending_compaction_socket_open?(state) and tracked_response_task?(state, task) and Process.alive?(task) and
+      MapSet.member?(Map.get(state, :response_task_compaction_collectors, MapSet.new()), task) and
+      not MapSet.member?(Map.get(state, :response_task_terminals_accepted, MapSet.new()), task) and
+      not Map.has_key?(Map.get(state, :response_task_delivery_outcomes, %{}), task) and
+      match?(%{ref: ^ref}, Map.get(Map.get(state, :direct_cleanup_contexts, %{}), task)) and
+      pending_compaction_source?(state, source)
+  end
+
+  defp pending_compaction_socket_open?(state),
+    do: not Adapter.public_responses_stream?(state) and not socket_revoked?(state) and not Map.get(state, :websocket_owner_drain_observed?, false)
+
+  defp pending_compaction_source?(state, :direct), do: not owner_forwarded_socket?(state)
+
+  defp pending_compaction_source?(%{websocket_owner_pid: owner, websocket_owner_downstream: %{epoch: epoch, correlation_id: correlation}}, {owner, correlation, epoch}), do: true
+  defp pending_compaction_source?(_state, _source), do: false
+
+  defp current_pending_receipt?(state, task, event),
+    do: pending_receipt_matches?(Map.get(Map.get(state, :direct_cleanup_receipts, %{}), task), event)
+
+  defp pending_receipt_matches?(%{request_id: request_id, attempt_id: attempt_id}, %{request_id: request_id, attempt_id: attempt_id}), do: true
+  defp pending_receipt_matches?(%{attempt_id: _attempt_id}, _event), do: false
+  defp pending_receipt_matches?(%{request_id: request_id}, %{request_id: request_id}), do: true
+  defp pending_receipt_matches?(nil, _event), do: true
+  defp pending_receipt_matches?(_receipt, _event), do: false
+
+  defp reset_pending_compaction_attempt(state, task, receipt) do
+    case Map.get(Map.get(state, :native_compaction_pending, %{}), task) do
+      %{event: event} ->
+        if pending_receipt_matches?(receipt, event), do: state, else: Map.update!(state, :native_compaction_pending, &Map.delete(&1, task))
+
+      nil ->
+        state
+    end
+  end
+
+  defp valid_pending_event?(%{request_id: request_id, attempt_id: attempt_id, upstream_pid: upstream, token: token, sequence: sequence, remaining_ms: remaining}) do
+    is_binary(request_id) and is_binary(attempt_id) and is_pid(upstream) and is_reference(token) and is_integer(sequence) and sequence > 0 and is_integer(remaining) and remaining > 0
+  end
+
+  defp valid_pending_event?(_event), do: false
+
+  defp fresh_pending_event?(nil, _event), do: true
+  defp fresh_pending_event?(%{event: %{token: token, request_id: request_id, attempt_id: attempt_id, upstream_pid: upstream, sequence: previous}}, %{token: token, request_id: request_id, attempt_id: attempt_id, upstream_pid: upstream, sequence: sequence}), do: sequence > previous
+  defp fresh_pending_event?(_previous, _event), do: false
+
+  defp send_pending_compaction_probe(_task, %{source: :direct, challenge: challenge, event: event}) do
+    send(event.upstream_pid, {:compaction_pending_probe, self(), challenge, event.token, event.request_id, event.attempt_id, event.sequence})
+  end
+
+  defp send_pending_compaction_probe(task, %{source: {owner, _correlation, _epoch} = source, ref: ref, challenge: challenge, event: event}) do
+    send(owner, {:owner_compaction_pending_probe, task, ref, source, event, challenge, self()})
   end
 
   # A provider frame the native client never receives (the served account's
@@ -6400,7 +6504,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp clear_direct_cleanup(state, pid) do
     Enum.reduce(
-      [:direct_cleanup_contexts, :direct_cleanup_receipts, :response_task_cleanup_results],
+      [:direct_cleanup_contexts, :direct_cleanup_receipts, :response_task_cleanup_results, :native_compaction_pending],
       state,
       fn key, current ->
         if Map.has_key?(current, key),
@@ -6979,7 +7083,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         if tracked_response_task?(state, pid),
           do:
             Map.update(
-              state,
+              reset_pending_compaction_attempt(state, pid, receipt),
               :direct_cleanup_receipts,
               %{pid => receipt},
               &Map.put(&1, pid, receipt)

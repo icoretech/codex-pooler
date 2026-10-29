@@ -2195,6 +2195,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      persistence: "hashed_alias_only"
                    },
                    native_frames: ["response.output_item.done", "response.completed"],
+                   pending_control: %{
+                     event: %{"type" => "codex.compaction.pending"},
+                     interval_ms: 15_000,
+                     applicability: "native_collected_websocket_full_and_lite",
+                     authority: "fresh_live_receive_loop_challenge_through_current_owner",
+                     meaning: "admitted_compaction_awaiting_result",
+                     extends_upstream_deadline: false,
+                     response_output_or_receipt: false
+                   },
                    collected_result: %{
                      source: "collect_delivery_accumulator_not_diagnostic_retention",
                      max_bytes: 8_388_608,

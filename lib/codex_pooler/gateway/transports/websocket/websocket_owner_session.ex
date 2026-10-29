@@ -2307,6 +2307,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     active_turn = %{
       ref: ref,
       writer_capability: writer_capability,
+      compaction_pending_context: Map.get(state.pending_admissions, Map.get(active_turn_downstream, :owner_turn_id)),
+      compaction_pending_sequence: 0,
+      compaction_pending_probe: nil,
       task_pid: task.pid,
       task_ref: task.ref,
       submitter_monitor: Process.monitor(submitter_pid),
@@ -2761,6 +2764,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     do: {:noreply, state}
 
   def handle_info({:websocket_owner_upstream_frame, _ref, _payload}, state), do: {:noreply, state}
+
+  def handle_info({:owner_compaction_pending, ref, capability, event}, %{active_turn: %{ref: ref, writer_capability: capability} = active} = state) do
+    if pending_compaction_current?(state, event) and event.sequence > active.compaction_pending_sequence do
+      context = active.compaction_pending_context
+      source = {self(), active.downstream.correlation_id, active.downstream.epoch}
+      send(context.parent, {:native_compaction_pending, context.task, context.ref, source, event})
+      {:noreply, put_in(state.active_turn.compaction_pending_sequence, event.sequence)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:owner_compaction_pending, _ref, _capability, _event}, state), do: {:noreply, state}
+
+  def handle_info({:owner_compaction_pending_probe, task, ref, source, event, challenge, caller}, state) when is_reference(challenge) and is_pid(caller) do
+    with %{compaction_pending_context: %DirectCleanup{task: ^task, ref: ^ref, parent: ^caller}, downstream: downstream} = active <- state.active_turn,
+         true <- source == {self(), downstream.correlation_id, downstream.epoch},
+         true <- pending_compaction_current?(state, event),
+         true <- event.sequence == active.compaction_pending_sequence do
+      send(event.upstream_pid, {:compaction_pending_probe, self(), challenge, event.token, event.request_id, event.attempt_id, event.sequence})
+      probe = %{challenge: challenge, caller: caller, event: event, started_at: System.monotonic_time(:millisecond)}
+      {:noreply, put_in(state.active_turn.compaction_pending_probe, probe)}
+    else
+      _stale -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:compaction_pending_ack, challenge, token, request_id, attempt_id, sequence, remaining_ms} = ack, state) do
+    with %{compaction_pending_probe: %{challenge: ^challenge, event: %{token: ^token, request_id: ^request_id, attempt_id: ^attempt_id, sequence: ^sequence} = event, caller: caller, started_at: started_at}} <- state.active_turn,
+         true <- is_integer(remaining_ms) and remaining_ms > 0,
+         true <- System.monotonic_time(:millisecond) - started_at < min(1_000, remaining_ms),
+         true <- pending_compaction_current?(state, event) do
+      send(caller, ack)
+      {:noreply, put_in(state.active_turn.compaction_pending_probe, nil)}
+    else
+      _stale -> {:noreply, state}
+    end
+  end
 
   def handle_info({:websocket_owner_receipt_settled, turn_ref, ref, token, disposition}, %{active_turn: %{ref: turn_ref, receipt_settlement: %{ref: ref, token: token, monitor: monitor}}} = state) do
     Process.demonitor(monitor, [:flush])
@@ -3574,7 +3615,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          upstream_payload
        ) do
     writer = owner_writer(collect?, owner, ref, writer_capability, descriptor)
-    upstream_payload = bind_native_steering_owner(upstream_payload, owner)
+    upstream_payload = upstream_payload |> bind_native_steering_owner(owner) |> bind_compaction_pending_observer(owner, ref, writer_capability)
 
     case sender.(upstream_pid, upstream_payload, writer) do
       {:error, response} when is_map(response) ->
@@ -3584,6 +3625,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         result
     end
   end
+
+  defp pending_compaction_current?(%{draining?: false, active_turn: %{collect?: true, terminal_forwarded?: false, task_settled?: false, pending_result: nil, compaction_pending_context: %DirectCleanup{} = context, downstream: downstream, upstream_pid: upstream, admission_request_id: request_id, admission_attempt_id: attempt_id} = active, downstream: current}, %{request_id: request_id, attempt_id: attempt_id, upstream_pid: upstream, token: token, sequence: sequence, remaining_ms: remaining_ms}) do
+    pending_compaction_event_valid?(token, sequence, remaining_ms) and not Map.has_key?(active, :canceled_result) and is_map(current) and
+      current.pid == downstream.pid and current.epoch == downstream.epoch and current.correlation_id == downstream.correlation_id and
+      context.parent == downstream.pid and context.task == Map.get(downstream, :owner_turn_id)
+  end
+
+  defp pending_compaction_current?(_state, _event), do: false
+
+  defp pending_compaction_event_valid?(token, sequence, remaining_ms),
+    do: is_reference(token) and is_integer(sequence) and sequence > 0 and is_integer(remaining_ms) and remaining_ms > 0
+
+  defp bind_compaction_pending_observer(%UpstreamWebsocketSession.Request{} = request, owner, ref, capability) do
+    %{request | compaction_pending_observer: fn event -> send(owner, {:owner_compaction_pending, ref, capability, event}) end}
+  end
+
+  defp bind_compaction_pending_observer(request, _owner, _ref, _capability), do: request
 
   defp bind_native_steering_owner(%UpstreamWebsocketSession.Request{native_response_steering: lane} = request, owner) when is_pid(lane),
     do: %{request | native_response_steering: {lane, owner}}

@@ -879,6 +879,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {:noreply, state}
   end
 
+  # A completed/cancelled request never acknowledges a queued wait challenge.
+  def handle_info({:compaction_pending_probe, _receiver, _challenge, _token, _request_id, _attempt_id, _sequence}, state), do: {:noreply, state}
+
   def handle_info(message, %{conn: conn} = state) do
     case Mint.WebSocket.stream(conn, message) do
       {:ok, conn, responses} ->
@@ -982,6 +985,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     if collect_compaction?(request), do: CollectedBody.empty(), else: CollectedBody.disabled()
   end
 
+  # The mapper names the authenticated native origin. A TurnSnapshot carries
+  # an optional model ETag and is intentionally absent on compact requests.
+  defp compaction_pending_observer(%Request{websocket_delivery_mode: mode, request_id: request_id, attempt_id: attempt_id} = request)
+       when mode in [:collect_compaction, :collect_full_history] do
+    observer = Map.get(request, :compaction_pending_observer)
+
+    if is_function(observer, 1) and request.message_mapper == (&StreamProtocol.canonicalize_native_codex_responses_json_message/1) and
+         match?({:ok, _}, Ecto.UUID.cast(request_id)) and match?({:ok, _}, Ecto.UUID.cast(attempt_id)),
+       do: observer
+  end
+
+  defp compaction_pending_observer(%Request{}), do: nil
+
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
 
@@ -996,6 +1012,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     receive_state = %ReceiveState{
       writer: request.writer,
+      compaction_pending_observer: compaction_pending_observer(request),
       timeouts: request.timeouts,
       message_mapper: request.message_mapper,
       public_tool_completion: new_public_tool_completion(request),
@@ -1603,7 +1620,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp await_sent_request(state, receive_state) do
     :erlang.garbage_collect(self())
     state = schedule_keepalive(state)
-    receive_state = renew_receive_deadline(receive_state)
+    receive_state = receive_state |> renew_receive_deadline() |> arm_compaction_pending()
 
     {result, state} =
       case receive_state.upgrade_frames do
@@ -1817,7 +1834,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp receive_events(%{conn: conn} = state, %ReceiveState{} = receive_state) do
+  defp receive_events(state, %ReceiveState{compaction_pending_observer: nil} = receive_state), do: receive_live_events(state, receive_state)
+
+  defp receive_events(state, %ReceiveState{} = receive_state) do
+    if request_caller_down?(receive_state) do
+      {request_caller_down_result(state, receive_state), invalidate_cancelled_request(state, receive_state, :receive)}
+    else
+      receive_live_events(state, receive_state)
+    end
+  end
+
+  defp receive_live_events(%{conn: conn} = state, %ReceiveState{} = receive_state) do
+    receive_state = maybe_observe_compaction_pending(receive_state)
     socket = mint_socket(conn)
     request_caller_pid = receive_state.request_caller_pid
     request_caller_monitor = receive_state.request_caller_monitor
@@ -1846,6 +1874,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ssl_error, ^socket, _reason} = message ->
         handle_event_message(state, receive_state, message)
 
+      {:compaction_pending_probe, receiver, challenge, token, request_id, attempt_id, sequence} ->
+        receive_state = acknowledge_compaction_pending(receive_state, receiver, challenge, token, request_id, attempt_id, sequence)
+        receive_events(state, receive_state)
+
       {:upstream_websocket_pong_deadline, token} ->
         handle_pong_deadline_message(state, receive_state, token)
 
@@ -1864,28 +1896,113 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:upstream_websocket_cancel_steering, lane, {request_id, attempt_id}, reason} when lane == receive_state.native_response_steering and request_id == receive_state.request_id and attempt_id == receive_state.attempt_id ->
         finish_receive_result({:failure, state, receive_state, reason})
     after
-      max(receive_state.receive_deadline_ms - System.monotonic_time(:millisecond), 0) ->
-        result =
-          {:error,
-           %{
-             body: receive_body(receive_state),
-             response_usage: receive_model_usage(receive_state),
-             reason: :upstream_websocket_receive_timeout,
-             headers: state.headers,
-             upstream_error_param: receive_state.terminal_upstream_error_param,
-             websocket_frame_headers: receive_state.websocket_frame_headers,
-             transport_failure:
-               transport_failure_metadata(
-                 :upstream_websocket_receive_timeout,
-                 state,
-                 receive_state,
-                 phase: :receive_timeout,
-                 termination_source: :pooler_receive_timeout
-               )
-           }}
+      receive_wait_ms(receive_state) ->
+        if System.monotonic_time(:millisecond) < receive_state.receive_deadline_ms,
+          do: receive_events(state, receive_state),
+          else: receive_timeout(state, receive_state)
+    end
+  end
 
-        result = finalize_native_steering_failure(result, receive_state)
-        {result, invalidate_state(state)}
+  defp receive_timeout(state, receive_state) do
+    result =
+      {:error,
+       %{
+         body: receive_body(receive_state),
+         response_usage: receive_model_usage(receive_state),
+         reason: :upstream_websocket_receive_timeout,
+         headers: state.headers,
+         upstream_error_param: receive_state.terminal_upstream_error_param,
+         websocket_frame_headers: receive_state.websocket_frame_headers,
+         transport_failure:
+           transport_failure_metadata(
+             :upstream_websocket_receive_timeout,
+             state,
+             receive_state,
+             phase: :receive_timeout,
+             termination_source: :pooler_receive_timeout
+           )
+       }}
+
+    result = finalize_native_steering_failure(result, receive_state)
+    {result, invalidate_state(state)}
+  end
+
+  # Only this submitted request's receive loop emits pending controls. There
+  # is no autonomous timer process and no provider-progress or writer call.
+  # A paused/dead receive loop emits nothing; its original deadline still wins
+  # when it resumes. Missed intervals are coalesced into one notification.
+  defp arm_compaction_pending(%ReceiveState{compaction_pending_observer: observer} = receive_state) when is_function(observer, 1),
+    do: %{receive_state | compaction_pending_token: make_ref(), compaction_pending_next_ms: System.monotonic_time(:millisecond) + compaction_pending_interval_ms()}
+
+  defp arm_compaction_pending(receive_state), do: receive_state
+
+  defp maybe_observe_compaction_pending(%ReceiveState{compaction_pending_next_ms: next_ms} = receive_state) when is_integer(next_ms) do
+    now_ms = System.monotonic_time(:millisecond)
+    remaining_ms = receive_state.receive_deadline_ms - now_ms
+
+    if now_ms >= next_ms and remaining_ms > 0 do
+      sequence = receive_state.compaction_pending_sequence + 1
+
+      receive_state.compaction_pending_observer.(%{
+        request_id: receive_state.request_id,
+        attempt_id: receive_state.attempt_id,
+        upstream_pid: self(),
+        token: receive_state.compaction_pending_token,
+        sequence: sequence,
+        remaining_ms: remaining_ms
+      })
+
+      %{receive_state | compaction_pending_sequence: sequence, compaction_pending_next_ms: now_ms + compaction_pending_interval_ms()}
+    else
+      receive_state
+    end
+  end
+
+  defp maybe_observe_compaction_pending(receive_state), do: receive_state
+
+  # The socket challenges the actual receive loop before using a notification.
+  # A delayed pulse cannot keep a stalled owner alive. The token is unique per
+  # submitted request, each sequence grants at most one acknowledgement, and
+  # neither probing nor acknowledgement changes the upstream receive deadline.
+  defp acknowledge_compaction_pending(
+         %ReceiveState{compaction_pending_token: token, request_id: request_id, attempt_id: attempt_id, compaction_pending_sequence: sequence} = receive_state,
+         receiver,
+         challenge,
+         token,
+         request_id,
+         attempt_id,
+         sequence
+       )
+       when is_reference(token) and is_reference(challenge) and is_pid(receiver) and sequence > 0 do
+    remaining_ms = receive_state.receive_deadline_ms - System.monotonic_time(:millisecond)
+
+    if remaining_ms > 0 and sequence > receive_state.compaction_pending_ack_sequence do
+      send(receiver, {:compaction_pending_ack, challenge, token, request_id, attempt_id, sequence, remaining_ms})
+      %{receive_state | compaction_pending_ack_sequence: sequence}
+    else
+      receive_state
+    end
+  end
+
+  defp acknowledge_compaction_pending(receive_state, _receiver, _challenge, _token, _request_id, _attempt_id, _sequence), do: receive_state
+
+  defp receive_wait_ms(receive_state) do
+    deadline_ms =
+      case receive_state.compaction_pending_next_ms do
+        pending_ms when is_integer(pending_ms) -> min(receive_state.receive_deadline_ms, pending_ms)
+        nil -> receive_state.receive_deadline_ms
+      end
+
+    max(deadline_ms - System.monotonic_time(:millisecond), 0)
+  end
+
+  defp compaction_pending_interval_ms do
+    :codex_pooler
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:compaction_pending_interval_ms, 15_000)
+    |> case do
+      interval when is_integer(interval) and interval > 0 and interval <= 15_000 -> interval
+      _invalid -> 15_000
     end
   end
 

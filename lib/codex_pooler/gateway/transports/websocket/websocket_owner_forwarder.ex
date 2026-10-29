@@ -2730,8 +2730,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           result
 
         :no_response ->
+          progress_budget = DownstreamProgress.drain_budget(idle_timeout)
+
           cond do
-            DownstreamProgress.drain() -> await_owner_turn(request, idle_timeout, turn_deadline(idle_timeout))
+            is_integer(progress_budget) -> await_owner_turn(request, idle_timeout, turn_deadline(progress_budget))
             System.monotonic_time(:millisecond) >= deadline -> :erpc.receive_response(request, 0)
             true -> await_owner_turn(request, idle_timeout, deadline)
           end

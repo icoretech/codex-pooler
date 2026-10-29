@@ -134,6 +134,10 @@ defmodule CodexPoolerWeb.WebsocketDownstreamWriteWatch do
     :ok
   end
 
+  @doc "Whether all preceding writes reached the connection without a write failure."
+  @spec writes_confirmed?() :: boolean()
+  def writes_confirmed?, do: is_nil(failure()) and queue_empty?()
+
   @doc "The evidence last confirmed as written, or `nil`."
   @spec confirmed() :: term()
   def confirmed, do: Process.get(@confirmed_key)

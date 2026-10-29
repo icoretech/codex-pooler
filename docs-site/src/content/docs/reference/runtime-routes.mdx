@@ -322,6 +322,14 @@ The app-server JSON-RPC reset-credit method
 `account/rateLimitResetCredit/consume` remains unsupported. Codex Pooler does
 not add a wildcard backend app-server proxy for reset-credit methods.
 
+### Native websocket compaction waits
+
+While an admitted native backend websocket compaction awaits its result, Codex Pooler can send a text control whose only field is `type`, with value `codex.compaction.pending`. This applies to collected remote compaction in Full and Lite, including anchored and full-history requests. The control means the gateway is still awaiting the result; it carries no model output or provider-progress claim.
+
+The active upstream receive loop schedules the control every 15 seconds. Each delivery requires a fresh acknowledgement from that loop through the current owner, when forwarding is active. Cancellation, revocation, drain, stale ownership and expired upstream receive deadlines stop these controls. They do not extend the upstream receive deadline or count as output, delivery receipts, usage or settlement. Successful completion still delivers one validated compaction item through `response.output_item.done`, followed by `response.completed`.
+
+The control prevents an application-level idle timeout while compaction is pending. RFC websocket Ping/Pong alone does not provide that application-level signal; Pooler separately sends a Ping after a confirmed control write to support the server's read-idle check. HTTP compaction, the narrow public `/v1` surface and ordinary response relay do not emit this control. During a mixed-version rollout, a request retained by an older owner can remain silent until its result arrives.
+
 ## OpenAI-compatible `/v1` routes
 
 Use `/v1` only for clients that require an OpenAI-shaped base URL:

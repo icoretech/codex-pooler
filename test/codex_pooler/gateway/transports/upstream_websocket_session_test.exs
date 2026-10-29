@@ -4872,6 +4872,181 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert connection_count == 2
   end
 
+  for serving_mode <- ["full", "lite"] do
+    @tag :compaction_pending
+    test "a submitted native #{serving_mode} collector reports bounded pending wait without relaying output" do
+      with_short_keepalive(compaction_pending_interval_ms: 25, keepalive_interval_ms: 60_000)
+      peer = start_raw_websocket_peer(response_mode: :hold_after_compacting)
+      session = start_supervised!({UpstreamWebsocketSession, []})
+      parent = self()
+      request_id = Ecto.UUID.generate()
+      attempt_id = Ecto.UUID.generate()
+
+      request =
+        %{raw_websocket_request(peer.url, parent) | timeouts: @held_timeouts, writer: nil, payload: full_history_compaction_payload(), websocket_delivery_mode: :collect_full_history, effective_serving_mode: unquote(serving_mode), message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1, native_codex_response_control: nil, request_id: request_id, attempt_id: attempt_id}
+        |> Map.put(:compaction_pending_observer, fn pulse -> send(parent, {:compaction_pending, pulse}) end)
+
+      task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+      assert_receive {:raw_upstream_websocket_request, 1, 1}, @message_detection_timeout_ms
+
+      for sequence <- 1..3 do
+        assert_receive {:compaction_pending, %{request_id: ^request_id, attempt_id: ^attempt_id, upstream_pid: ^session, sequence: ^sequence, remaining_ms: remaining_ms}}, @detection_timeout_ms
+        assert remaining_ms > 0
+        assert remaining_ms <= @held_timeouts.receive_timeout_ms
+      end
+
+      refute_received {:upstream_websocket_frame, _frame}
+      assert Task.shutdown(task, :brutal_kill) == nil
+      assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+      _idle_after_cancel = :sys.get_state(session)
+    end
+  end
+
+  for serving_mode <- [:full, :lite] do
+    @tag :compaction_pending
+    test "an admitted anchored #{serving_mode} collector keeps its capability until caller cancellation" do
+      with_short_keepalive(compaction_pending_interval_ms: 25, keepalive_interval_ms: 60_000)
+      peer = start_raw_websocket_peer()
+      session = start_supervised!({UpstreamWebsocketSession, []})
+      warmup = %{ordinary_request(raw_websocket_request(peer.url, self())) | effective_serving_mode: Atom.to_string(unquote(serving_mode)), writer: nil}
+      assert {:ok, %{ordinary_success_result: receipt}} = UpstreamWebsocketSession.request(session, warmup)
+      lifecycle = lifecycle_state(session)
+      binding = %{direct_admission_binding(lifecycle, receipt) | serving_mode: unquote(serving_mode)}
+      assert :ok = UpstreamWebsocketSession.arm_compact(session, binding, System.system_time(:millisecond) + 30_000, receipt)
+      capability = reserve_and_start_direct(session, :compact, binding)
+      set_raw_websocket_peer_response_mode(peer, :hold)
+      request = %{compaction_pending_request(peer.url, self()) | payload: CodexPooler.JSON.encode!(%{"type" => "response.create", "previous_response_id" => "resp_raw_ws_1_1", "input" => [%{"type" => "compaction_trigger"}]}), websocket_delivery_mode: :collect_compaction, effective_serving_mode: Atom.to_string(unquote(serving_mode)), native_compaction_capability: capability, expected_connection_lifecycle: lifecycle}
+      task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+      assert_receive {:raw_upstream_websocket_request, 1, 2}, @message_detection_timeout_ms
+      assert_receive {:compaction_pending, pulse}, @detection_timeout_ms
+      challenge = make_ref()
+      probe_compaction_pending(session, pulse, challenge)
+      assert_receive {:compaction_pending_ack, ^challenge, _, _, _, _, _}, @detection_timeout_ms
+      assert Task.shutdown(task, :brutal_kill) == nil
+      assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+      assert :cleared = UpstreamWebsocketSession.compaction_admission_phase(session)
+      late = make_ref()
+      probe_compaction_pending(session, pulse, late)
+      _after_cancel = :sys.get_state(session)
+      refute_received {:compaction_pending_ack, ^late, _, _, _, _, _}
+      assert raw_websocket_peer_connection_count(peer) == 1
+    end
+  end
+
+  @tag :compaction_pending
+  test "pending challenges reject foreign and duplicate capabilities and end with the collector terminal" do
+    with_short_keepalive(compaction_pending_interval_ms: 100, keepalive_interval_ms: 60_000)
+    peer = start_raw_websocket_peer(response_mode: :hold)
+    session = start_supervised!({UpstreamWebsocketSession, []})
+    request = compaction_pending_request(peer.url, self())
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+    assert_receive {:raw_upstream_websocket_request, 1, 1}, @message_detection_timeout_ms
+    assert_receive {:compaction_pending, pulse}, @detection_timeout_ms
+
+    foreign = make_ref()
+    duplicate = make_ref()
+    valid = make_ref()
+    probe_compaction_pending(session, %{pulse | token: make_ref()}, foreign)
+    probe_compaction_pending(session, %{pulse | attempt_id: Ecto.UUID.generate()}, foreign)
+    probe_compaction_pending(session, %{pulse | request_id: Ecto.UUID.generate()}, foreign)
+    probe_compaction_pending(session, %{pulse | sequence: 0}, foreign)
+    probe_compaction_pending(session, pulse, valid)
+    probe_compaction_pending(session, pulse, duplicate)
+    assert_receive {:compaction_pending_ack, ^valid, token, request_id, attempt_id, sequence, remaining_ms}, @detection_timeout_ms
+    assert {token, request_id, attempt_id, sequence} == {pulse.token, pulse.request_id, pulse.attempt_id, pulse.sequence}
+    assert remaining_ms > 0
+
+    item = %{"type" => "compaction", "encrypted_content" => "opaque-pending-result"}
+
+    frames = [
+      %{"type" => "response.output_item.done", "item" => item},
+      %{"type" => "response.completed", "response" => %{"id" => "resp_pending_complete", "status" => "completed", "output" => [item]}}
+    ]
+
+    [socket] = Agent.get(peer.state, &MapSet.to_list(&1.client_sockets))
+    Enum.each(frames, fn frame -> assert :ok = :gen_tcp.send(socket, raw_websocket_server_text_frame(CodexPooler.JSON.encode!(frame))) end)
+    assert {:ok, %{body: body, terminal: "response.completed"}} = Task.await(task, @detection_timeout_ms)
+    assert {:ok, %{compaction_item: ^item}} = CompactionResultCollector.collect_websocket_body(body)
+    refute String.contains?(body, "codex.compaction.pending")
+    late = make_ref()
+    probe_compaction_pending(session, pulse, late)
+    _after_terminal = :sys.get_state(session)
+    refute_received {:compaction_pending_ack, ^foreign, _, _, _, _, _}
+    refute_received {:compaction_pending_ack, ^duplicate, _, _, _, _, _}
+    refute_received {:compaction_pending_ack, ^late, _, _, _, _, _}
+  end
+
+  @tag :compaction_pending
+  test "pending notifications and answered pings do not renew a silent collector deadline" do
+    with_short_keepalive(compaction_pending_interval_ms: 25, keepalive_interval_ms: 25, keepalive_pong_timeout_ms: 60_000)
+    peer = start_raw_websocket_peer(response_mode: :hold, pong_mode: :match_active_ping)
+    session = start_supervised!({UpstreamWebsocketSession, []})
+    request = %{compaction_pending_request(peer.url, self()) | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 500}}
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+    assert_receive {:raw_upstream_websocket_request, 1, 1}, @message_detection_timeout_ms
+    assert_receive {:compaction_pending, pulse}, @detection_timeout_ms
+    challenge = make_ref()
+    probe_compaction_pending(session, pulse, challenge)
+    assert_receive {:compaction_pending_ack, ^challenge, _, _, _, _, remaining_ms}, @detection_timeout_ms
+    assert remaining_ms <= 500
+    assert {:error, %{reason: :upstream_websocket_receive_timeout, body: "", transport_failure: metadata}} = Task.await(task, @detection_timeout_ms)
+    assert metadata["text_frame_count"] == 0
+    late = make_ref()
+    probe_compaction_pending(session, pulse, late)
+    _expired = :sys.get_state(session)
+    refute_received {:compaction_pending_ack, ^late, _, _, _, _, _}
+  end
+
+  @tag :compaction_pending
+  test "a frozen receive loop cannot acknowledge queued pending challenges after its deadline" do
+    with_short_keepalive(compaction_pending_interval_ms: 25, keepalive_interval_ms: 60_000)
+    peer = start_raw_websocket_peer(response_mode: :hold)
+    session = start_supervised!({UpstreamWebsocketSession, []})
+    request = %{compaction_pending_request(peer.url, self()) | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 300}}
+    task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+    assert_receive {:compaction_pending, pulse}, @detection_timeout_ms
+    challenge = make_ref()
+    assert :erlang.suspend_process(session)
+
+    try do
+      probe_compaction_pending(session, pulse, challenge)
+      # This is the scenario's actual expired deadline, not a readiness sleep.
+      Process.sleep(350)
+      refute_received {:compaction_pending_ack, ^challenge, _, _, _, _, _}
+    after
+      :erlang.resume_process(session)
+    end
+
+    assert {:error, %{reason: :upstream_websocket_receive_timeout}} = Task.await(task, @detection_timeout_ms)
+    _expired = :sys.get_state(session)
+    refute_received {:compaction_pending_ack, ^challenge, _, _, _, _, _}
+  end
+
+  for excluded <- [:relay, :public, :translated, :nil_mapper, :missing_identity, :unsent] do
+    @tag :compaction_pending
+    test "pending controls are absent for #{excluded}" do
+      with_short_keepalive(compaction_pending_interval_ms: 1, keepalive_interval_ms: 60_000)
+      peer = start_raw_websocket_peer(response_mode: :hold)
+      session = start_supervised!({UpstreamWebsocketSession, []})
+      base = %{compaction_pending_request(peer.url, self()) | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 60}}
+
+      request =
+        case unquote(excluded) do
+          :relay -> %{base | websocket_delivery_mode: :relay}
+          :public -> %{base | message_mapper: &StreamProtocol.normalize_public_openai_responses_json_message/1}
+          :missing_identity -> %{base | request_id: nil}
+          :translated -> %{base | message_mapper: &StreamProtocol.canonicalize_codex_responses_json_message/1}
+          :nil_mapper -> %{base | message_mapper: nil}
+          :unsent -> %{base | payload_write_observer: fn -> :refused end}
+        end
+
+      assert {:error, result} = UpstreamWebsocketSession.request(session, request)
+      expected = if unquote(excluded) == :unsent, do: :owner_unavailable, else: :upstream_websocket_receive_timeout
+      assert result.reason == expected
+      refute_received {:compaction_pending, _pulse}
+    end
+  end
+
   test "request caller exit closes the active upstream websocket before the receive timeout" do
     peer = start_raw_websocket_peer(response_mode: :hold)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -6826,6 +7001,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       assert log =~ "lifecycle_id=#{initial_lifecycle.lifecycle_id} generation=1"
       refute log =~ "coalesced close drained"
     end
+  end
+
+  defp compaction_pending_request(url, parent) do
+    %{raw_websocket_request(url, parent) | writer: nil, timeouts: @held_timeouts, payload: full_history_compaction_payload(), websocket_delivery_mode: :collect_full_history, effective_serving_mode: "full", message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1, native_codex_response_control: nil, request_id: Ecto.UUID.generate(), attempt_id: Ecto.UUID.generate(), compaction_pending_observer: fn pulse -> send(parent, {:compaction_pending, pulse}) end}
+  end
+
+  defp probe_compaction_pending(session, pulse, challenge) do
+    send(session, {:compaction_pending_probe, self(), challenge, pulse.token, pulse.request_id, pulse.attempt_id, pulse.sequence})
   end
 
   defp raw_websocket_request(url, owner) do

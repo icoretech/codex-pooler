@@ -889,10 +889,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             request_data.identity,
             request_data.observation
           ),
-        submission_observer: request_options.transport.websocket_owner_submission_observer
+        submission_observer: request_options.transport.websocket_owner_submission_observer,
+        compaction_pending_observer: direct_compaction_pending_observer(request_data, request_options)
       })
     )
   end
+
+  defp direct_compaction_pending_observer(request_data, %RequestOptions{runtime: %{direct_cleanup: %DirectCleanup{parent: parent, task: task, ref: ref}}, transport: %{upstream_websocket_session: upstream}}) do
+    request_id = request_data.request_id
+    attempt_id = request_data.attempt_id
+
+    fn
+      %{request_id: ^request_id, attempt_id: ^attempt_id, upstream_pid: pid} = event when is_pid(pid) ->
+        if is_nil(upstream) or upstream == pid, do: send(parent, {:native_compaction_pending, task, ref, :direct, event})
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp direct_compaction_pending_observer(_request_data, _options), do: nil
 
   @spec owner_websocket_request(websocket_request_data(), RequestOptions.t()) ::
           {:ok, WebsocketOwnerContract.upstream_request()}

@@ -6,6 +6,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability
 
+  # Keep the typed transient transport contract explicit; the wait observer
+  # is independent of provider output and of the existing submission callback.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :url,
     :headers,
@@ -16,6 +19,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :frame_observer,
     :payload_write_observer,
     :submission_observer,
+    :compaction_pending_observer,
     :reset_probe,
     :provider_credits_context,
     :native_codex_response_control,
@@ -43,6 +47,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
   # Direct requests carry the lane; owner-forwarded requests bind its owner
   # before submission. Neither value is part of the provider payload.
   @type native_response_steering :: pid() | {pid(), pid()} | nil
+
+  # Internal wait control, never a provider event or a collector writer. The
+  # recipient binds it to its active socket/task/owner identity before delivery.
+  @type compaction_pending :: %{
+          request_id: Ecto.UUID.t(),
+          attempt_id: Ecto.UUID.t(),
+          upstream_pid: pid(),
+          token: reference(),
+          sequence: pos_integer(),
+          remaining_ms: pos_integer()
+        }
+  @type compaction_pending_observer :: (compaction_pending() -> any()) | nil
 
   @type writer ::
           (binary() -> any())
@@ -72,6 +88,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           frame_observer: frame_observer(),
           payload_write_observer: payload_write_observer(),
           submission_observer: (-> any()) | nil,
+          compaction_pending_observer: compaction_pending_observer(),
           reset_probe: ResetProbe.t() | nil,
           provider_credits_context: CodexPooler.Gateway.Transports.ProviderCreditsAdmission.Context.t() | nil,
           native_codex_response_control: TurnSnapshot.t() | nil,

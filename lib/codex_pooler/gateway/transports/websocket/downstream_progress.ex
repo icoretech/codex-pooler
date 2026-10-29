@@ -19,6 +19,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DownstreamProgress do
     :ok
   end
 
+  @doc "Records a written compaction wait control with a finite remaining authority."
+  @spec notify_pending(pid(), pos_integer()) :: :ok
+  def notify_pending(task, remaining_ms) when is_pid(task) and is_integer(remaining_ms) and remaining_ms > 0 do
+    send(task, {__MODULE__, :pending_delivered, System.monotonic_time(:millisecond) + remaining_ms})
+    :ok
+  end
+
+  @doc "Consumes progress and returns its bounded wait budget, if still valid."
+  @spec drain_budget(pos_integer()) :: pos_integer() | nil
+  def drain_budget(idle_timeout), do: drain_budget(idle_timeout, nil)
+
+  defp drain_budget(idle_timeout, budget) do
+    receive do
+      @notice ->
+        drain_budget(idle_timeout, idle_timeout)
+
+      {__MODULE__, :pending_delivered, deadline} when is_integer(deadline) ->
+        remaining = min(idle_timeout, deadline - System.monotonic_time(:millisecond))
+        drain_budget(idle_timeout, if(remaining > 0, do: max(budget || 0, remaining), else: budget))
+    after
+      0 -> budget
+    end
+  end
+
   @doc "Takes every pending notice out of the caller's mailbox; `true` when there was one."
   @spec drain() :: boolean()
   def drain, do: drain(false)
