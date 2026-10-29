@@ -89,6 +89,24 @@ defmodule CodexPoolerWeb.Runtime.DownstreamKeepaliveScenario do
     end
   end
 
+  # Readiness Pings keep startup outside a post-progress idle assertion. Stop
+  # them at this exact provider's first barrier, before the measured frames.
+  @spec await_initial_provider_barrier!(map(), reference()) :: map()
+  def await_initial_provider_barrier!(client, hold),
+    do: await_initial_provider_barrier!(client, hold, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+
+  defp await_initial_provider_barrier!(client, hold, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+    assert remaining > 0, "the initial provider request never reached its frame barrier"
+    client = send_frame!(client, {:ping, "fixture-readiness"})
+
+    receive do
+      {:fake_upstream_frame_barrier, 0, _handler, ^hold} -> client
+    after
+      min(250, remaining) -> await_initial_provider_barrier!(client, hold, deadline)
+    end
+  end
+
   # The dispatch remains held after admission and connection setup, just
   # before its real payload write and the provider's receive budget.
   # Client readiness Pings keep bootstrap outside the measured idle window.
@@ -527,7 +545,8 @@ defmodule CodexPoolerWeb.Runtime.DownstreamKeepaliveScenario do
   def encoded_events(response_id, deltas),
     do: response_id |> stream_events(deltas) |> Enum.map(fn {_type, event} -> CodexPooler.JSON.encode!(event) end)
 
-  defp turn_frame(setup, thread) do
+  @spec turn_frame(map(), String.t()) :: String.t()
+  def turn_frame(setup, thread) do
     CodexPooler.JSON.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,

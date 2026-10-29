@@ -82,10 +82,10 @@ defmodule CodexPoolerWeb.Runtime.DrainAfterTerminalScenario do
     entry = activity_entry!(turn.task, kind)
     task_monitor = Process.monitor(turn.task)
     policy = %{now_ms: fn -> System.monotonic_time(:millisecond) end, schedule_wait: &schedule_wait/3, cancel_wait: &cancel_wait/2, owner_post_deadline_call_budget_ms: 5_000}
+    assert [%Request{status: "in_progress"}] = pool_requests(turn.setup)
     drain = Task.async(fn -> ActivityDrain.drain(entry, System.monotonic_time(:millisecond) - 1, policy, ActivityRegistry) end)
 
     :ok = await_drain_holding!(drain, fn -> Process.info(drain.pid, :current_function) == {:current_function, {ActivityDrain, :await_delivered_settlement, 4}} end)
-    assert [%Request{status: "in_progress"}] = pool_requests(turn.setup)
 
     true = :erlang.resume_process(turn.task)
     assert_receive {:DOWN, ^task_monitor, :process, _task, :normal}, @detection_timeout_ms
@@ -100,10 +100,10 @@ defmodule CodexPoolerWeb.Runtime.DrainAfterTerminalScenario do
   def assert_owner_cut_waits_for_settlement!(turn, owner) do
     :ok = await_owner_settling!(owner)
     monitor = Process.monitor(owner)
+    assert [%Request{status: "in_progress"}] = pool_requests(turn.setup)
     drain = Task.async(fn -> WebsocketOwnerSession.drain_owner(owner) end)
 
     :ok = await_drain_holding!(drain, fn -> owner_waits_for_settlement?(owner) end)
-    assert [%Request{status: "in_progress"}] = pool_requests(turn.setup)
 
     true = :erlang.resume_process(turn.task)
     assert Task.await(drain, @detection_timeout_ms) == {:ok, :settled}

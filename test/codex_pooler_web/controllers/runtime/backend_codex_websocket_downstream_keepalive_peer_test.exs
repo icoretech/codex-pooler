@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketDownstreamKeepalivePeerTes
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [gateway_setup: 1, start_upstream: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport,
-    only: [enter_peer_owner_topology!: 0, start_shared_bridge_peer!: 0]
+    only: [enter_peer_owner_topology!: 0, start_shared_bridge_peer!: 0, start_shared_peer_window_owner!: 3]
 
   import CodexPoolerWeb.Runtime.DownstreamKeepaliveScenario
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
@@ -41,6 +41,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketDownstreamKeepalivePeerTes
   alias CodexPooler.Gateway.Runtime.NativeResponseSteering
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  alias CodexPoolerWeb.Runtime.DownstreamKeepaliveScenario
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
@@ -210,6 +211,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketDownstreamKeepalivePeerTes
     :ok = close_client!(turn.client)
   end
 
+  @tag settings: [websocket_idle_timeout_ms: @idle_timeout_ms]
+  @tag slow: "real peer payload write stays held beyond the idle budget before the measured stall"
+  test "readiness Pings isolate a peer startup longer than the measured idle budget", %{peer_node: peer} do
+    hold = make_ref()
+    upstream = start_upstream(FakeUpstream.strict_sequence([turn_request(FakeUpstream.barrier_websocket_frames(encoded_events("resp_keepalive_startup_held", 1), notify: self(), release_ref: hold))]))
+    setup = gateway_setup(upstream)
+    {client, dispatch_hold} = start_held_turn!(setup, peer)
+    client = await_initial_provider_barrier!(client, hold)
+    assert_receive {^dispatch_hold, :released, held_ms}, detection_timeout_ms()
+    assert held_ms > @idle_timeout_ms
+    assert FakeUpstream.physical_counts(upstream).websocket_generation == 1
+    :ok = FakeUpstream.release_frame(upstream, hold)
+    assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^hold}, detection_timeout_ms()
+    :ok = FakeUpstream.release_frame(upstream, hold)
+    assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^hold}, detection_timeout_ms()
+
+    turn = read_turn!(client, answer_pings?: true)
+    assert turn.end in [{:close, 1002}, :socket_closed], "the turn " <> describe_turn(turn)
+    assert Enum.map(turn.events, & &1["type"]) -- ["codex.response.metadata"] == ["response.created", "response.output_item.added"]
+    assert turn.pings <= 2
+    request = assert_request_settled!(setup, "failed", "client_disconnected")
+    assert_idle_attribution!(request, if(turn.pings > 0, do: "pong_observed", else: "unknown"))
+    :ok = FakeUpstream.release_remaining_frames(upstream, hold)
+    :ok = close_client!(turn.client)
+  end
+
+  defp start_held_turn!(setup, peer) do
+    assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+    thread = Ecto.UUID.generate()
+    owner = start_shared_peer_window_owner!(setup, thread <> ":0", peer).owner_pid
+    target = :sys.get_state(owner).upstream_pid
+    hold = make_ref()
+    trace_mode = :erpc.call(peer, DownstreamKeepaliveScenario, :dispatch_trace_mode_state, [])
+
+    on_exit(fn ->
+      send(target, {hold, :release})
+      :erpc.call(peer, DownstreamKeepaliveScenario, :restore_dispatch_trace, [hold, trace_mode])
+    end)
+
+    test = self()
+    releaser = start_supervised!({Task, fn -> release_after_idle_budget(test, target, hold) end})
+    :ok = :erpc.call(peer, DownstreamKeepaliveScenario, :install_dispatch_hold!, [target, hold, releaser])
+    port = BackendCodexTestSupport.start_public_endpoint!()
+    sockets = WebsocketCleanupFence.listener_sockets()
+    headers = [{"session-id", thread}, {"thread-id", thread}, {"x-client-request-id", thread}, {"x-codex-window-id", thread <> ":0"}]
+    {conn, websocket, ref, _headers} = BackendCodexTestSupport.public_websocket_connect_with_request_headers!(port, setup, thread, "/backend-api/codex/responses", headers)
+    socket = WebsocketCleanupFence.await_new_listener_socket!(sockets)
+    {conn, websocket} = BackendCodexTestSupport.public_websocket_send_text!(conn, websocket, ref, turn_frame(setup, thread))
+    {%{conn: conn, websocket: websocket, ref: ref, socket: socket, owner: owner, sent_at: System.monotonic_time(:millisecond)}, hold}
+  end
+
+  defp release_after_idle_budget(test, target, hold) do
+    assert_receive {^hold, :write_ready, ^target}, detection_timeout_ms()
+    started = System.monotonic_time(:millisecond)
+
+    receive do
+    after
+      @idle_timeout_ms + 250 ->
+        send(target, {hold, :release})
+        send(test, {hold, :released, System.monotonic_time(:millisecond) - started})
+    end
+  end
+
   # The upstream receive timeout keeps its default here: travelling with the
   # turn to the owner, a shorter one ends the stalled stream first (`502
   # server_error`), and the downstream idle bound would never be reached.
@@ -224,13 +288,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketDownstreamKeepalivePeerTes
 
       {turn, log} =
         with_log(fn ->
-          client = start_turn!(setup, peer_node: peer_node)
+          client = start_turn!(setup, peer_node: peer_node) |> await_initial_provider_barrier!(hold)
 
-          # The provider sends its first two frames, then stalls.
-          for pushed <- 0..1 do
-            assert_receive {:fake_upstream_frame_barrier, ^pushed, _handler, ^hold}, detection_timeout_ms()
-            :ok = FakeUpstream.release_frame(upstream, hold)
-          end
+          # Readiness traffic stops before these two frames and their stall.
+          :ok = FakeUpstream.release_frame(upstream, hold)
+          assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^hold}, detection_timeout_ms()
+          :ok = FakeUpstream.release_frame(upstream, hold)
 
           assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^hold}, detection_timeout_ms()
 

@@ -149,13 +149,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DownstreamKeepaliveTest d
 
       {turn, log} =
         with_log(fn ->
-          client = start_turn!(setup)
+          client = start_turn!(setup) |> await_initial_provider_barrier!(hold)
 
-          # The provider sends its first two frames, then stalls.
-          for pushed <- 0..1 do
-            assert_receive {:fake_upstream_frame_barrier, ^pushed, _handler, ^hold}, detection_timeout_ms()
-            :ok = FakeUpstream.release_frame(upstream, hold)
-          end
+          # Readiness traffic stops before these two frames and their stall.
+          :ok = FakeUpstream.release_frame(upstream, hold)
+          assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^hold}, detection_timeout_ms()
+          :ok = FakeUpstream.release_frame(upstream, hold)
 
           assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^hold}, detection_timeout_ms()
           read_turn!(client, answer_pings?: true)
