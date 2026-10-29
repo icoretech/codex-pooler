@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.23](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.22...codex-pooler-v0.13.23) (2026-10-29)
+
+
+### Bug Fixes
+
+* send bounded pending controls during native websocket compaction ([1054683](https://github.com/icoretech/codex-pooler/commit/105468335720742ae571e8f8bbc284c39e01df5f))
+
+
+### Dependencies
+
+* update helm release codex-pooler to v0.14.14 ([#582](https://github.com/icoretech/codex-pooler/issues/582)) ([d05c191](https://github.com/icoretech/codex-pooler/commit/d05c1914ec65e2517e5f4912284320d882659c25))
+* update helm release codex-pooler to v0.14.15 ([#586](https://github.com/icoretech/codex-pooler/issues/586)) ([a0ebb49](https://github.com/icoretech/codex-pooler/commit/a0ebb49ea3cfa8fd3b515e2e72987f591371cc6f))
+* update Sobelow, Swoosh and Bandit security patch ([8e0bfc5](https://github.com/icoretech/codex-pooler/commit/8e0bfc56114a143ae1ba3b8201c03cd26834f9d5))
+* update websock_adapter to 0.7.0 ([1995af9](https://github.com/icoretech/codex-pooler/commit/1995af97cd6b908e49200525293a6a570ced9bd4))
+
+
+### Tests
+
+* fix CI diagnostic and peer teardown races ([0012be0](https://github.com/icoretech/codex-pooler/commit/0012be022861dd4c4d1632771c3ee78ada1914dd))
+* separate websocket fixture setup from idle and drain deadlines ([9e86e04](https://github.com/icoretech/codex-pooler/commit/9e86e042a30982579b0e1ad744f56c0db237cc79))
+
 ## [0.13.22](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.21...codex-pooler-v0.13.22) (2026-10-28)
 
 
