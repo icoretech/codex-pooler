@@ -273,7 +273,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     version_7 = advance_firewall_to_version_7!()
     peer = start_instance_settings_broadcast_peer!()
-    register_instance_settings_broadcast_peer_cleanup!(peer)
     port = start_public_endpoint!()
 
     {conn, websocket, ref} =
@@ -393,6 +392,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       peer = %{distribution: distribution, node: peer_node, pid: peer_pid}
 
       try do
+        on_exit(fn -> stop_instance_settings_broadcast_peer!(peer) end)
         Process.unlink(peer_pid)
         after_peer_start.(peer)
         assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
@@ -451,8 +451,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
   defp stop_test_distribution!(distribution) do
     try do
-      if distribution.node_started? and Node.alive?() do
-        :ok = :net_kernel.stop()
+      if distribution.node_started? do
+        deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+
+        stop_result =
+          if supervisor_pid = distribution.supervisor_pid do
+            monitor = Process.monitor(supervisor_pid)
+
+            # The owned supervisor can disappear before either this stop or the VM's node
+            # reset. Even :not_found is complete only after its DOWN and the actual reset.
+            result =
+              case Process.whereis(:net_sup) do
+                ^supervisor_pid -> :net_kernel.stop()
+                nil -> :ok
+                _replacement -> flunk("owned distribution supervisor was replaced")
+              end
+
+            assert_receive {:DOWN, ^monitor, :process, ^supervisor_pid, _reason},
+                           @detection_timeout_ms
+
+            result
+          else
+            :ok
+          end
+
+        await_test_distribution_stopped!(deadline)
+        assert stop_result in [:ok, {:error, :not_found}]
       end
     after
       restore_partition_guard(distribution.previous_partition_guard)
@@ -461,8 +485,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
     :ok
   end
 
-  defp register_instance_settings_broadcast_peer_cleanup!(peer) do
-    on_exit(fn -> stop_instance_settings_broadcast_peer!(peer) end)
+  defp await_test_distribution_stopped!(deadline) do
+    if not Node.alive?() and Node.self() == :nonode@nohost do
+      :ok
+    else
+      remaining = deadline - System.monotonic_time(:millisecond)
+      assert remaining > 0, "local distribution did not stop"
+
+      receive do
+      after
+        min(25, remaining) -> await_test_distribution_stopped!(deadline)
+      end
+    end
   end
 
   defp assert_public_websocket_queue_length!(server, expected_length) do
@@ -574,6 +608,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
         distribution = %{
           node_started?: true,
+          supervisor_pid: nil,
           previous_partition_guard: previous_partition_guard
         }
 
@@ -583,7 +618,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
           node_name =
             String.to_atom("websocket_settings_test_#{System.unique_integer([:positive])}")
 
-          assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
+          assert {:ok, supervisor_pid} = :net_kernel.start([node_name, :shortnames])
+          distribution = %{distribution | supervisor_pid: supervisor_pid}
+          on_exit(fn -> stop_test_distribution!(distribution) end)
           distribution
         catch
           kind, reason ->

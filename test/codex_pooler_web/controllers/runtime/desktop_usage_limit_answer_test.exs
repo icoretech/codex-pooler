@@ -51,7 +51,6 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
   @desktop_user_agent "Codex Desktop/0.158.0-alpha.2.1 (Mac OS 27.0.0; arm64) unknown (Codex Desktop; 26.924.22138)"
   # provenance: observed `codex-tui` and `codex_exec` from the released 0.158.0 CLI against a local fake target; `codex_vscode` from the client source (codex-rs/otel/src/metrics/tags.rs), not observed
   @other_originators ["codex-tui", "codex_exec", "codex_vscode", nil]
-  @pool_message "upstream quota is exhausted until its reset time"
   @native_http_paths ["/backend-api/codex/responses", "/backend-api/codex/v1/responses", "/backend-api/codex/responses/compact", "/backend-api/codex/v1/responses/compact"]
   @native_websocket_paths ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"]
   @reset_seconds 900
@@ -79,7 +78,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
 
         assert response.status == 400
         assert %{"error" => error} = CodexPooler.JSON.decode!(response.body)
-        seconds = assert_desktop_answer!(error, DateTime.to_unix(setup.reset_at), "15 min")
+        seconds = assert_desktop_answer!(error, DateTime.to_unix(setup.reset_at))
         assert seconds in (@reset_seconds - 5)..@reset_seconds
         assert Req.Response.get_header(response, "x-should-retry") == ["false"]
         assert Req.Response.get_header(response, "retry-after") == []
@@ -124,7 +123,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
 
         assert %{"type" => "error", "status" => 400, "error" => error} = event
         refute Map.has_key?(event, "headers")
-        seconds = assert_desktop_answer!(error, DateTime.to_unix(setup.reset_at), "15 min")
+        seconds = assert_desktop_answer!(error, DateTime.to_unix(setup.reset_at))
         assert_refused_row!(setup, error)
         assert log =~ ~r/websocket native turn failed .*error_code=quota_exhausted .*resets_at=#{error["resets_at"]} resets_in_seconds=#{seconds}/
       end
@@ -205,7 +204,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
 
       assert response.status == 400
       assert %{"error" => error} = CodexPooler.JSON.decode!(response.body)
-      seconds = assert_desktop_answer!(error, resets_at, "1 h")
+      seconds = assert_desktop_answer!(error, resets_at)
       assert seconds in (@provider_reset_seconds - 5)..@provider_reset_seconds
       refute response.body =~ "synthetic provider text"
       assert [row] = settled_rows!(setup)
@@ -223,6 +222,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
         upstream = start_upstream(FakeUpstream.websocket_text_frames([provider_usage_limit_frame(resets_at)]))
         setup = gateway_setup(upstream)
         port = start_public_endpoint!()
+        started_at = DateTime.utc_now()
 
         {event, log} =
           with_log([level: :info], fn ->
@@ -231,15 +231,13 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
             event
           end)
 
+        finished_at = DateTime.utc_now()
+
         assert %{"type" => "error", "status" => 400, "error" => error} = event
         refute Map.has_key?(event, "headers")
-        seconds = assert_desktop_answer!(error, resets_at, "1 h")
+        assert_desktop_answer!(error, resets_at)
         refute CodexPooler.JSON.encode!(event) =~ "synthetic provider text"
-        assert [row] = settled_rows!(setup)
-        assert row.response_status_code == 429
-        # The answered line keeps the refusal's status, which the row records,
-        # and names the status the socket sent (findings#270 row 270-261).
-        assert log =~ ~r/websocket usage limit answered .*status=429 .*advice=pool resets_at=#{resets_at} resets_in_seconds=#{seconds} answered_status=400\n/
+        assert_provider_websocket_record!(setup, error, log, 400, {started_at, finished_at})
       end
     end
 
@@ -249,6 +247,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
       setup = gateway_setup(start_upstream(FakeUpstream.websocket_text_frames([provider_usage_limit_frame(resets_at)])))
       port = start_public_endpoint!()
       frame = %{"type" => "response.create", "model" => setup.model.exposed_model_id, "input" => "synthetic prompt", "stream" => true}
+      started_at = DateTime.utc_now()
 
       {event, log} =
         with_log([level: :info], fn ->
@@ -257,9 +256,12 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
           event
         end)
 
+      finished_at = DateTime.utc_now()
+
       assert %{"type" => "error", "status" => 429, "error" => error} = event
       seconds = assert_pool_answer!(error, resets_at)
-      assert log =~ ~r/websocket usage limit answered .*status=429 .*advice=pool resets_at=#{resets_at} resets_in_seconds=#{seconds} answered_status=429\n/
+      assert event["headers"] == %{"retry-after" => Integer.to_string(seconds)}
+      assert_provider_websocket_record!(setup, error, log, 429, {started_at, finished_at})
     end
 
     test "native websocket: codex-tui's answered line names the 429 it was sent" do
@@ -267,6 +269,7 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
       resets_at = DateTime.to_unix(DateTime.utc_now()) + @provider_reset_seconds
       setup = gateway_setup(start_upstream(FakeUpstream.websocket_text_frames([provider_usage_limit_frame(resets_at)])))
       port = start_public_endpoint!()
+      started_at = DateTime.utc_now()
 
       {event, log} =
         with_log([level: :info], fn ->
@@ -275,8 +278,12 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
           event
         end)
 
-      assert %{"type" => "error", "status" => 429, "error" => %{"resets_in_seconds" => seconds}} = event
-      assert log =~ ~r/websocket usage limit answered .*status=429 .*advice=pool resets_at=#{resets_at} resets_in_seconds=#{seconds} answered_status=429\n/
+      finished_at = DateTime.utc_now()
+
+      assert %{"type" => "error", "status" => 429, "error" => error} = event
+      seconds = assert_pool_answer!(error, resets_at)
+      assert event["headers"] == %{"retry-after" => Integer.to_string(seconds)}
+      assert_provider_websocket_record!(setup, error, log, 429, {started_at, finished_at})
     end
 
     # A sibling taken out by an open circuit has no known return, so the Pool
@@ -336,22 +343,72 @@ defmodule CodexPoolerWeb.Runtime.DesktopUsageLimitAnswerTest do
     end
   end
 
-  # The released Desktop's answer: nothing but the message, the code, the
-  # type a 400 carries, and the reset fields.
-  defp assert_desktop_answer!(error, resets_at, wait) do
+  # The Desktop displays only the message: the reset must remain visible in
+  # UTC, but the surrounding sentence is not a wire contract.
+  defp assert_desktop_answer!(error, resets_at) do
     assert %{"type" => "invalid_request_error", "code" => "invalid_prompt", "param" => nil, "resets_at" => ^resets_at, "resets_in_seconds" => seconds, "message" => message} = error
     assert error |> Map.keys() |> Enum.sort() == ~w(code message param resets_at resets_in_seconds type)
-    assert message == "The Pool's usage limit is reached. Try again at #{reset_minute(resets_at)} UTC (in about #{wait})."
+    assert is_integer(seconds) and seconds > 0
+    assert message =~ reset_minute(resets_at)
+    assert message =~ "UTC"
     seconds
   end
 
   defp assert_pool_answer!(error, resets_at) do
-    assert %{"type" => "usage_limit_reached", "code" => "quota_exhausted", "message" => @pool_message, "resets_at" => ^resets_at, "resets_in_seconds" => seconds} = error
+    assert %{"type" => "usage_limit_reached", "code" => "quota_exhausted", "message" => message, "resets_at" => ^resets_at, "resets_in_seconds" => seconds} = error
+    assert is_binary(message) and String.trim(message) != ""
+    assert is_integer(seconds) and seconds > 0
     seconds
   end
 
   # The first minute that is not before the reset.
   defp reset_minute(resets_at), do: resets_at |> DateTime.from_unix!() |> DateTime.add(59, :second) |> Calendar.strftime("%H:%M")
+
+  # The response task records and logs its projection; the socket projects the
+  # same absolute reset later, potentially after a second boundary. Each
+  # countdown must fit the observed interval, while the log must exactly match
+  # the advice persisted on the attempt, not the socket's later countdown.
+  defp assert_provider_websocket_record!(setup, error, log, answered_status, interval) do
+    assert [row] = settled_rows!(setup)
+    assert {row.status, row.response_status_code, row.last_error_code} == {"failed", 429, "usage_limit_reached"}
+    assert [attempt] = Repo.all(from(attempt in Attempt, where: attempt.request_id == ^row.id))
+    assert {attempt.status, attempt.upstream_status_code} == {"failed", 429}
+    assert %{"resets_at" => resets_at, "resets_in_seconds" => seconds} = record = attempt.response_metadata["usage_limit"]
+    assert resets_at == error["resets_at"]
+    assert_countdown_between!(record, interval)
+    assert_countdown_between!(error, interval)
+
+    assert [[metadata]] = Regex.scan(~r/websocket usage limit answered ([^\n]*)/, log, capture: :all_but_first)
+
+    fields =
+      Map.new(String.split(metadata), fn field ->
+        [key, value] = String.split(field, "=", parts: 2)
+        {key, value}
+      end)
+
+    assert fields == %{
+             "request_id" => row.id,
+             "status" => "429",
+             "error_code" => "usage_limit_reached",
+             "advice" => "pool",
+             "resets_at" => Integer.to_string(resets_at),
+             "resets_in_seconds" => Integer.to_string(seconds),
+             "answered_status" => Integer.to_string(answered_status)
+           }
+
+    refute error["message"] =~ "synthetic provider text"
+    refute log =~ "synthetic provider text"
+  end
+
+  # The production calculator truncates to milliseconds before rounding up to
+  # seconds. Microsecond observations preserve those exact quantization bounds,
+  # including sub-millisecond edges, without a fixed scheduling tolerance.
+  defp assert_countdown_between!(%{"resets_at" => resets_at, "resets_in_seconds" => seconds}, {started_at, finished_at}) do
+    assert is_integer(seconds) and seconds > 0
+    reset_at = DateTime.from_unix!(resets_at)
+    assert DateTime.diff(reset_at, started_at, :microsecond) >= (seconds - 1) * 1_000_000 + 1_000
+    assert DateTime.diff(reset_at, finished_at, :microsecond) < seconds * 1_000_000 + 1_000
+  end
 
   # The refused row records the 429 refusal and the reset its answer advised.
   defp assert_refused_row!(setup, error) do

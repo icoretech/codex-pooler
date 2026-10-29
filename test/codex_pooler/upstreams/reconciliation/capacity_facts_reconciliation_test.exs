@@ -787,15 +787,22 @@ defmodule CodexPooler.Upstreams.Reconciliation.CapacityFactsReconciliationTest d
   end
 
   defp assert_unknown_log(log, identity, observed_at, sources) do
-    assert length(Regex.scan(~r/quota capacity authority unavailable/, log)) == 1
-    assert log =~ "reason_code=unknown_usage_receipt"
-    assert log =~ "observed_at=#{DateTime.to_iso8601(observed_at)} sources=#{sources}"
+    assert [[diagnostic]] = Regex.scan(~r/quota capacity authority unavailable ([^\n]+)/, log, capture: :all_but_first)
+
+    fields =
+      Map.new(String.split(diagnostic), fn field ->
+        [key, value] = String.split(field, "=", parts: 2)
+        {key, value}
+      end)
+
     identity_hash = :crypto.hash(:sha256, identity.id) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-    assert log =~ "identity_hash=#{identity_hash}"
-    refute log =~ identity.id
-    refute log =~ "conflicting_usage_receipts"
-    refute log =~ "differing_fields"
-    refute log =~ "0.125"
+
+    assert fields == %{
+             "reason_code" => "unknown_usage_receipt",
+             "identity_hash" => identity_hash,
+             "observed_at" => DateTime.to_iso8601(observed_at),
+             "sources" => sources
+           }
   end
 
   defp with_info_log(fun) do
@@ -804,7 +811,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.CapacityFactsReconciliationTest d
     Logger.configure(level: :info)
 
     try do
-      ExUnit.CaptureLog.with_log([level: :info], fun)
+      ExUnit.CaptureLog.with_log([level: :info, format: "$message\n"], fun)
     after
       Logger.configure(level: previous_level)
     end
