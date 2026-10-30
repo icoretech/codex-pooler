@@ -27,7 +27,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
-  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
 
@@ -35,6 +35,8 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
   @message "upstream quota is exhausted until its reset time"
   @provider_message "synthetic provider usage limit text"
+  @header_sentinel "synthetic-provider-header-private"
+  @conflicting_retry_after "7200"
   @reset_seconds 3_600
   @frame_timeout_ms 15_000
   @turn_endpoint "/backend-api/codex/responses"
@@ -68,6 +70,40 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     end
   end
 
+  # No usable reset: only the bounded advice the released client reads from
+  # error.headers, then the outer headers, may survive the native relay.
+  @retry_cases [
+    {:outer_without_nested, :absent, "17", "17"},
+    {:outer_with_empty_nested, %{}, "17", "17"},
+    {:outer_with_nonmap_nested, "malformed", "17", "17"},
+    {:outer_with_malformed_nested, %{"retry-after" => "soon"}, "17", "17"},
+    {:outer_with_oversized_nested, %{"retry-after" => String.duplicate("1", 129)}, "17", "17"},
+    {:nested_precedence, %{"ReTrY-AfTeR" => "29"}, "17", "29"},
+    {:outer_http_date, :absent, "Wed, 21 Oct 2015 07:28:00 GMT", "Wed, 21 Oct 2015 07:28:00 GMT"},
+    {:outer_u64_max, :absent, "18446744073709551615", "18446744073709551615"},
+    {:malformed_outer, :absent, "soon", nil},
+    {:oversized_outer, :absent, String.duplicate("1", 129), nil},
+    {:control_outer, :absent, "17\r\nx-synthetic: no", nil},
+    {:overflow_outer, :absent, "18446744073709551616", nil},
+    {:retry_after_ms_only, :absent, :absent, nil}
+  ]
+
+  for topology <- [:direct, :local_owner], {name, nested, outer, expected} <- @retry_cases do
+    test "native websocket #{topology}: resetless usage-limit retry advice #{name}" do
+      assert_native_retry_advice!(unquote(topology), unquote(Macro.escape(nested)), unquote(outer), unquote(expected))
+    end
+  end
+
+  for topology <- [:direct, :local_owner] do
+    test "native websocket #{topology}: a plain throttle keeps outer retry advice in the client-parsed nested error" do
+      assert_native_retry_advice!(unquote(topology), %{"retry-after" => "soon"}, "17", "17", :throttle)
+    end
+
+    test "native websocket #{topology}: retained metadata before a quota refusal gets no retry advice" do
+      assert_terminal_only_retry_advice!(unquote(topology))
+    end
+  end
+
   # The advice is the Pool's (row 206-545): an exhausted sibling that resets
   # sooner sets it. A sibling with no known return (taken out by an open
   # circuit) withholds it, and the refusal goes out as the classified wrapped
@@ -82,6 +118,8 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert %{"type" => "error", "status" => 429, "error" => %{"resets_in_seconds" => seconds}, "headers" => %{"retry-after" => retry_after}} = native_turn!(port, setup)
     assert seconds in 895..900
     assert retry_after == Integer.to_string(seconds)
+    refute retry_after == @conflicting_retry_after
+    assert_recorded_failure!(setup)
   end
 
   test "public /v1 websocket: an exhausted sibling that resets sooner sets the advice", _context do
@@ -92,6 +130,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
     assert %{"type" => "error", "status" => 429, "error" => %{"resets_in_seconds" => seconds}} = public_turn!(setup)
     assert seconds in 895..900
+    assert_recorded_failure!(setup)
   end
 
   test "native websocket: a sibling taken out by an open circuit withholds the advice and relays the classified 429", _context do
@@ -105,7 +144,9 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert %{"type" => "usage_limit_reached", "message" => "upstream usage limit reached", "resets_at" => ^resets_at} = error
     assert %{"retry-after" => retry_after} = event["headers"]
     assert String.to_integer(retry_after) in 1..60
+    refute retry_after == @conflicting_retry_after
     refute CodexPooler.JSON.encode!(event) =~ @provider_message
+    assert_recorded_failure!(setup)
   end
 
   # The refused turn's row and log name what the client was told
@@ -154,6 +195,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     {{event, rows}, log} = with_log([level: :info], fn -> {native_turn!(port, setup), settled_requests!(setup)} end)
     assert %{"retry-after" => retry_after} = event["headers"]
     assert String.to_integer(retry_after) in 1..60
+    refute retry_after == @conflicting_retry_after
 
     assert [request] = rows
     assert request.response_status_code == 429
@@ -204,16 +246,109 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     CodexPooler.JSON.encode!(%{
       "type" => "error",
       "status" => 429,
-      "error" => %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team", "resets_at" => resets_at, "resets_in_seconds" => @reset_seconds},
-      "headers" => %{"x-codex-rate-limit-reached-type" => "rate_limit_reached"}
+      "error" => %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team", "resets_at" => resets_at, "resets_in_seconds" => @reset_seconds, "headers" => %{"retry-after" => @conflicting_retry_after}},
+      "headers" => %{"x-codex-rate-limit-reached-type" => "rate_limit_reached", "retry-after" => @conflicting_retry_after}
     })
   end
 
-  defp frame_setup!(resets_at) do
-    upstream = start_upstream(FakeUpstream.websocket_text_frames([provider_frame(resets_at)]))
+  defp frame_setup!(resets_at), do: raw_frame_setup!(provider_frame(resets_at))
+
+  defp raw_frame_setup!(frame) do
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([frame]))
+    # gateway_setup registers this Pool's owner-session stop and socket cleanup
+    # fence before the native upgrade can start any fixture consumers.
     setup = gateway_setup(upstream)
     Map.put(setup, :upstream, upstream)
   end
+
+  defp assert_terminal_only_retry_advice!(topology) do
+    put_owner_forwarding!(topology == :local_owner)
+    metadata = CodexPooler.JSON.encode!(%{"type" => "codex.response.metadata", "headers" => %{"openai-model" => "synthetic-metadata-model"}})
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([metadata, retry_advice_frame(%{}, "17", :usage_limit)]))
+    setup = gateway_setup(upstream)
+    {_server, port} = start_public_endpoint_with_server!()
+    ref = make_ref()
+
+    event = native_turn!(port, setup, fn decoded -> send(self(), {ref, decoded}) end)
+    assert event["headers"] == %{"retry-after" => "17"}
+    send(self(), {ref, :complete})
+
+    events =
+      Stream.repeatedly(fn ->
+        receive do
+          {^ref, event} -> event
+        after
+          @frame_timeout_ms -> flunk("native retry observation did not complete")
+        end
+      end)
+      |> Enum.take_while(&(&1 != :complete))
+
+    metadata = Enum.filter(events, &(&1["type"] == "codex.response.metadata"))
+    assert Enum.any?(metadata, &(get_in(&1, ["headers", "openai-model"]) == "synthetic-metadata-model"))
+    refute Enum.any?(metadata, &Map.has_key?(Map.get(&1, "headers", %{}), "retry-after"))
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
+  defp assert_native_retry_advice!(topology, nested, outer, expected, kind \\ :usage_limit) do
+    put_owner_forwarding!(topology == :local_owner)
+    setup = raw_frame_setup!(retry_advice_frame(nested, outer, kind))
+    {_server, port} = start_public_endpoint_with_server!()
+    event = native_turn!(port, setup)
+
+    assert [%Request{status: "failed"} = request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [%Attempt{status: "failed", transport: "websocket"} = attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert FakeUpstream.websocket_connection_count(setup.upstream) == 1
+    assert FakeUpstream.http_request_count(setup.upstream) == 0
+
+    if topology == :local_owner do
+      assert %{"enabled" => true, "owner_instance_id" => owner, "proxy_instance_id" => owner} = request.request_metadata["websocket_owner_forwarding"]
+      assert owner == Atom.to_string(node())
+    else
+      refute get_in(request.request_metadata, ["websocket_owner_forwarding", "enabled"])
+    end
+
+    assert event["status"] == 429
+    assert Map.get(event, "headers", %{}) == if(expected, do: %{"retry-after" => expected}, else: %{})
+
+    case kind do
+      :usage_limit ->
+        assert request.response_status_code == 429
+        assert attempt.upstream_status_code == 429
+        refute Map.has_key?(attempt.response_metadata, "usage_limit")
+        assert event["type"] == "error"
+        assert event["error"] == %{"type" => "usage_limit_reached", "code" => "upstream_rate_limited", "message" => "upstream usage limit reached"}
+        refute Map.has_key?(event, "response")
+
+      :throttle ->
+        assert event["type"] == "response.failed"
+        assert get_in(event, ["response", "error", "code"]) == "rate_limit_exceeded"
+        assert get_in(event, ["response", "error", "headers"]) == %{"retry-after" => expected}
+        assert get_in(event, ["error", "headers"]) == %{"retry-after" => expected}
+        refute Map.has_key?(event["response"], "headers")
+    end
+
+    refute CodexPooler.JSON.encode!(event) =~ @header_sentinel
+    refute CodexPooler.JSON.encode!(%{request: request.request_metadata, attempt: attempt.response_metadata}) =~ @header_sentinel
+  end
+
+  defp retry_advice_frame(nested, outer, kind) do
+    error =
+      case kind do
+        :usage_limit -> %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team"}
+        :throttle -> %{"type" => "rate_limit_error", "code" => "rate_limit_exceeded", "message" => "synthetic provider throttle"}
+      end
+
+    error = if nested == :absent, do: error, else: Map.put(error, "headers", with_private_headers(nested))
+    headers = with_private_headers(%{"retry-after-ms" => "17000"})
+    headers = if outer == :absent, do: headers, else: Map.put(headers, "ReTrY-AfTeR", outer)
+
+    CodexPooler.JSON.encode!(%{"type" => "error", "status" => 429, "error" => error, "headers" => headers, "response" => %{"headers" => with_private_headers(%{"x-private" => @header_sentinel})}})
+  end
+
+  defp with_private_headers(headers) when map_size(headers) == 0, do: headers
+  defp with_private_headers(%{} = headers), do: Map.merge(headers, %{"Authorization" => @header_sentinel, "Set-Cookie" => @header_sentinel, "x-private-debug" => @header_sentinel})
+  defp with_private_headers(other), do: other
 
   defp assert_wrapped_usage_limit!(event, resets_at) do
     assert %{"type" => "error", "status" => 429, "error" => error, "headers" => headers} = event
@@ -235,7 +370,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
   # The turn settles on the provider's refusal.
   defp assert_recorded_failure!(setup) do
-    deadline = System.monotonic_time(:millisecond) + 5_000
+    deadline = System.monotonic_time(:millisecond) + @frame_timeout_ms
 
     rows =
       Stream.repeatedly(fn -> Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id)) end)
@@ -250,7 +385,7 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     assert [%Request{status: "failed"}] = rows
   end
 
-  defp native_turn!(port, setup) do
+  defp native_turn!(port, setup, observe \\ fn _event -> :ok end) do
     thread_id = Ecto.UUID.generate()
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 
@@ -282,7 +417,9 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
 
     try do
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
-      terminal!(conn, websocket, ref, "native")
+      event = terminal!(conn, websocket, ref, "native", observe)
+      assert_recorded_failure!(setup)
+      event
     after
       Mint.HTTP.close(conn)
     end
@@ -311,30 +448,24 @@ defmodule CodexPoolerWeb.Runtime.WebsocketUsageLimitFrameTest do
     end
   end
 
-  defp terminal!(conn, websocket, ref, label) do
-    receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          {:ok, conn, responses} ->
-            {websocket, texts} = decode_texts(websocket, ref, responses)
+  defp terminal!(conn, websocket, ref, label, observe \\ fn _event -> :ok end) do
+    message = receive_mint_socket_message!(conn, @frame_timeout_ms, "timed out waiting for the #{label} terminal")
 
-            case Enum.find(texts, &terminal_text?/1) do
-              nil ->
-                terminal!(conn, websocket, ref, label)
+    case Mint.WebSocket.stream(conn, message) do
+      {:ok, conn, responses} ->
+        {websocket, texts} = decode_texts(websocket, ref, responses)
+        Enum.each(texts, &observe.(CodexPooler.JSON.decode!(&1)))
 
-              text ->
-                CodexPooler.TestDiagnostics.puts(fn -> "206-546 wire #{label} websocket: " <> text end)
-                CodexPooler.JSON.decode!(text)
-            end
-
-          {:error, _conn, reason, _responses} ->
-            flunk("websocket receive failed: #{inspect(reason)}")
-
-          :unknown ->
-            terminal!(conn, websocket, ref, label)
+        case Enum.find(texts, &terminal_text?/1) do
+          nil -> terminal!(conn, websocket, ref, label, observe)
+          text -> CodexPooler.JSON.decode!(text)
         end
-    after
-      @frame_timeout_ms -> flunk("timed out waiting for the #{label} terminal")
+
+      {:error, _conn, reason, _responses} ->
+        flunk("websocket receive failed: #{inspect(reason)}")
+
+      :unknown ->
+        terminal!(conn, websocket, ref, label, observe)
     end
   end
 

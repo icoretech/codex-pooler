@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.ProviderCreditsAdmission
+  alias CodexPooler.Gateway.Transports.RetryAfter
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
@@ -900,8 +901,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   defp project_retry_exhausted_websocket_failure(%DispatchRequest{accounting_request: %{id: request_id}}, upstream_response, project) do
     request_id
     |> WebsocketCodec.stream_messages(Map.get(upstream_response, :body, ""))
-    |> Enum.map(&(&1 |> sanitize_retry_terminal() |> project.()))
+    |> Enum.map(&(&1 |> sanitize_retry_terminal() |> put_quota_retry_after(upstream_response) |> project.()))
   end
+
+  # The codec and native controls deliberately strip provider header objects.
+  # Restore only the delay already admitted at the raw frame boundary, before
+  # Pool reset/circuit projection decides the authoritative advice.
+  defp put_quota_retry_after(frame, %{reason: {:quota_exhausted_first_event, _failure}, websocket_frame_headers: %{"retry-after" => value}}) do
+    with safe when is_binary(safe) <- RetryAfter.normalize(value),
+         %{"type" => type} = decoded when type in ["error", "response.failed", "response.incomplete"] <- CodexPooler.JSON.decode!(frame) do
+      decoded |> Map.update("headers", %{"retry-after" => safe}, &Map.put(&1, "retry-after", safe)) |> CodexPooler.JSON.encode!()
+    else
+      _other -> frame
+    end
+  end
+
+  defp put_quota_retry_after(frame, _response), do: frame
 
   # What the socket answers a pre-output usage-limit refusal with, read the way
   # the socket projects the delivered frame (`ProviderUsageLimit.frame_projection/2`):

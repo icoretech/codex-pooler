@@ -266,6 +266,22 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
              }
     end
 
+    test "keeps validated retry advice only on 429 terminal events" do
+      for type <- ["error", "response.failed", "response.incomplete"] do
+        event = %{"type" => type, "status" => 429, "headers" => %{"Retry-After" => "30", "authorization" => "synthetic-secret", "openai-model" => "gpt-safe"}}
+        assert {:changed, sanitized} = NativeCodexResponseControl.sanitize_websocket_event(event)
+        assert sanitized["headers"] == %{"retry-after" => "30", "openai-model" => "gpt-safe"}
+      end
+
+      for {type, status, value} <- [{"response.completed", 429, "30"}, {"response.failed", 500, "30"}, {"error", 429, "later"}, {"error", 429, String.duplicate("0", 129)}] do
+        event = %{"type" => type, "status" => status, "headers" => %{"retry-after" => value}}
+        assert {:changed, sanitized} = NativeCodexResponseControl.sanitize_websocket_event(event)
+        refute Map.has_key?(sanitized, "headers")
+      end
+
+      assert NativeCodexResponseControl.http_headers(%{"retry-after" => "30"}) == []
+    end
+
     test "fails closed for a non-map event" do
       for malformed <- [nil, [], "event", 1] do
         assert NativeCodexResponseControl.sanitize_websocket_event(malformed) ==

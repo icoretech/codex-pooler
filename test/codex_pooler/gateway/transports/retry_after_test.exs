@@ -27,7 +27,7 @@ defmodule CodexPooler.Gateway.Transports.RetryAfterTest do
   end
 
   test "invalid, signed, oversized and success hints do not become retry advice" do
-    for value <- ["", "-1", "+1", "1.2", "a", "99999999999999999999999", String.duplicate("x", 129)] do
+    for value <- ["", "-1", "+1", "1.2", "a", "99999999999999999999999", String.duplicate("x", 129), "30\r\n", "\t30", "30\u007f", <<255>>, "Mon, +1 Jan 2024 09:00:00 GMT"] do
       {:ok, response} = RetryAfter.capture({:ok, response(value)})
       assert RetryAfter.header(response) == nil
     end

@@ -1635,6 +1635,60 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "x-codex-primary-reset-at" => "2026-05-25T13:00:00Z"
              }
     end
+
+    test "accepts bounded unsigned seconds and HTTP dates as retry advice" do
+      for {value, expected} <- [
+            {0, "0"},
+            {30, "30"},
+            {" 0030 ", "30"},
+            {"18446744073709551615", "18446744073709551615"},
+            {"Wed, 28 Sep 2050 12:00:00 GMT", "Wed, 28 Sep 2050 12:00:00 GMT"}
+          ] do
+        assert websocket_error_frame_headers(wrapped_error_frame(%{"status" => 429, "headers" => %{"Retry-After" => value}})) == %{"retry-after" => expected}
+      end
+    end
+
+    test "rejects malformed, control-bearing, non-scalar and oversized retry advice" do
+      for value <- ["", "later", "-1", "+1", "1.5", 1.5, true, nil, ["30"], %{"seconds" => 30}, "18446744073709551616", String.duplicate("0", 129), "30\r\n", "30\t", "30\u0000"] do
+        assert websocket_error_frame_headers(wrapped_error_frame(%{"status" => 429, "headers" => %{"Retry-After" => value}})) == %{}
+      end
+    end
+
+    test "uses outer retry advice when nested headers have no usable value" do
+      for nested <- [nil, %{}, %{"retry-after" => "later"}, %{"retry-after" => String.duplicate("0", 129)}, %{"authorization" => "synthetic-nested-secret"}] do
+        for type <- ["error", "response.failed", "response.incomplete"] do
+          error = %{"code" => "usage_limit_reached", "headers" => nested}
+          frame = %{"type" => type, "status" => 429, "error" => error, "response" => %{"error" => error}, "headers" => %{"Retry-After" => "30", "cookie" => "synthetic-outer-secret"}}
+          assert websocket_error_frame_headers(frame) == %{"retry-after" => "30"}
+        end
+      end
+    end
+
+    test "prefers valid nested retry advice without admitting other nested headers" do
+      for path <- [["error"], ["response", "error"]] do
+        error = %{"code" => "usage_limit_reached", "headers" => %{"Retry-After" => 7, "authorization" => "synthetic-secret", "x-request-id" => "nested-request"}}
+        frame = %{"type" => "response.failed", "headers" => %{"retry-after" => "30", "x-request-id" => "outer-request"}, "response" => %{}}
+        frame = put_in(frame, path, error)
+        assert websocket_error_frame_headers(frame) == %{"retry-after" => "7", "x-request-id" => "outer-request"}
+      end
+    end
+
+    test "native 429 advice reaches the client-parsed error without dropping existing controls" do
+      error = %{"code" => "rate_limit_exceeded", "headers" => %{"retry-after" => "later", "authorization" => "synthetic-secret"}}
+      frame = %{"type" => "response.failed", "status" => 429, "response" => %{"status" => "failed", "error" => error}, "headers" => %{"retry-after" => "30", "openai-model" => "gpt-safe", "x-reasoning-included" => "true"}}
+      data = CodexPooler.JSON.encode!(frame)
+      native = StreamProtocol.canonicalize_native_codex_responses_json_message(data) |> CodexPooler.JSON.decode!()
+      assert get_in(native, ["response", "error", "headers"]) == %{"retry-after" => "30"}
+      assert native["headers"] == frame["headers"]
+      refute inspect(native) =~ "synthetic-secret"
+      assert {_wire, ^native} = StreamProtocol.canonicalize_native_codex_responses_json_message(data, frame)
+
+      # The shared HTTP SSE canonicalizer keeps its existing outer-header drop.
+      wrapped = %{"type" => "error", "status" => 429, "error" => %{"code" => "rate_limit_exceeded"}, "headers" => %{"retry-after" => "30"}} |> CodexPooler.JSON.encode!()
+      common = StreamProtocol.canonicalize_codex_responses_json_message(wrapped) |> CodexPooler.JSON.decode!()
+      refute Map.has_key?(common, "headers")
+      refute Map.has_key?(common["response"]["error"], "headers")
+    end
   end
 
   defp canonical_usage_limit_terminal_sse do

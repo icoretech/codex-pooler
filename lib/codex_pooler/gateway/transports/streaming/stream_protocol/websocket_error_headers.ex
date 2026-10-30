@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketErrorHeaders do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.RetryAfter
+
   @type headers :: %{optional(String.t()) => String.t()}
 
   # The names a provider uses for its request id, in the order the released
@@ -45,17 +47,47 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
     end
   end
 
-  def websocket_error_frame_headers(%{"type" => type, "headers" => %{} = headers})
-      when type in ["response.failed", "response.incomplete", "error"],
-      do: sanitized_websocket_error_headers(headers)
+  def websocket_error_frame_headers(%{"type" => type} = frame)
+      when type in ["response.failed", "response.incomplete", "error"] do
+    headers = sanitized_websocket_error_headers(Map.get(frame, "headers"))
+
+    case retry_after(frame) do
+      nil -> headers
+      value -> Map.put(headers, "retry-after", value)
+    end
+  end
 
   def websocket_error_frame_headers(_data), do: %{}
+  @spec retry_after(term()) :: String.t() | nil
+  def retry_after(%{"type" => type} = frame) when type in ["response.failed", "response.incomplete", "error"] do
+    nested_headers =
+      case frame do
+        %{"response" => %{"error" => %{} = error}} -> Map.get(error, "headers")
+        %{"error" => %{} = error} -> Map.get(error, "headers")
+        _other -> nil
+      end
 
-  defp sanitized_websocket_error_headers(headers) do
+    retry_after_header(nested_headers) || retry_after_header(Map.get(frame, "headers"))
+  end
+
+  def retry_after(_frame), do: nil
+
+  defp retry_after_header(headers) when is_map(headers) do
+    Enum.find_value(headers, fn
+      {name, value} when is_binary(name) -> if String.downcase(name) == "retry-after", do: RetryAfter.normalize(value)
+      _other -> nil
+    end)
+  end
+
+  defp retry_after_header(_headers), do: nil
+
+  defp sanitized_websocket_error_headers(headers) when is_map(headers) do
     Enum.reduce(headers, %{}, fn header, acc ->
       put_allowed_websocket_error_header(acc, header)
     end)
   end
+
+  defp sanitized_websocket_error_headers(_headers), do: %{}
 
   defp put_allowed_websocket_error_header(acc, {name, value}) do
     name = name |> to_string() |> String.downcase()
@@ -63,6 +95,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
     case allowed_scalar_header_value(name, value) do
       {:ok, value} -> Map.put(acc, name, value)
       :error -> acc
+    end
+  end
+
+  defp allowed_scalar_header_value("retry-after", value) do
+    case RetryAfter.normalize(value) do
+      nil -> :error
+      normalized -> {:ok, normalized}
     end
   end
 
@@ -74,6 +113,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
     do: true
 
   defp allowed_websocket_error_header?("x-codex-rate-limit-reached-type"), do: true
+  defp allowed_websocket_error_header?("retry-after"), do: true
 
   defp allowed_websocket_error_header?(name) do
     Enum.any?(@quota_header_prefixes, &String.starts_with?(name, &1)) or

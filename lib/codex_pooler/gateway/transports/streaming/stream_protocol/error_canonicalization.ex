@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketErrorHeaders
 
   @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
   @native_previous_response_not_found_message "Previous response was not found. Retrying the full request."
@@ -125,20 +126,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
   def canonicalize_native_codex_responses_json_message(data) when is_binary(data) do
     case CodexPooler.JSON.decode(data) do
-      {:ok, %{"type" => "error", "error" => %{"code" => "unsupported_native_inflight_message"}}} ->
-        data
-
-      {:ok,
-       %{
-         "type" => "error",
-         "error" => %{"code" => "previous_response_not_found"}
-       }} ->
-        CodexPooler.JSON.encode!(native_previous_response_not_found_event())
-
       {:ok, %{} = decoded} ->
-        if provider_previous_response_refusal?(decoded),
-          do: CodexPooler.JSON.encode!(provider_previous_response_miss_event()),
-          else: canonicalize_codex_responses_json_message(data)
+        {canonical, _decoded} = canonicalize_native_codex_responses_json_message(data, decoded)
+        canonical
 
       _other ->
         canonicalize_codex_responses_json_message(data)
@@ -148,24 +138,83 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   @spec canonicalize_native_codex_responses_json_message(binary(), map()) :: {binary(), map()}
   def canonicalize_native_codex_responses_json_message(data, decoded)
       when is_binary(data) and is_map(decoded) do
-    case decoded do
-      %{"type" => "error", "error" => %{"code" => "unsupported_native_inflight_message"}} ->
-        {data, decoded}
+    result =
+      case decoded do
+        %{"type" => "error", "error" => %{"code" => "unsupported_native_inflight_message"}} ->
+          {data, decoded}
 
-      %{
-        "type" => "error",
-        "error" => %{"code" => "previous_response_not_found"}
-      } ->
-        canonical = native_previous_response_not_found_event()
-        {CodexPooler.JSON.encode!(canonical), canonical}
-
-      _other ->
-        if provider_previous_response_refusal?(decoded) do
-          canonical = provider_previous_response_miss_event()
+        %{
+          "type" => "error",
+          "error" => %{"code" => "previous_response_not_found"}
+        } ->
+          canonical = native_previous_response_not_found_event()
           {CodexPooler.JSON.encode!(canonical), canonical}
-        else
-          canonicalize_codex_responses_json_message(data, decoded)
-        end
+
+        _other ->
+          if provider_previous_response_refusal?(decoded) do
+            canonical = provider_previous_response_miss_event()
+            {CodexPooler.JSON.encode!(canonical), canonical}
+          else
+            canonicalize_codex_responses_json_message(data, decoded)
+          end
+      end
+
+    preserve_native_retry_after(result, decoded)
+  end
+
+  # Native websocket advice is intentionally separate from the shared SSE
+  # canonicalizer. Only the validated delay crosses, never the provider's
+  # nested header objects or its other outer headers.
+  defp preserve_native_retry_after({data, canonical}, source) do
+    if Map.get(source, "status", Map.get(source, "status_code")) == 429 and
+         source["type"] in ["error", "response.failed", "response.incomplete"] do
+      sanitized =
+        canonical
+        |> drop_retry_header()
+        |> drop_error_headers()
+        |> put_native_retry_after(WebsocketErrorHeaders.retry_after(source))
+
+      if sanitized == canonical, do: {data, canonical}, else: {CodexPooler.JSON.encode!(sanitized), sanitized}
+    else
+      {data, canonical}
+    end
+  end
+
+  defp drop_retry_header(%{"headers" => %{} = headers} = frame) do
+    kept = Map.reject(headers, fn {name, _value} -> is_binary(name) and String.downcase(name) == "retry-after" end)
+    if map_size(kept) == 0, do: Map.delete(frame, "headers"), else: Map.put(frame, "headers", kept)
+  end
+
+  defp drop_retry_header(frame), do: Map.delete(frame, "headers")
+
+  defp drop_error_headers(frame) do
+    frame =
+      case frame do
+        %{"error" => %{} = error} -> Map.put(frame, "error", Map.delete(error, "headers"))
+        _other -> frame
+      end
+
+    case frame do
+      %{"response" => %{"error" => %{} = error} = response} -> Map.put(frame, "response", Map.put(response, "error", Map.delete(error, "headers")))
+      _other -> frame
+    end
+  end
+
+  defp put_native_retry_after(frame, nil), do: frame
+
+  defp put_native_retry_after(frame, value) do
+    headers = %{"retry-after" => value}
+
+    frame
+    |> Map.update("headers", headers, &Map.merge(&1, headers))
+    |> update_error_headers(["error"], headers)
+    |> update_error_headers(["response", "error"], headers)
+  end
+
+  defp update_error_headers(frame, path, headers) do
+    case get_in(frame, path) do
+      %{} = error -> put_in(frame, path, Map.put(error, "headers", headers))
+      _other -> frame
     end
   end
 

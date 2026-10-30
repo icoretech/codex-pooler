@@ -71,6 +71,16 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeUsageLimitTest do
     assert FakeUpstream.http_request_count(upstream) == 0
   end
 
+  for nested <- [:absent, :empty, :malformed, :valid] do
+    test "a pre-output 429 preserves safe retry advice with #{nested} nested headers", %{conn: conn} do
+      assert_provider_retry_after!(conn, unquote(nested))
+    end
+  end
+
+  test "a statusless quota terminal keeps outer retry advice through the existing bridge", %{conn: conn} do
+    assert_provider_retry_after!(conn, :malformed, :statusless)
+  end
+
   test "an exhausted sibling that resets sooner sets the advice", %{conn: conn} do
     resets_at = DateTime.to_unix(DateTime.utc_now()) + @reset_seconds
     refusing_upstream = start_upstream(FakeUpstream.websocket_text_frames([usage_limit_frame(resets_at)]))
@@ -228,12 +238,42 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeUsageLimitTest do
     |> post("/v1/responses", Map.merge(%{"model" => setup.model.exposed_model_id, "stream" => true}, body))
   end
 
+  defp assert_provider_retry_after!(conn, nested, shape \\ :wrapped) do
+    error = %{"type" => "usage_limit_reached", "message" => @provider_message}
+
+    error =
+      case nested do
+        :absent -> error
+        :empty -> Map.put(error, "headers", %{})
+        :malformed -> Map.put(error, "headers", %{"retry-after" => "later", "authorization" => "synthetic-nested-secret"})
+        :valid -> Map.put(error, "headers", %{"retry-after" => "7", "authorization" => "synthetic-nested-secret"})
+      end
+
+    frame = %{"type" => "error", "status" => 429, "error" => error, "headers" => %{"Retry-After" => "30", "set-cookie" => "synthetic-outer-secret"}}
+    frame = if shape == :statusless, do: frame |> Map.delete("status") |> Map.put("type", "response.failed") |> Map.put("response", %{"status" => "failed", "error" => error}), else: frame
+    frame = CodexPooler.JSON.encode!(frame)
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([frame]))
+    setup = gateway_setup(upstream)
+    response = post_bridged(conn, setup)
+
+    assert response.status == 429
+    assert get_resp_header(response, "retry-after") == [if(nested == :valid, do: "7", else: "30")]
+    assert get_resp_header(response, "set-cookie") == []
+    assert %{"error" => %{"type" => "rate_limit_error", "code" => "upstream_rate_limited"} = projected} = CodexPooler.JSON.decode!(response.resp_body)
+    refute Map.has_key?(projected, "headers")
+    refute response.resp_body =~ @provider_message
+    refute response.resp_body =~ "synthetic-nested-secret"
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert [%Request{status: "failed", response_status_code: 429}] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+  end
+
   defp usage_limit_frame(resets_at) do
     CodexPooler.JSON.encode!(%{
       "type" => "error",
       "status" => 429,
       "error" => %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team", "resets_at" => resets_at, "resets_in_seconds" => @reset_seconds},
-      "headers" => %{"x-codex-rate-limit-reached-type" => "rate_limit_reached"}
+      "headers" => %{"x-codex-rate-limit-reached-type" => "rate_limit_reached", "retry-after" => "17"}
     })
   end
 

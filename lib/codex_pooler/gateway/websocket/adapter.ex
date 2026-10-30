@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.Runtime.Finalization.{Metadata, NativeRateLimitRelay, ProviderUsageLimit, ValidationRejection}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketErrorHeaders
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
@@ -265,8 +266,9 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
         _other -> NativeRateLimitRelay.retry_after_seconds(error)
       end
 
+    retry_after = if is_integer(retry_after), do: Integer.to_string(retry_after), else: WebsocketErrorHeaders.retry_after(frame)
     event = %{"type" => "error", "status" => 429, "error" => error}
-    event = if is_integer(retry_after), do: Map.put(event, "headers", %{"retry-after" => Integer.to_string(retry_after)}), else: event
+    event = if retry_after, do: Map.put(event, "headers", %{"retry-after" => retry_after}), else: event
     CodexPooler.JSON.encode!(event)
   end
 

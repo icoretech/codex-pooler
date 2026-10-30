@@ -3111,6 +3111,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       relayed_provider_usage_limit: %{when: :last_candidate_provider_429, reset: ["resets_at", "resets_in_seconds"], answer: :terminal, without_reset: %{v1_type: "rate_limit_error"}, recorded: %{status: 429, code: "upstream_rate_limited"}},
       flex_unavailable: %{code: "flex_unavailable", http_status: 429, terminal: true, failover: false, route_health: :neutral, http_x_should_retry: "false", quota_reset_synthesized: false},
       provider_retry_after: %{statuses: [429, :server_errors], formats: [:seconds, :http_date], capture: :before_rejection_drain, expired: :no_restarted_wait, precedence: :pool_reset_or_circuit},
+      native_websocket_retry_after: %{status: 429, header: "retry-after", formats: [:seconds, :http_date], max_value_bytes: 128, max_seconds: 18_446_744_073_709_551_615, selection: :valid_nested_else_outer, precedence: [:pool_reset, :circuit, :relayed_reset, :provider], canonical_error_path: ["response", "error", "headers"], pre_output_usage_limit_bridge: :http_retry_after, public_event_header_relay: false},
       circuit_retry_after: %{status: 503, header: "retry-after", seconds: :earliest_circuit_probe, clamp: {1, 60}, x_should_retry: :absent}
     },
     api_key_reasoning_availability: %{

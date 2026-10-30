@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketErrorHeaders
+
   defmodule TurnSnapshot do
     @moduledoc false
 
@@ -42,11 +44,23 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
       event
       |> sanitize_header_field()
       |> sanitize_response_headers()
+      |> preserve_terminal_retry_after(event)
 
     if sanitized == event, do: :unchanged, else: {:changed, sanitized}
   end
 
   def sanitize_websocket_event(_event), do: {:error, :invalid_event}
+
+  defp preserve_terminal_retry_after(sanitized, source) do
+    if Map.get(source, "status", Map.get(source, "status_code")) == 429 do
+      case WebsocketErrorHeaders.retry_after(source) do
+        nil -> sanitized
+        value -> Map.update(sanitized, "headers", %{"retry-after" => value}, &Map.put(&1, "retry-after", value))
+      end
+    else
+      sanitized
+    end
+  end
 
   # Public surfaces carry no native controls, so every provider event header
   # object is dropped whatever the event: the top-level `headers` and the

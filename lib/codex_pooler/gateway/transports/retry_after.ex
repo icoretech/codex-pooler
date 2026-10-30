@@ -21,14 +21,27 @@ defmodule CodexPooler.Gateway.Transports.RetryAfter do
     end
   end
 
+  @spec normalize(term()) :: String.t() | nil
+  def normalize(value), do: value |> parse_value(0) |> render(0)
+
   defp advice(%Req.Response{status: status} = response, now) when status == 429 or status in 500..599 do
     case Req.Response.get_header(response, "retry-after") do
-      [value | _rest] when is_binary(value) and byte_size(value) <= 128 -> parse(String.trim(value), now)
+      [value | _rest] when is_binary(value) -> parse_value(value, now)
       _other -> nil
     end
   end
 
   defp advice(_response, _now), do: nil
+
+  defp parse_value(value, now) when is_integer(value) and value >= 0 and value <= @max_delay_seconds,
+    do: {:deadline, now + value * 1_000}
+
+  defp parse_value(value, now) when is_binary(value) and byte_size(value) <= 128 do
+    if String.valid?(value) and not String.match?(value, ~r/[\x00-\x1f\x7f]/),
+      do: value |> String.trim(" ") |> parse(now)
+  end
+
+  defp parse_value(_value, _now), do: nil
 
   defp parse(value, now) do
     case Integer.parse(value) do
@@ -36,10 +49,16 @@ defmodule CodexPooler.Gateway.Transports.RetryAfter do
         if String.match?(value, ~r/\A[0-9]+\z/), do: {:deadline, now + seconds * 1_000}
 
       _other ->
-        case Req.Utils.parse_http_date(value) do
-          {:ok, _date} -> {:date, value}
-          {:error, _reason} -> nil
-        end
+        parse_date(value)
+    end
+  end
+
+  defp parse_date(value) do
+    with {:ok, date} <- Req.Utils.parse_http_date(value),
+         true <- Calendar.strftime(date, "%a, %d %b %Y %H:%M:%S GMT") == value do
+      {:date, value}
+    else
+      _invalid -> nil
     end
   end
 
