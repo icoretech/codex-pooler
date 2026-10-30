@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   use ExUnit.Case, async: false
 
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -11,6 +12,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -18,6 +20,92 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.RouteClass
 
   @assignment_id "00000000-0000-0000-0000-000000000001"
+
+  @tag :encrypted_startup
+  test "size recovery recognizes completed encrypted tool replay without granting account portability" do
+    endpoint = "/backend-api/codex/responses"
+    session = %CodexSession{id: Ecto.UUID.generate(), status: "active"}
+
+    for item <- encrypted_size_recovery_items() do
+      payload = %{"input" => [item]}
+      options = RequestOptions.build(%{codex_session: session}, endpoint, payload)
+      refute options.payload_context.portable_full_history?
+      assert RequestOptions.native_websocket_size_recovery_history?(options, payload)
+      refute RequestOptions.for_payload(options, endpoint, payload).payload_context.portable_full_history?
+      refute RequestOptions.retarget(options, endpoint, payload).payload_context.portable_full_history?
+
+      for blocked_session <- [nil, %{}, %CodexSession{}, %{session | pool_upstream_assignment_id: Ecto.UUID.generate()}, %{session | recreated_from_assignment_id: Ecto.UUID.generate()}, %{session | previous_window_assignment_id: Ecto.UUID.generate()}] do
+        blocked = RequestOptions.put_continuity(options, codex_session: blocked_session)
+        refute RequestOptions.native_websocket_size_recovery_history?(blocked, payload)
+      end
+
+      for constraint <- [%{"type" => "item_reference"}, %{"file_id" => "file_synthetic"}, %{"type" => "compaction_trigger"}, %{"type" => "unknown", "encrypted_content" => "synthetic"}] do
+        for input <- [[item, constraint], [Map.put(item, "extra", constraint)]] do
+          blocked = %{"input" => input}
+          refute RequestOptions.native_websocket_size_recovery_history?(RequestOptions.for_payload(options, endpoint, blocked), blocked)
+        end
+      end
+
+      for bad_cipher <- [nil, "", " ", 1, %{}] do
+        blocked = %{"input" => [Map.put(item, "encrypted_content", bad_cipher)]}
+        refute RequestOptions.native_websocket_size_recovery_history?(RequestOptions.for_payload(options, endpoint, blocked), blocked)
+      end
+
+      for changed <- [Map.put(item, "type", "unknown"), Map.put(item, "status", "in_progress")] do
+        blocked = %{"input" => [changed]}
+        refute RequestOptions.native_websocket_size_recovery_history?(RequestOptions.for_payload(options, endpoint, blocked), blocked)
+      end
+
+      assigned = options |> RequestOptions.put_continuity(codex_session: %{session | pool_upstream_assignment_id: @assignment_id}) |> RequestOptions.put_transport(upstream_websocket_session: self())
+      assert SessionContinuity.hard_pin_metadata(assigned, %Model{}) == %{"pin_mode" => "hard", "pin_reason" => "live_upstream_websocket"}
+      refute RequestOptions.native_websocket_size_recovery_history?(assigned, payload)
+
+      anchored = Map.put(payload, "previous_response_id", "resp_synthetic_anchor")
+      refute RequestOptions.native_websocket_size_recovery_history?(RequestOptions.for_payload(options, endpoint, anchored), anchored)
+    end
+  end
+
+  @tag :encrypted_startup
+  test "size recovery rejects incomplete or nested encrypted tool shapes" do
+    endpoint = "/backend-api/codex/responses"
+    session = %CodexSession{id: Ecto.UUID.generate(), status: "active"}
+
+    for item <- encrypted_size_recovery_items(), field <- encrypted_size_recovery_required_fields(item) do
+      for invalid <- [Map.delete(item, field), Map.put(item, field, 1), Map.put(item, "extra", %{"type" => "function_call", "name" => "synthetic", "call_id" => "call_synthetic", "arguments" => "{}", "status" => "completed", "encrypted_content" => "synthetic"})] do
+        payload = %{"input" => [invalid]}
+        options = RequestOptions.build(%{codex_session: session}, endpoint, payload)
+        refute RequestOptions.native_websocket_size_recovery_history?(options, payload)
+      end
+    end
+  end
+
+  @tag :encrypted_startup
+  test "size recovery requires complete nonblank search actions" do
+    endpoint = "/backend-api/codex/responses"
+    session = %CodexSession{id: Ecto.UUID.generate(), status: "active"}
+
+    for %{"type" => "web_search_call", "action" => action} = item <- encrypted_size_recovery_items(),
+        field <- Map.keys(action) -- ["queries"],
+        invalid <- [Map.delete(action, field), Map.put(action, field, " "), Map.put(action, field, nil)] do
+      payload = %{"input" => [Map.put(item, "action", invalid)]}
+      options = RequestOptions.build(%{codex_session: session}, endpoint, payload)
+      refute RequestOptions.native_websocket_size_recovery_history?(options, payload)
+    end
+  end
+
+  defp encrypted_size_recovery_items do
+    [
+      %{"type" => "function_call", "status" => "completed", "call_id" => "call_synthetic", "name" => "synthetic", "arguments" => "{}", "encrypted_content" => "synthetic-cipher"},
+      %{"type" => "custom_tool_call", "status" => "completed", "call_id" => "call_synthetic", "name" => "synthetic", "input" => "synthetic", "encrypted_content" => "synthetic-cipher"},
+      %{"type" => "web_search_call", "status" => "completed", "action" => %{"type" => "search", "query" => "synthetic", "queries" => ["synthetic"]}, "encrypted_content" => "synthetic-cipher"},
+      %{"type" => "web_search_call", "status" => "completed", "action" => %{"type" => "open_page", "url" => "https://example.com"}, "encrypted_content" => "synthetic-cipher"},
+      %{"type" => "web_search_call", "status" => "completed", "action" => %{"type" => "find_in_page", "url" => "https://example.com", "pattern" => "synthetic"}, "encrypted_content" => "synthetic-cipher"}
+    ]
+  end
+
+  defp encrypted_size_recovery_required_fields(%{"type" => "function_call"}), do: ["name", "call_id", "arguments", "status"]
+  defp encrypted_size_recovery_required_fields(%{"type" => "custom_tool_call"}), do: ["name", "call_id", "input", "status"]
+  defp encrypted_size_recovery_required_fields(%{"type" => "web_search_call"}), do: ["action", "status"]
 
   test "invalid carried native compaction admission returns an error during accounting and cleanup" do
     alias CodexPooler.Gateway.Payloads.RequestOptions.NativeCompactionAdmission, as: AdmissionContext

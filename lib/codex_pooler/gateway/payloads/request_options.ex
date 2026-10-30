@@ -277,6 +277,47 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     }
   end
 
+  @doc false
+  @spec native_websocket_size_recovery_history?(t(), map()) :: boolean()
+  def native_websocket_size_recovery_history?(%__MODULE__{payload_context: %{portable_full_history?: true}}, _payload), do: true
+
+  # This only permits the existing preclaim transport refusal. It does not
+  # make encrypted tool state portable between accounts or alter the payload.
+  def native_websocket_size_recovery_history?(
+        %__MODULE__{continuity: %{codex_session: %CodexSession{id: id, status: "active", pool_upstream_assignment_id: nil, recreated_from_assignment_id: nil, previous_window_assignment_id: nil}}},
+        %{"input" => input} = payload
+      )
+      when is_binary(id) and is_list(input) do
+    CompactionTrigger.compaction_input_mode(payload) == :full_history and
+      Enum.all?(input, &size_recovery_input?/1)
+  end
+
+  def native_websocket_size_recovery_history?(%__MODULE__{}, _payload), do: false
+
+  defp size_recovery_input?(%{"status" => "completed", "encrypted_content" => cipher} = item) when is_binary(cipher) do
+    if String.trim(cipher) != "" and completed_tool_replay?(item),
+      do: not upstream_bound_input?(Map.delete(item, "encrypted_content")),
+      else: not upstream_bound_input?(item)
+  end
+
+  defp size_recovery_input?(item), do: not upstream_bound_input?(item)
+
+  defp completed_tool_replay?(%{"type" => "function_call", "name" => name, "call_id" => call_id, "arguments" => arguments}) when is_binary(arguments),
+    do: nonblank_tool_field?(name) and nonblank_tool_field?(call_id)
+
+  defp completed_tool_replay?(%{"type" => "custom_tool_call", "name" => name, "call_id" => call_id, "input" => input}) when is_binary(input),
+    do: nonblank_tool_field?(name) and nonblank_tool_field?(call_id)
+
+  defp completed_tool_replay?(%{"type" => "web_search_call", "action" => action}), do: completed_search_action?(action)
+  defp completed_tool_replay?(_item), do: false
+
+  defp completed_search_action?(%{"type" => "search", "query" => query}), do: nonblank_tool_field?(query)
+  defp completed_search_action?(%{"type" => "open_page", "url" => url}), do: nonblank_tool_field?(url)
+  defp completed_search_action?(%{"type" => "find_in_page", "url" => url, "pattern" => pattern}), do: nonblank_tool_field?(url) and nonblank_tool_field?(pattern)
+  defp completed_search_action?(_action), do: false
+
+  defp nonblank_tool_field?(value), do: is_binary(value) and String.trim(value) != ""
+
   @spec retarget(t(), String.t(), map()) :: t()
   def retarget(%__MODULE__{} = options, endpoint, payload) when is_map(payload) do
     %{

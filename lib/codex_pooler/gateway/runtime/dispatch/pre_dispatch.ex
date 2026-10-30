@@ -241,7 +241,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp prepare_native_payloads(prepared, payload, model, endpoint, candidates) do
     options = prepared.request_options
 
-    if native_size_check?(payload, endpoint, options) and options.payload_context.portable_full_history? and is_nil(SessionContinuity.hard_pin_metadata(options, model)) do
+    if native_size_check?(payload, endpoint, options) and RequestOptions.native_websocket_size_recovery_history?(options, payload) and is_nil(SessionContinuity.hard_pin_metadata(options, model)) do
       candidates = Enum.uniq_by(candidates, fn {assignment, _identity} -> assignment.id end)
 
       case PreparedNativePayloads.prepare(payload, model, endpoint, options, candidates, 16_777_216) do

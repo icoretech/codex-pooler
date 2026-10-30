@@ -42,6 +42,38 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   @endpoint_path "/backend-api/codex/responses"
 
+  @tag :encrypted_startup
+  test "unassigned native startup sizes encrypted tool replay without changing portability" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    for item <- [
+          %{"type" => "function_call", "status" => "completed", "call_id" => "call_synthetic", "name" => "synthetic", "arguments" => "{}", "encrypted_content" => "synthetic-cipher"},
+          %{"type" => "custom_tool_call", "status" => "completed", "call_id" => "call_synthetic", "name" => "synthetic", "input" => "synthetic", "encrypted_content" => "synthetic-cipher"},
+          %{"type" => "web_search_call", "status" => "completed", "action" => %{"type" => "search", "query" => "synthetic"}, "encrypted_content" => "synthetic-cipher"}
+        ] do
+      payload = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic") ++ [item, %{"type" => "function_call_output", "call_id" => "call_synthetic", "output" => "synthetic"}]}
+      options = request_options(auth, payload, accepted_turn_state: Ecto.UUID.generate()) |> RequestOptions.for_websocket(payload)
+      refute options.payload_context.portable_full_history?
+      assert {:ok, small} = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+      assert %CodexSession{pool_upstream_assignment_id: nil} = small.request_options.continuity.codex_session
+      refute small.request_options.payload_context.portable_full_history?
+      [%{encoded: encoded}] = Map.values(small.prepared_native_payloads.variants)
+      assert CodexPooler.JSON.decode!(encoded)["input"] == payload["input"]
+      control = Map.update!(payload, "input", fn input -> Enum.map(input, &Map.delete(&1, "encrypted_content")) end)
+      assert {:ok, ordinary} = PreDispatch.prepare(auth, @endpoint_path, control, RequestOptions.for_payload(small.request_options, @endpoint_path, control), setup.model)
+      assert Enum.map(small.candidates, fn {assignment, _identity} -> assignment.id end) == Enum.map(ordinary.candidates, fn {assignment, _identity} -> assignment.id end)
+      payload = Map.put(payload, "instructions", String.duplicate("x", 16_777_217))
+      options = RequestOptions.for_payload(small.request_options, @endpoint_path, payload)
+      assert {:native_websocket_oversized, bytes, kept_options} = PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+      assert bytes > 16_777_216
+      refute kept_options.payload_context.portable_full_history?
+    end
+
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
   for offset <- [-1, 0, 1] do
     test "native preclaim preparation enforces exact normalized boundary #{offset}" do
       setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{})))

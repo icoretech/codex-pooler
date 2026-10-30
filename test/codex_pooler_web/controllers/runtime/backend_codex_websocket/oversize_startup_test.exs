@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [socket_transport_barrier!: 3]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [socket_transport_barrier!: 3, await_succeeded_pool_requests!: 2]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
@@ -16,10 +16,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
 
   @moduletag capture_log: true
 
-  for forwarding <- [false, true], shape <- [:tool_output, :images] do
+  for forwarding <- [false, true], shape <- [:tool_output, :images, :encrypted_tools] do
     @tag forwarding: forwarding, shape: shape
     test "oversized inherited unanchored tool history is refused before execution (#{shape}, owner forwarding #{forwarding})", %{forwarding: forwarding, shape: shape} do
       assert_oversize_preclaim!(forwarding, shape)
+    end
+  end
+
+  for forwarding <- [false, true] do
+    @tag :encrypted_tools
+    test "small encrypted tool history remains native websocket work (owner forwarding #{forwarding})" do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, unquote(forwarding))
+      upstream = start_upstream(FakeUpstream.sse_stream([{"response.completed", %{"type" => "response.completed", "response" => %{"status" => "completed", "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}}}}]))
+      setup = gateway_setup(upstream)
+      port = start_public_endpoint!()
+      window = Ecto.UUID.generate()
+      {conn, websocket, ref, _headers} = public_websocket_connect_with_request_headers!(port, setup, Ecto.UUID.generate(), "/backend-api/codex/responses", [{"x-codex-window-id", window}])
+      on_exit(fn -> Mint.HTTP.close(conn) end)
+      payload = %{"type" => "response.create", "model" => setup.model.exposed_model_id, "input" => Enum.take(inherited_input(:encrypted_tools), 5), "stream" => true}
+      refute RequestOptions.build(%{}, "/backend-api/codex/responses", payload).payload_context.portable_full_history?
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
+      {conn, _websocket, text} = public_websocket_receive_text!(conn, websocket, ref)
+      assert CodexPooler.JSON.decode!(text)["type"] == "response.completed"
+      [request] = await_succeeded_pool_requests!(setup.pool.id, 1)
+      assert request.transport == "websocket"
+      refute Map.has_key?(request.request_metadata, "native_websocket_size_recovery")
+      assert Repo.aggregate(Attempt, :count) == 1
+      assert Repo.aggregate(from(l in LedgerEntry, where: l.entry_kind == "settlement"), :count) == 1
+      [captured] = FakeUpstream.requests(upstream)
+      assert replay_digest(captured.json) == replay_digest(payload)
+      assert FakeUpstream.physical_counts(upstream).websocket_generation == 1
+      assert FakeUpstream.physical_counts(upstream).http_generation == 0
+      Mint.HTTP.close(conn)
     end
   end
 
@@ -42,10 +71,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
     }
 
     assert NativeTurnContinuation.turn_role(payload) == :tool_continuation
-    assert RequestOptions.build(%{}, "/backend-api/codex/responses", payload).payload_context.portable_full_history?
+    assert RequestOptions.build(%{}, "/backend-api/codex/responses", payload).payload_context.portable_full_history? == (shape != :encrypted_tools)
     expected_handoffs = Enum.filter(payload["input"], &(Map.get(&1, "type") == "agent_message"))
 
-    if shape == :images do
+    if shape in [:images, :encrypted_tools] do
       assert [handoff] = expected_handoffs
       assert ContinuityPayload.v2_encrypted_handoff?(handoff)
     end
@@ -71,6 +100,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
       assert captured.method == "POST"
       actual_handoffs = Enum.filter(captured.json["input"], &(Map.get(&1, "type") == "agent_message"))
       assert actual_handoffs == expected_handoffs
+      assert replay_digest(captured.json) == replay_digest(payload)
       assert NativeTurnContinuation.turn_role(captured.json) == :tool_continuation
       assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "succeeded"), :count) == 1
       served = Repo.one!(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "succeeded"))
@@ -214,6 +244,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
 
   defp inherited_input(:tool_output), do: [%{"type" => "function_call_output", "call_id" => "call_inherited", "output" => String.duplicate("x", 28 * 1024 * 1024)}]
 
+  defp inherited_input(:encrypted_tools) do
+    [
+      %{"type" => "function_call", "status" => "completed", "call_id" => "call_function", "name" => "example", "arguments" => "{}", "encrypted_content" => "synthetic-function-cipher"},
+      %{"type" => "function_call_output", "call_id" => "call_function", "output" => "synthetic function result"},
+      %{"type" => "custom_tool_call", "status" => "completed", "call_id" => "call_custom", "name" => "example_custom", "input" => "synthetic input", "encrypted_content" => "synthetic-custom-cipher"},
+      %{"type" => "custom_tool_call_output", "call_id" => "call_custom", "output" => "synthetic custom result"},
+      %{"type" => "web_search_call", "status" => "completed", "action" => %{"type" => "search", "query" => "synthetic"}, "encrypted_content" => "synthetic-search-cipher"}
+      | inherited_input(:images)
+    ]
+  end
+
   defp inherited_input(:images) do
     image = %{"type" => "input_image", "image_url" => "data:image/png;base64," <> String.duplicate("A", 512 * 1024)}
 
@@ -228,6 +269,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.OversizeStartupTest do
     }
 
     [%{"type" => "function_call_output", "call_id" => "call_inherited", "output" => "synthetic inherited tool result"}, %{"role" => "user", "content" => List.duplicate(image, 57)}, handoff]
+  end
+
+  defp replay_digest(payload) do
+    items = Enum.filter(payload["input"], &(Map.get(&1, "type") in ["function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "web_search_call"] or Map.get(&1, "role") == "user"))
+    :crypto.hash(:sha256, :erlang.term_to_binary(items))
   end
 
   defp receive_recovery_close!(conn, websocket, ref, texts, deadline \\ nil) do
