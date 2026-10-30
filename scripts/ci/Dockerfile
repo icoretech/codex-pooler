@@ -1,4 +1,4 @@
-FROM node:26.12.1-bookworm-slim AS node
+FROM node:26.13.0-bookworm-slim AS node
 FROM elixir:1.20.4-otp-29-slim
 
 ARG HELM_VERSION=v4.3.1
