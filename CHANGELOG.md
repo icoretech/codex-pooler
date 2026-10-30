@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.24](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.23...codex-pooler-v0.13.24) (2026-10-30)
+
+
+### Bug Fixes
+
+* **deps:** update Codex identity and catalog support to 0.166.0 ([13ad857](https://github.com/icoretech/codex-pooler/commit/13ad8579445d8635b003aa3b7c1b10d12e4466e2))
+* recover oversized native startups with encrypted tool replay ([fb89b09](https://github.com/icoretech/codex-pooler/commit/fb89b099cd5176f957af74ef0dd0d51e25dc7b67))
+
+
+### Dependencies
+
+* update dependency astro to v7.4.4 ([#516](https://github.com/icoretech/codex-pooler/issues/516)) ([c7e8f69](https://github.com/icoretech/codex-pooler/commit/c7e8f69c74dd9374e5091c3871dafbf043856460))
+* update dependency node to v26.13.0 ([#589](https://github.com/icoretech/codex-pooler/issues/589)) ([613301e](https://github.com/icoretech/codex-pooler/commit/613301ea0d38b15a0441ebda63365e3b4b5e3e5c))
+
 ## [0.13.23](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.22...codex-pooler-v0.13.23) (2026-10-29)
 
 
