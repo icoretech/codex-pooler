@@ -27,7 +27,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   @verified_since {0, 154, 0}
   # Advance only after released-binary and complete-tag decoder verification,
   # independently of the managed client version and runtime overrides.
-  @verified_through {0, 165, 0}
+  @verified_through {0, 166, 0}
 
   @i32_range -2_147_483_648..2_147_483_647
   @i64_range -9_223_372_036_854_775_808..9_223_372_036_854_775_807
