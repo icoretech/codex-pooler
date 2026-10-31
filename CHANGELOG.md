@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.14.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.0...codex-pooler-v0.14.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* allow account changes for completed collaboration history ([a78808a](https://github.com/icoretech/codex-pooler/commit/a78808a5b926484bdddc78cba9b000b9754d39e6))
+* bind reset verification and retire prior quota cycles ([fb5a882](https://github.com/icoretech/codex-pooler/commit/fb5a8820064967336b707a224667d5b4158358f3))
+
+
+### Dependencies
+
+* update ApexCharts to 8.7 ([ea77b65](https://github.com/icoretech/codex-pooler/commit/ea77b652df3effed30967ba81dd3c3b5d58cbc57))
+* update coding SDK contract dependencies ([0e38bc5](https://github.com/icoretech/codex-pooler/commit/0e38bc5fba8c5303439c6ee039a283f3bb019ce8))
+* update dependency @astrojs/starlight to v0.42.8 ([#593](https://github.com/icoretech/codex-pooler/issues/593)) ([dd6a1dd](https://github.com/icoretech/codex-pooler/commit/dd6a1dd0821b87e71d4b0fdee29f1cc3386779cd))
+* update documented Helm chart to 0.15.0 ([bc211fc](https://github.com/icoretech/codex-pooler/commit/bc211fca43abe16525cc0cdbdfcfa7c7e2f454e3))
+* update Elixir and active CI dependency tracking ([98183e0](https://github.com/icoretech/codex-pooler/commit/98183e0dfa607f196229b55a0fa9c63bfb73608f))
+* update Grafana SDK while preserving stat reductions ([783fb43](https://github.com/icoretech/codex-pooler/commit/783fb43a621483674b0929891a5841d48dbf8d05))
+* update Phoenix HTML and Sobelow ([42c8dc4](https://github.com/icoretech/codex-pooler/commit/42c8dc48bbd831552dabcbe831f8c6d90bb1dffd))
+
+
+### Tests
+
+* protect real settling tasks in socket termination fixtures ([00b75ce](https://github.com/icoretech/codex-pooler/commit/00b75cefcc1cc299745b86efa6772f0c8016c2d6))
+* retain normal owner deadlines in active drain recovery fixtures ([be55cfc](https://github.com/icoretech/codex-pooler/commit/be55cfc6eaf9177a8b682a4cf117a3f86d17264b))
+
 ## [0.14.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.24...codex-pooler-v0.14.0) (2026-10-31)
 
 
