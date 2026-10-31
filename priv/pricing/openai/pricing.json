@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-23T16:30:24.279646Z",
+  "generated_at": "2026-10-31T08:25:21.774807Z",
   "models": {
     "babbage-002": {
       "categories": [
@@ -2401,6 +2401,38 @@
         "per_1m_tokens"
       ]
     },
+    "gpt-6-astra-law": {
+      "categories": [
+        "legal"
+      ],
+      "category": "legal",
+      "context_pricing": {
+        "tiers": {
+          "standard": {
+            "provenance": {
+              "evidence_sha256": "cb9a2bceda85d106b5dedfd9975259b347653e62b6d5b755bba2371814494828",
+              "locator": "gpt-6-astra-law/standard/context"
+            },
+            "status": "uniform"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6-astra-law",
+      "prices": {
+        "standard": {
+          "default": {
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
     "gpt-6-luna": {
       "categories": [
         "language_model"
@@ -2504,6 +2536,55 @@
             "cached_input": 0.01,
             "input": 0.1,
             "output": 0.5
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6-rosalind": {
+      "categories": [
+        "life_sciences"
+      ],
+      "category": "life_sciences",
+      "context_pricing": {
+        "tiers": {
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6-rosalind/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6-rosalind",
+      "prices": {
+        "standard": {
+          "default": {
+            "cache_write_12h": 37.5,
+            "cache_write_30m": 18.75,
+            "cached_input": 1.5,
+            "input": 15.0,
+            "output": 75.0
+          },
+          "long_context": {
+            "cache_write_12h": 75.0,
+            "cache_write_30m": 37.5,
+            "cached_input": 3.0,
+            "input": 30.0,
+            "output": 112.5
+          },
+          "short_context": {
+            "cache_write_12h": 37.5,
+            "cache_write_30m": 18.75,
+            "cached_input": 1.5,
+            "input": 15.0,
+            "output": 75.0
           }
         }
       },
@@ -2765,6 +2846,117 @@
         "per_1m_tokens"
       ]
     },
+    "gpt-6.1-terra": {
+      "categories": [
+        "language_model"
+      ],
+      "category": "language_model",
+      "context_pricing": {
+        "tiers": {
+          "batch": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.1-terra/batch/context"
+            },
+            "status": "known"
+          },
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.1-terra/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.1-terra/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.1-terra",
+      "prices": {
+        "batch": {
+          "default": {
+            "cache_write_12h": 1.25,
+            "cache_write_30m": 0.625,
+            "cached_input": 0.025,
+            "input": 0.5,
+            "output": 2.5
+          },
+          "long_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 3.75
+          },
+          "short_context": {
+            "cache_write_12h": 1.25,
+            "cache_write_30m": 0.625,
+            "cached_input": 0.025,
+            "input": 0.5,
+            "output": 2.5
+          }
+        },
+        "fast": {
+          "default": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          },
+          "long_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "short_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
+          },
+          "long_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 7.5
+          },
+          "short_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
     "gpt-audio": {
       "categories": [
         "realtime_audio"
@@ -2826,41 +3018,6 @@
           "text": {
             "input": 0.6,
             "output": 2.4
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-image-1": {
-      "categories": [
-        "image_generation"
-      ],
-      "category": "image_generation",
-      "model": "gpt-image-1",
-      "prices": {
-        "batch": {
-          "image": {
-            "cached_input": 1.25,
-            "input": 5.0,
-            "output": 20.0
-          },
-          "text": {
-            "cached_input": 0.63,
-            "input": 2.5
-          }
-        },
-        "standard": {
-          "image": {
-            "cached_input": 2.5,
-            "input": 10.0,
-            "output": 40.0
-          },
-          "text": {
-            "cached_input": 1.25,
-            "input": 5.0
           }
         }
       },
@@ -3300,11 +3457,12 @@
       "context_pricing": {
         "tiers": {
           "standard": {
+            "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "03edb0d823984119bb1946ce70211ce40509b16123eb474708d5e38b6cdc26d3",
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-rosalind-discovery/standard/context"
             },
-            "status": "uniform"
+            "status": "known"
           }
         },
         "version": 1
@@ -3313,6 +3471,14 @@
       "prices": {
         "standard": {
           "default": {
+            "cached_input": 0.5,
+            "input": 5.0,
+            "output": 25.0
+          },
+          "long_context": {
+            "available": false
+          },
+          "short_context": {
             "cached_input": 0.5,
             "input": 5.0,
             "output": 25.0
@@ -3332,11 +3498,12 @@
       "context_pricing": {
         "tiers": {
           "standard": {
+            "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "03edb0d823984119bb1946ce70211ce40509b16123eb474708d5e38b6cdc26d3",
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-rosalind-research/standard/context"
             },
-            "status": "uniform"
+            "status": "known"
           }
         },
         "version": 1
@@ -3345,6 +3512,14 @@
       "prices": {
         "standard": {
           "default": {
+            "cached_input": 0.5,
+            "input": 5.0,
+            "output": 25.0
+          },
+          "long_context": {
+            "available": false
+          },
+          "short_context": {
             "cached_input": 0.5,
             "input": 5.0,
             "output": 25.0
@@ -3870,7 +4045,7 @@
       ]
     }
   },
-  "models_count": 83,
+  "models_count": 85,
   "schema_version": 2,
   "source": "openai_official_pricing_page",
   "source_url": "https://developers.openai.com/api/docs/pricing",
