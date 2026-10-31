@@ -12,7 +12,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPoolerWeb.Runtime.SettlementTransactionHold
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
+  alias Ecto.Adapters.SQL.Sandbox
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -1038,8 +1040,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     CodexPooler.TestDiagnostics.puts(Jason.encode!(%{scenario: "socket_disconnect_late_usage", status: Repo.get!(Request, reserved.request.id).status, attempt: reloaded_attempt.status, turn: Repo.get!(CodexTurn, turn.id).status, tokens: result.settlement.total_tokens, log_status: log.status, errors: Enum.map(log.errors, &Map.take(&1, [:source, :code]))}))
   end
 
-  test "websocket terminate lets a response task released during grace finish before interrupting" do
+  test "websocket terminate preserves a response task settling across its grace period" do
+    on_exit(fn -> Sandbox.mode(Repo, :manual) end)
+    Sandbox.mode(Repo, :auto)
+
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    register_unboxed_pool_cleanup!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "task-drain"})
@@ -1063,50 +1069,99 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
     assert {:ok, turn} = Gateway.start_codex_turn(session, reserved.request)
 
-    parent = self()
-    release_ref = make_ref()
+    registry = start_supervised!({ActivityRegistry, name: nil})
+    hold = SettlementTransactionHold.inside_transaction!()
+    test = self()
+    terminate_ref = make_ref()
 
-    {:ok, pid} =
+    # The same actor owns the task's result/ack mailbox and runs terminate/2,
+    # as a WebSock process does. Independent connections keep the real
+    # settlement transaction and concurrent disconnect cleanup separate.
+    {:ok, socket} =
       Task.start(fn ->
-        send(parent, {:task_drain_ready, self()})
+        {:ok, task} =
+          ResponseTask.start(
+            self(),
+            :proxy,
+            fn task ->
+              send(test, {:task_drain_ready, task})
+
+              receive do
+                {:settle, ^terminate_ref} -> :ok
+              end
+
+              result =
+                AttemptSettlement.finalize_success(
+                  reserved.request,
+                  attempt,
+                  %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
+                  %{response_status_code: 200}
+                )
+
+              send(test, {:task_drain_finalized, task, result})
+              :ok
+            end,
+            fn _task, _reason -> :ok end,
+            activity_registry: registry
+          )
+
+        send(test, {:task_drain_socket, self(), task})
 
         receive do
-          {:finish_during_task_drain, ^release_ref} -> :ok
+          {:terminate, ^terminate_ref} -> :ok
         end
 
-        AttemptSettlement.finalize_success(
-          reserved.request,
-          attempt,
-          %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
-          %{response_status_code: 200}
-        )
+        result =
+          CodexResponsesSocket.terminate(:closed, %{
+            tasks: MapSet.new([task]),
+            codex_session: session,
+            response_task_activity_registry: registry,
+            opts: %{
+              reason: "client_disconnected",
+              request_id: reserved.request.correlation_id,
+              reconnect_window_seconds: 300
+            }
+          })
 
-        send(parent, {:task_drain_finalized, self()})
-        send(parent, {:codex_response_done, self(), :ok})
+        send(test, {:task_drain_socket_stopped, self(), result})
       end)
 
+    on_exit(fn -> stop_task_drain_socket!(socket, terminate_ref) end)
+    assert_receive {:task_drain_socket, ^socket, pid}, @detection_timeout_ms
+    task_monitor = Process.monitor(pid)
+    socket_monitor = Process.monitor(socket)
+    on_exit(fn -> SettlementTransactionHold.release(hold, pid) end)
     assert_receive {:task_drain_ready, ^pid}, @detection_timeout_ms
 
-    terminator =
-      Task.async(fn ->
-        CodexResponsesSocket.terminate(:closed, %{
-          tasks: MapSet.new([pid]),
-          codex_session: session,
-          opts: %{
-            reason: "client_disconnected",
-            request_id: reserved.request.correlation_id,
-            reconnect_window_seconds: 300
-          }
-        })
-      end)
+    send(pid, {:settle, terminate_ref})
+    assert {^pid, %{backend: backend}} = SettlementTransactionHold.await_held!(hold)
+    assert is_integer(backend)
 
-    assert Task.yield(terminator, 25) == nil
+    # Observe the actual cancellation boundary, rather than assume a 25 ms
+    # yield put terminate/2 inside its 250 ms grace. SQL remains uncommitted
+    # until the socket has passed cancellation of abandoned tasks.
+    watch_task_drain_cleanup!(socket)
+    Code.ensure_loaded!(CodexResponsesSocket)
+    trace = {CodexResponsesSocket, :cancel_abandoned_response_tasks, 2}
+    on_exit(fn -> :erlang.trace_pattern(trace, false, [:local]) end)
+    assert :erlang.trace_pattern(trace, [{:_, [], [{:return_trace}]}], [:local]) == 1
+    assert :erlang.trace(socket, true, [:call, {:tracer, self()}]) == 1
+    send(socket, {:terminate, terminate_ref})
+
+    assert_receive {:trace, ^socket, :return_from, ^trace, :ok}, @detection_timeout_ms
+    :erlang.trace(socket, false, [:call])
+    :erlang.trace_pattern(trace, false, [:local])
     assert Process.alive?(pid)
+    assert {:settling, deadline} = ActivityRegistry.cancel_unless_settling(pid, :websocket_terminated, name: registry)
+    assert deadline > System.monotonic_time(:millisecond)
 
-    send(pid, {:finish_during_task_drain, release_ref})
-
-    assert_receive {:task_drain_finalized, ^pid}, @detection_timeout_ms
-    assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
+    SettlementTransactionHold.release(hold, pid)
+    assert_receive {:task_drain_finalized, ^pid, {:ok, _result}}, @detection_timeout_ms
+    assert_receive {:task_drain_socket_stopped, ^socket, :ok}, @connection_shutdown_timeout_ms
+    assert_receive {:DOWN, ^task_monitor, :process, ^pid, :normal}, @detection_timeout_ms
+    assert_receive {:DOWN, ^socket_monitor, :process, ^socket, :normal}, @detection_timeout_ms
+    assert ActivityRegistry.activities(name: registry) == []
+    assert_receive {:task_drain_cleanup_finished, ^socket}, @detection_timeout_ms
 
     assert Repo.get!(CodexTurn, turn.id).status == "succeeded"
     assert Repo.get!(CodexTurn, turn.id).error_code == nil
@@ -1277,6 +1332,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     assert_receive {:DOWN, ^task_monitor, :process, ^task, {:shutdown, :websocket_terminated}}
 
     assert_receive ^unrelated
+  end
+
+  defp watch_task_drain_cleanup!(socket) do
+    handler_id = {__MODULE__, make_ref()}
+    test = self()
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.caller == socket, do: send(test, {:task_drain_cleanup_finished, socket})
+        end,
+        nil
+      )
+  end
+
+  defp stop_task_drain_socket!(socket, terminate_ref) do
+    monitor = Process.monitor(socket)
+    send(socket, {:terminate, terminate_ref})
+
+    receive do
+      {:DOWN, ^monitor, :process, ^socket, _reason} -> :ok
+    after
+      @connection_shutdown_timeout_ms ->
+        Process.exit(socket, :kill)
+        assert_receive {:DOWN, ^monitor, :process, ^socket, _reason}, @detection_timeout_ms
+    end
   end
 
   # Drives the socket-side bookkeeping a live WebSock process would receive
