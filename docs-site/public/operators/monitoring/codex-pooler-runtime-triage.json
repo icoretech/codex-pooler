@@ -27,7 +27,7 @@
   "editable": true,
   "graphTooltip": 1,
   "fiscalYearStartMonth": 0,
-  "schemaVersion": 41,
+  "schemaVersion": 42,
   "templating": {
     "list": [
       {
@@ -103,22 +103,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Websocket Control Path Failure Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Observed websocket callback failures and deferred cleanup, including initialization before request reservation. These are server observations, not proof of a TCP reset or a delivered close frame. Investigate any sustained database_error or process_exit increase; cleanup_deferred means supervised cleanup outlived the socket's close budget.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -134,10 +118,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Websocket Control Path Failure Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Observed websocket callback failures and deferred cleanup, including initialization before request reservation. These are server observations, not proof of a TCP reset or a delivered close frame. Investigate any sustained database_error or process_exit increase; cleanup_deferred means supervised cleanup outlived the socket's close budget.",
       "targets": [
         {
           "expr": "sum by (phase, reason) (rate(codex_pooler_gateway_websocket_control_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{phase}} {{reason}}",
           "range": true,
           "instant": false,
@@ -168,6 +167,22 @@
       "type": "stat",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "percentChangeColorMode": "standard",
+        "orientation": "auto"
+      },
       "title": "Scraped App Pods",
       "datasource": {
         "type": "prometheus",
@@ -182,7 +197,6 @@
       "targets": [
         {
           "expr": "sum(up{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "scraped pods",
           "range": true,
           "instant": false,
@@ -200,6 +214,22 @@
       "type": "stat",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "percentChangeColorMode": "standard",
+        "orientation": "auto"
+      },
       "title": "Max Pod Memory / Limit",
       "datasource": {
         "type": "prometheus",
@@ -214,7 +244,6 @@
       "targets": [
         {
           "expr": "max((max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}) / max by (pod) (kube_pod_container_resource_limits{cluster=\"$cluster\", namespace=\"$namespace\", pod=~\"${pod:regex}\", resource=\"memory\", exported_container=\"app\"})))",
-          "refId": "",
           "legendFormat": "max pod usage / limit",
           "range": true,
           "instant": false,
@@ -232,6 +261,22 @@
       "type": "stat",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "percentChangeColorMode": "standard",
+        "orientation": "auto"
+      },
       "title": "Restarts In 30m",
       "datasource": {
         "type": "prometheus",
@@ -246,7 +291,6 @@
       "targets": [
         {
           "expr": "sum(increase(kube_pod_container_status_restarts_total{cluster=\"$cluster\", namespace=\"$namespace\", pod=~\"${pod:regex}\", exported_container=\"app\"}[30m]))",
-          "refId": "",
           "legendFormat": "restarts",
           "range": true,
           "instant": false,
@@ -264,6 +308,22 @@
       "type": "stat",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "percentChangeColorMode": "standard",
+        "orientation": "auto"
+      },
       "title": "OOM Events In 30m",
       "datasource": {
         "type": "prometheus",
@@ -278,7 +338,6 @@
       "targets": [
         {
           "expr": "sum by () (max by (pod, name) (increase(container_oom_events_total{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\"}[30m])))",
-          "refId": "",
           "legendFormat": "oom events",
           "range": true,
           "instant": false,
@@ -296,6 +355,22 @@
       "type": "stat",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "percentChangeColorMode": "standard",
+        "orientation": "auto"
+      },
       "title": "BEAM Binary Share",
       "datasource": {
         "type": "prometheus",
@@ -310,7 +385,6 @@
       "targets": [
         {
           "expr": "max(vm_memory_binary_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"} / vm_memory_total_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "binary / total",
           "range": true,
           "instant": false,
@@ -341,21 +415,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Container Working Set vs Limit",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -371,10 +430,24 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "Container Working Set vs Limit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "expr": "max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"})",
-          "refId": "",
           "legendFormat": "{{pod}} working set",
           "range": true,
           "instant": false,
@@ -382,7 +455,6 @@
         },
         {
           "expr": "max by (pod) (kube_pod_container_resource_limits{cluster=\"$cluster\", namespace=\"$namespace\", pod=~\"${pod:regex}\", resource=\"memory\", exported_container=\"app\"})",
-          "refId": "",
           "legendFormat": "{{pod}} limit",
           "range": true,
           "instant": false,
@@ -400,21 +472,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "BEAM Memory Breakdown",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -430,10 +487,24 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "BEAM Memory Breakdown",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "expr": "vm_memory_total_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} total",
           "range": true,
           "instant": false,
@@ -441,7 +512,6 @@
         },
         {
           "expr": "vm_memory_processes_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} processes",
           "range": true,
           "instant": false,
@@ -449,7 +519,6 @@
         },
         {
           "expr": "vm_memory_binary_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} binary",
           "range": true,
           "instant": false,
@@ -457,7 +526,6 @@
         },
         {
           "expr": "vm_memory_ets_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} ets",
           "range": true,
           "instant": false,
@@ -465,7 +533,6 @@
         },
         {
           "expr": "vm_memory_code_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} code",
           "range": true,
           "instant": false,
@@ -473,7 +540,6 @@
         },
         {
           "expr": "vm_memory_atom_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} atom",
           "range": true,
           "instant": false,
@@ -481,7 +547,6 @@
         },
         {
           "expr": "vm_memory_atom_used_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} atom used",
           "range": true,
           "instant": false,
@@ -489,7 +554,6 @@
         },
         {
           "expr": "vm_memory_system_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} system",
           "range": true,
           "instant": false,
@@ -507,21 +571,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "BEAM Process and Port Counts",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -537,10 +586,24 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "BEAM Process and Port Counts",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "expr": "vm_system_counts_process_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} processes",
           "range": true,
           "instant": false,
@@ -548,7 +611,6 @@
         },
         {
           "expr": "vm_system_counts_port_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} ports",
           "range": true,
           "instant": false,
@@ -566,22 +628,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "BEAM Run Queue",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Total, CPU, and IO scheduler queues. Sudden growth usually means the VM is saturated or blocked on external work.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -597,10 +643,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "title": "BEAM Run Queue",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Total, CPU, and IO scheduler queues. Sudden growth usually means the VM is saturated or blocked on external work.",
       "targets": [
         {
           "expr": "vm_total_run_queue_lengths_total{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} total",
           "range": true,
           "instant": false,
@@ -608,7 +669,6 @@
         },
         {
           "expr": "vm_total_run_queue_lengths_cpu{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} cpu",
           "range": true,
           "instant": false,
@@ -616,7 +676,6 @@
         },
         {
           "expr": "vm_total_run_queue_lengths_io{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} io",
           "range": true,
           "instant": false,
@@ -634,22 +693,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Cgroup Minus BEAM",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Container working set not accounted for by BEAM total memory. Use this to separate BEAM heap/binary growth from native allocator, libc, NIF, or cgroup accounting pressure.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -665,10 +708,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "Cgroup Minus BEAM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Container working set not accounted for by BEAM total memory. Use this to separate BEAM heap/binary growth from native allocator, libc, NIF, or cgroup accounting pressure.",
       "targets": [
         {
           "expr": "clamp_min(max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}) - on (pod) max by (pod) (vm_memory_total_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}), 0)",
-          "refId": "",
           "legendFormat": "{{pod}} cgroup - beam",
           "range": true,
           "instant": false,
@@ -686,22 +744,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Container RSS / Cache",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Cgroup memory categories from cAdvisor. RSS rising with flat BEAM memory points outside normal BEAM heap attribution.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -717,10 +759,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "Container RSS / Cache",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Cgroup memory categories from cAdvisor. RSS rising with flat BEAM memory points outside normal BEAM heap attribution.",
       "targets": [
         {
           "expr": "max by (pod) (container_memory_rss{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"})",
-          "refId": "",
           "legendFormat": "{{pod}} rss",
           "range": true,
           "instant": false,
@@ -728,7 +785,6 @@
         },
         {
           "expr": "max by (pod) (container_memory_cache{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"})",
-          "refId": "",
           "legendFormat": "{{pod}} cache",
           "range": true,
           "instant": false,
@@ -736,7 +792,6 @@
         },
         {
           "expr": "max by (pod) (container_memory_mapped_file{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"})",
-          "refId": "",
           "legendFormat": "{{pod}} mapped file",
           "range": true,
           "instant": false,
@@ -754,22 +809,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "CPU Throttling Ratio",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "CPU throttling can stretch request lifetimes and queues, increasing memory retained by in-flight requests.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -785,10 +824,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "title": "CPU Throttling Ratio",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "CPU throttling can stretch request lifetimes and queues, increasing memory retained by in-flight requests.",
       "targets": [
         {
           "expr": "sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}[$__rate_interval])) / clamp_min(sum by (pod) (rate(container_cpu_cfs_periods_total{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}[$__rate_interval])), 0.001)",
-          "refId": "",
           "legendFormat": "{{pod}} throttled",
           "range": true,
           "instant": false,
@@ -806,22 +860,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Workload Memory by Component",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "App, worker, and scheduler cgroup memory in one view. App Prometheus metrics are scraped from the app service; worker/scheduler visibility here comes from Kubernetes cgroup metrics.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -837,10 +875,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "Workload Memory by Component",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "App, worker, and scheduler cgroup memory in one view. App Prometheus metrics are scraped from the app service; worker/scheduler visibility here comes from Kubernetes cgroup metrics.",
       "targets": [
         {
           "expr": "max by (pod, container) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"codex-pooler-(app|oban-worker|oban-scheduler).*\", container=~\"app|oban-worker|oban-scheduler\", image!=\"\"})",
-          "refId": "",
           "legendFormat": "{{pod}} {{container}}",
           "range": true,
           "instant": false,
@@ -858,22 +911,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "CPU Usage",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "App container CPU usage in cores. Correlate CPU spikes with request rate, DB query pressure, run queue, and admission queueing.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "cores",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -889,10 +926,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "cores"
+        },
+        "overrides": []
+      },
+      "title": "CPU Usage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "App container CPU usage in cores. Correlate CPU spikes with request rate, DB query pressure, run queue, and admission queueing.",
       "targets": [
         {
           "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}} cpu",
           "range": true,
           "instant": false,
@@ -923,22 +975,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Request Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "All HTTP requests observed by Phoenix endpoint instrumentation, including /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic. Successful and failed HTTP responses contribute; this is not a count of successful gateway turns.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -954,10 +990,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "title": "Request Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "All HTTP requests observed by Phoenix endpoint instrumentation, including /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic. Successful and failed HTTP responses contribute; this is not a count of successful gateway turns.",
       "targets": [
         {
           "expr": "sum by (pod) (rate(phoenix_endpoint_stop_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}}",
           "range": true,
           "instant": false,
@@ -975,19 +1026,28 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Lifecycle Authorization Query Attribution",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
       },
-      "description": "Websocket lifecycle authorization outcomes and duration by delivery operation. Use this with Repo Query Rate, Hot Query Sources, visibility/finalization outcomes, recovery evidence, and bounded pg_stat_statements or sampler snapshots to separate lifecycle SQL from admin pages, recovery pollers, and probes. The event is emitted by websocket serving nodes; OBAN_MODE=worker and scheduler do not run websocket delivery or the Prometheus reporter, so they are not expected to contribute here.",
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
           "custom": {
             "fillOpacity": 8,
             "showPoints": "never"
-          }
+          },
+          "unit": "ops"
         },
         "overrides": [
           {
@@ -1004,25 +1064,15 @@
           }
         ]
       },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "asc"
-        }
+      "title": "Lifecycle Authorization Query Attribution",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
       },
+      "description": "Websocket lifecycle authorization outcomes and duration by delivery operation. Use this with Repo Query Rate, Hot Query Sources, visibility/finalization outcomes, recovery evidence, and bounded pg_stat_statements or sampler snapshots to separate lifecycle SQL from admin pages, recovery pollers, and probes. The event is emitted by websocket serving nodes; OBAN_MODE=worker and scheduler do not run websocket delivery or the Prometheus reporter, so they are not expected to contribute here.",
       "targets": [
         {
           "expr": "sum by (operation, outcome) (rate(codex_pooler_gateway_lifecycle_authorization_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{operation}} {{outcome}}",
           "range": true,
           "instant": false,
@@ -1030,7 +1080,6 @@
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, operation, outcome) (rate(codex_pooler_gateway_lifecycle_authorization_duration_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{operation}} {{outcome}} p95",
           "range": true,
           "instant": false,
@@ -1048,22 +1097,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Endpoint Duration p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "p95 duration of all HTTP requests observed by Phoenix endpoint instrumentation, including /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic. Probes and scrapes can dominate a low-traffic pod's sample population; this is not gateway-only latency. Histogram quantiles are interpolated estimates with a 300 s top finite bucket; a quantile in +Inf is reported as 300 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1079,10 +1112,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Endpoint Duration p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p95 duration of all HTTP requests observed by Phoenix endpoint instrumentation, including /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic. Probes and scrapes can dominate a low-traffic pod's sample population; this is not gateway-only latency. Histogram quantiles are interpolated estimates with a 300 s top finite bucket; a quantile in +Inf is reported as 300 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, pod) (rate(phoenix_endpoint_stop_duration_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{pod}} p95",
           "range": true,
           "instant": false,
@@ -1100,22 +1148,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Slowest Routes p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Top matched routes with router-dispatch stop observations by p95 latency, including /healthz and /readyz probes and /metrics scrapes when enabled. These route series exclude unmatched endpoint requests and differ from endpoint totals. The active-route filter avoids stale NaN/empty legend rows when a route has no observations in the current interval. Histogram quantiles are interpolated estimates with a 300 s top finite bucket; a quantile in +Inf is reported as 300 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1131,10 +1163,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Slowest Routes p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Top matched routes with router-dispatch stop observations by p95 latency, including /healthz and /readyz probes and /metrics scrapes when enabled. These route series exclude unmatched endpoint requests and differ from endpoint totals. The active-route filter avoids stale NaN/empty legend rows when a route has no observations in the current interval. Histogram quantiles are interpolated estimates with a 300 s top finite bucket; a quantile in +Inf is reported as 300 s even when observations are longer.",
       "targets": [
         {
           "expr": "topk(8, histogram_quantile(0.95, sum by (le, route) (rate(phoenix_router_dispatch_stop_duration_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))) and on (route) (sum by (route) (rate(phoenix_router_dispatch_stop_duration_seconds_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])) > 0))",
-          "refId": "",
           "legendFormat": "{{route}} p95",
           "range": true,
           "instant": false,
@@ -1152,22 +1199,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Stream Buffer Release Events",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Oversized incomplete-buffer events and retained-body first crossing events. A retained body emits once when an append first exceeds 65,536 bytes, including an exact-limit body followed by overflow; later growth does not emit again.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1183,10 +1214,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Stream Buffer Release Events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Oversized incomplete-buffer events and retained-body first crossing events. A retained body emits once when an append first exceeds 65,536 bytes, including an exact-limit body followed by overflow; later growth does not emit again.",
       "targets": [
         {
           "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_oversized_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "oversized {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
           "instant": false,
@@ -1194,7 +1240,6 @@
         },
         {
           "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_truncated_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "first crossing {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
           "instant": false,
@@ -1212,22 +1257,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Stream Buffer Size p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Interpolated p95 of two distinct observations: retained bytes including the append at the first crossing of 65,536 bytes, once per body, and oversized incomplete-buffer bytes. First-crossing size depends on chunking; it is not total stream size, peak memory or current suffix size. Truncated observations remain raw, with a 2 MiB top finite bucket; a quantile in +Inf reports 2 MiB even when crossings are larger. Oversized histogram measurements saturate at 128 MiB; the raw oversized telemetry event is unchanged. Neither percentile is an upper bound on actual sizes.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1243,10 +1272,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "title": "Stream Buffer Size p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Interpolated p95 of two distinct observations: retained bytes including the append at the first crossing of 65,536 bytes, once per body, and oversized incomplete-buffer bytes. First-crossing size depends on chunking; it is not total stream size, peak memory or current suffix size. Truncated observations remain raw, with a 2 MiB top finite bucket; a quantile in +Inf reports 2 MiB even when crossings are larger. Oversized histogram measurements saturate at 128 MiB; the raw oversized telemetry event is unchanged. Neither percentile is an upper bound on actual sizes.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_oversized_bytes_bucket{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "oversized p95 {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
           "instant": false,
@@ -1254,7 +1298,6 @@
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_truncated_bytes_bucket{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "first crossing p95 {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
           "instant": false,
@@ -1272,22 +1315,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "HTTP Route Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Low-cardinality request rate by route, method, and status class. Use this to separate route-specific traffic growth from error storms.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1303,10 +1330,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "title": "HTTP Route Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Low-cardinality request rate by route, method, and status class. Use this to separate route-specific traffic growth from error storms.",
       "targets": [
         {
           "expr": "sum by (route, method, status_class) (rate(codex_pooler_http_route_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{route}} {{method}} {{status_class}}",
           "range": true,
           "instant": false,
@@ -1324,22 +1366,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admission Events",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Local gateway bulkhead pressure by route class and transport. Queue/reject/timeout spikes show admission backpressure before memory climbs.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1355,10 +1381,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Admission Events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Local gateway bulkhead pressure by route class and transport. Queue/reject/timeout spikes show admission backpressure before memory climbs.",
       "targets": [
         {
           "expr": "sum by (route_class, transport) (rate(codex_pooler_gateway_admission_accepted_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "accepted {{route_class}} {{transport}}",
           "range": true,
           "instant": false,
@@ -1366,7 +1407,6 @@
         },
         {
           "expr": "sum by (route_class, transport) (rate(codex_pooler_gateway_admission_enqueued_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "enqueued {{route_class}} {{transport}}",
           "range": true,
           "instant": false,
@@ -1374,7 +1414,6 @@
         },
         {
           "expr": "sum by (route_class, transport) (rate(codex_pooler_gateway_admission_dequeued_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "dequeued {{route_class}} {{transport}}",
           "range": true,
           "instant": false,
@@ -1382,7 +1421,6 @@
         },
         {
           "expr": "sum by (route_class, transport) (rate(codex_pooler_gateway_admission_rejected_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "rejected {{route_class}} {{transport}}",
           "range": true,
           "instant": false,
@@ -1390,7 +1428,6 @@
         },
         {
           "expr": "sum by (route_class, transport) (rate(codex_pooler_gateway_admission_timeout_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "timeout {{route_class}} {{transport}}",
           "range": true,
           "instant": false,
@@ -1408,22 +1445,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admission Queue Time p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Time requests spent waiting in local admission queues before execution or timeout. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1439,10 +1460,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Admission Queue Time p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Time requests spent waiting in local admission queues before execution or timeout. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, route_class, transport) (rate(codex_pooler_gateway_admission_dequeued_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "dequeued {{route_class}} {{transport}} p95",
           "range": true,
           "instant": false,
@@ -1450,7 +1486,6 @@
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, route_class, transport) (rate(codex_pooler_gateway_admission_timeout_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "timeout {{route_class}} {{transport}} p95",
           "range": true,
           "instant": false,
@@ -1468,22 +1503,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admission Saturation",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Current per-pod local admission state. Sum only after selecting the pods you mean to inspect: each app pod reports its own running and queued work by route class.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1499,10 +1518,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Admission Saturation",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Current per-pod local admission state. Sum only after selecting the pods you mean to inspect: each app pod reports its own running and queued work by route class.",
       "targets": [
         {
           "expr": "codex_pooler_gateway_admission_running{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} {{route_class}} running",
           "range": true,
           "instant": false,
@@ -1510,7 +1544,6 @@
         },
         {
           "expr": "codex_pooler_gateway_admission_queued{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
-          "refId": "",
           "legendFormat": "{{pod}} {{route_class}} queued",
           "range": true,
           "instant": false,
@@ -1541,22 +1574,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Repo Query Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1572,10 +1589,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Repo Query Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
       "targets": [
         {
           "expr": "sum by (pod) (rate(codex_pooler_repo_query_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}}",
           "range": true,
           "instant": false,
@@ -1593,22 +1625,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Queries / Request",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Repository queries divided by all HTTP requests observed by Phoenix endpoint instrumentation. The denominator includes /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic, so this is not queries per gateway turn. Probes and scrapes can also issue repository queries. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1624,10 +1640,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Queries / Request",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Repository queries divided by all HTTP requests observed by Phoenix endpoint instrumentation. The denominator includes /healthz and /readyz probes, /metrics scrapes when enabled, and unmatched endpoint traffic, so this is not queries per gateway turn. Probes and scrapes can also issue repository queries. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
       "targets": [
         {
           "expr": "sum by (pod) (rate(codex_pooler_repo_query_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])) / clamp_min(sum by (pod) (rate(phoenix_endpoint_stop_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])), 0.001)",
-          "refId": "",
           "legendFormat": "{{pod}}",
           "range": true,
           "instant": false,
@@ -1645,22 +1676,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Hot Query Sources",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Top Ecto query sources by safe source and SQL command. Source falls back to a sanitized table identifier for raw SQL when available. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1676,10 +1691,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Hot Query Sources",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Top Ecto query sources by safe source and SQL command. Source falls back to a sanitized table identifier for raw SQL when available. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
       "targets": [
         {
           "expr": "topk(10, sum by (source, command) (rate(codex_pooler_repo_query_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{command}}",
           "range": true,
           "instant": false,
@@ -1697,22 +1727,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Repo Total Time p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1728,10 +1742,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Repo Total Time p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, command) (rate(codex_pooler_repo_query_total_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{command}} p95",
           "range": true,
           "instant": false,
@@ -1749,22 +1778,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "DB Execution Time p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1780,10 +1793,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "DB Execution Time p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, command) (rate(codex_pooler_repo_query_query_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{command}} p95",
           "range": true,
           "instant": false,
@@ -1801,22 +1829,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "DB Queue Time p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1832,10 +1844,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "DB Queue Time p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, pod) (rate(codex_pooler_repo_query_queue_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{pod}} p95",
           "range": true,
           "instant": false,
@@ -1853,22 +1880,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Unknown Query Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Source-less queries that could not be mapped to a safe Ecto source or table identifier. Use this to spot unclassified raw SQL or telemetry source-attribution gaps. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1884,10 +1895,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Unknown Query Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Source-less queries that could not be mapped to a safe Ecto source or table identifier. Use this to spot unclassified raw SQL or telemetry source-attribution gaps. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
       "targets": [
         {
           "expr": "sum by (pod, command) (rate(codex_pooler_repo_query_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", source=\"unknown\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}} {{command}}",
           "range": true,
           "instant": false,
@@ -1905,22 +1931,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Query Command Mix",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "SQL command mix across repository queries. Useful for spotting unexpected write or transaction churn during incidents. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1936,10 +1946,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Query Command Mix",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "SQL command mix across repository queries. Useful for spotting unexpected write or transaction churn during incidents. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries.",
       "targets": [
         {
           "expr": "sum by (command) (rate(codex_pooler_repo_query_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{command}}",
           "range": true,
           "instant": false,
@@ -1957,22 +1982,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Repo Queue Time by Source p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Database connection checkout pressure by safe source and command. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -1988,10 +1997,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Repo Queue Time by Source p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Database connection checkout pressure by safe source and command. Split-role coverage: OBAN_MODE=web includes only queries on scraped web pods; OBAN_MODE=worker and scheduler run no Prometheus reporter, so their query activity is omitted. OBAN_MODE=all includes co-located job queries. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, command) (rate(codex_pooler_repo_query_queue_time_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{command}} p95",
           "range": true,
           "instant": false,
@@ -2022,21 +2046,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Restarts and OOM Events",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2052,10 +2061,24 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Restarts and OOM Events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{cluster=\"$cluster\", namespace=\"$namespace\", pod=~\"${pod:regex}\", exported_container=\"app\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}} restarts",
           "range": true,
           "instant": false,
@@ -2063,7 +2086,6 @@
         },
         {
           "expr": "sum by (pod) (max by (pod, name) (increase(container_oom_events_total{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{pod}} oom events",
           "range": true,
           "instant": false,
@@ -2081,22 +2103,36 @@
       "type": "table",
       "transparent": false,
       "repeatDirection": "h",
+      "options": {
+        "frameIndex": 0,
+        "showHeader": true,
+        "showTypeIcons": false,
+        "footer": {
+          "show": false,
+          "reducer": [],
+          "countRows": false
+        },
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "inspect": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "title": "Current Pods Last Terminated Reason",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
       "description": "Current kube-state-metrics lastState.terminated reason for live pods only. Deleted pod history is covered by restart and OOM panels, not this table.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
       "targets": [
         {
           "expr": "kube_pod_container_status_last_terminated_reason{cluster=\"$cluster\", namespace=\"$namespace\", pod=~\"${pod:regex}\", exported_container=\"app\"} == 1",
-          "refId": "",
           "legendFormat": "{{pod}} {{reason}}",
           "range": true,
           "instant": false,
@@ -2127,22 +2163,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admin Stats Reload Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Admin stats LiveView reload scheduling, coalescing, cancellation, and execution rate by window and scope. Coalesced spikes mean a page is already waiting on one debounced reload.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2158,10 +2178,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Admin Stats Reload Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Admin stats LiveView reload scheduling, coalescing, cancellation, and execution rate by window and scope. Coalesced spikes mean a page is already waiting on one debounced reload.",
       "targets": [
         {
           "expr": "sum by (stage, window, scope) (rate(codex_pooler_admin_stats_reload_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{stage}} {{window}} {{scope}}",
           "range": true,
           "instant": false,
@@ -2179,22 +2214,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admin Stats Dashboard Build Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Full admin stats dashboard builds by outcome, selected time window, and scope. This shows the reload work that can drive read-model DB pressure from open admin pages.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2210,10 +2229,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Admin Stats Dashboard Build Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Full admin stats dashboard builds by outcome, selected time window, and scope. This shows the reload work that can drive read-model DB pressure from open admin pages.",
       "targets": [
         {
           "expr": "sum by (outcome, window, scope) (rate(codex_pooler_admin_stats_dashboard_build_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{outcome}} {{window}} {{scope}}",
           "range": true,
           "instant": false,
@@ -2231,22 +2265,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admin Stats Dashboard Build p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "p95 duration for full admin stats dashboard builds. Pair spikes here with hot query source and DB queue panels to identify expensive stats reload paths. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2262,10 +2280,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Admin Stats Dashboard Build p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p95 duration for full admin stats dashboard builds. Pair spikes here with hot query source and DB queue panels to identify expensive stats reload paths. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, outcome, window, scope) (rate(codex_pooler_admin_stats_dashboard_build_duration_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{outcome}} {{window}} {{scope}} p95",
           "range": true,
           "instant": false,
@@ -2283,22 +2316,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admin Request Logs Reload Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Admin request-log LiveView reload rate by bounded stage and scope. Use this to separate first load, filter patch, and event-refresh pressure without tagging pool ids, models, request ids, users, paths, params, or API key prefixes.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2314,10 +2331,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Admin Request Logs Reload Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Admin request-log LiveView reload rate by bounded stage and scope. Use this to separate first load, filter patch, and event-refresh pressure without tagging pool ids, models, request ids, users, paths, params, or API key prefixes.",
       "targets": [
         {
           "expr": "sum by (stage, scope) (rate(codex_pooler_admin_request_logs_reload_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{stage}} {{scope}}",
           "range": true,
           "instant": false,
@@ -2335,22 +2367,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Admin Request Logs Reload p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "p95 admin request-log reload duration by bounded stage and scope. Pair spikes with DB queue, hot safe query source, and pg_stat_statements evidence when validating request-log read-path remediation. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2366,10 +2382,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Admin Request Logs Reload p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p95 admin request-log reload duration by bounded stage and scope. Pair spikes with DB queue, hot safe query source, and pg_stat_statements evidence when validating request-log read-path remediation. Histogram quantiles are interpolated estimates with a 60 s top finite bucket; a quantile in +Inf is reported as 60 s even when observations are longer.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, stage, scope) (rate(codex_pooler_admin_request_logs_reload_duration_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{stage}} {{scope}} p95",
           "range": true,
           "instant": false,
@@ -2400,22 +2431,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Stream Usage Completeness Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Successful stream finalization rate. Compare usage_unknown against usage_known without request, account, model, or payload labels.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2431,10 +2446,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Stream Usage Completeness Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Successful stream finalization rate. Compare usage_unknown against usage_known without request, account, model, or payload labels.",
       "targets": [
         {
           "expr": "sum by (usage_status, usage_source, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_finalization_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{usage_status}} {{usage_source}} {{downstream_transport}} -> {{upstream_transport}}",
           "range": true,
           "instant": false,
@@ -2452,22 +2482,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Stream Outcome Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2483,10 +2497,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Stream Outcome Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
       "targets": [
         {
           "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{outcome}} {{downstream_transport}} -> {{upstream_transport}}",
           "range": true,
           "instant": false,
@@ -2504,22 +2533,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Pre-attempt Reservation Releases",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2535,10 +2548,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Pre-attempt Reservation Releases",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
       "targets": [
         {
           "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{phase}} {{transport}}",
           "range": true,
           "instant": false,
@@ -2556,22 +2584,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Websocket Bridge Fallback Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Pre-content bridge fallbacks by bounded reason. There are at most 20 reason series per app pod; precommit buffer overflows remain a separate untagged counter.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2587,10 +2599,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Websocket Bridge Fallback Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Pre-content bridge fallbacks by bounded reason. There are at most 20 reason series per app pod; precommit buffer overflows remain a separate untagged counter.",
       "targets": [
         {
           "expr": "sum by (reason) (rate(codex_pooler_gateway_websocket_bridge_fallback_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{reason}}",
           "range": true,
           "instant": false,
@@ -2598,7 +2625,6 @@
         },
         {
           "expr": "sum(rate(codex_pooler_gateway_websocket_bridge_precommit_overflow_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "precommit overflow",
           "range": true,
           "instant": false,
@@ -2616,22 +2642,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Quota Cycle Decision Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2647,10 +2657,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Quota Cycle Decision Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
       "targets": [
         {
           "expr": "sum by (scope, decision, source) (rate(codex_pooler_quota_cycle_decision_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{scope}} {{decision}} {{source}}",
           "range": true,
           "instant": false,
@@ -2668,22 +2693,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Duplicate Turn Refusals",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Client-visible 409 duplicate_turn refusals, by bounded refusing stage and transport class. runtime_replay_preflight is the replay preflight judging a resend against its predecessor's lifecycle; owner_replay_preflight is the owner-forwarded preflight refusing a resend of the turn the session's owner still holds (a new turn refused by a busy owner gets the owner's own refusal and is not counted); websocket_turn_claim and native_http_turn_claim refuse a second reservation of a turn already claimed; native_replay_dispatch, client_retry_claim and compaction_retry_claim refuse a replay or retry whose binding or claim does not hold. None of them writes a request row for the refused request, so request logs, admin stats and every database-derived error count miss them: this panel is where they are counted. The reason is in the matching replay rejection log line; its vocabulary is open, so it is not a label. A guided content-filter retry that dispatch refuses because its account binding does not hold is also answered 409 duplicate_turn, but it is an admitted request: its row records 409 and invalid_content_filter_retry_binding, and this panel does not count it.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2699,10 +2708,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Duplicate Turn Refusals",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Client-visible 409 duplicate_turn refusals, by bounded refusing stage and transport class. runtime_replay_preflight is the replay preflight judging a resend against its predecessor's lifecycle; owner_replay_preflight is the owner-forwarded preflight refusing a resend of the turn the session's owner still holds (a new turn refused by a busy owner gets the owner's own refusal and is not counted); websocket_turn_claim and native_http_turn_claim refuse a second reservation of a turn already claimed; native_replay_dispatch, client_retry_claim and compaction_retry_claim refuse a replay or retry whose binding or claim does not hold. None of them writes a request row for the refused request, so request logs, admin stats and every database-derived error count miss them: this panel is where they are counted. The reason is in the matching replay rejection log line; its vocabulary is open, so it is not a label. A guided content-filter retry that dispatch refuses because its account binding does not hold is also answered 409 duplicate_turn, but it is an admitted request: its row records 409 and invalid_content_filter_retry_binding, and this panel does not count it.",
       "targets": [
         {
           "expr": "sum by (stage, transport) (rate(codex_pooler_gateway_duplicate_turn_refused_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{stage}} {{transport}}",
           "range": true,
           "instant": false,
@@ -2720,22 +2744,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Native Compaction Admission Clears",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Native compaction admissions ended on serving nodes, by bounded clear reason, the stage the admission was in, and the direct or owner-forwarded topology. Every successful native websocket turn arms an admission for a possible in-band compaction (stage armed). On direct, connection_closed on armed is the ordinary end of a socket and tracks websocket volume; on forwarded the owner keeps its admission past the socket, so a closing socket ends it as downstream_detached and connection_closed on armed means the provider closed the upstream connection. A completed in-band compaction ends no admission: the final request's own success re-arms it for the next compaction (stage armed), so no reason counts completed compactions. connection_closed on compacting or finalizing is the upstream connection closing under the admission: a compaction already collected is still delivered and a final still to be sent runs as an ordinary turn, while one cut in flight fails. Any other reason on the compacting or finalizing stage is an in-band compaction that did not complete: compact_failure and final_failure are unsuccessful upstream exchanges, owner_drained, upstream_exited, stale_owner and handoff_timeout are owner lifecycle events cutting it short, downstream_detached and downstream_cancelled are the client leaving, and request_rejected is only the runtime's explicit clear after it rejected the compaction request. A clear on a connection that never held an admission is not counted. No Pool, API-key, session, request or lifecycle identifier is exported.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2751,10 +2759,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Native Compaction Admission Clears",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Native compaction admissions ended on serving nodes, by bounded clear reason, the stage the admission was in, and the direct or owner-forwarded topology. Every successful native websocket turn arms an admission for a possible in-band compaction (stage armed). On direct, connection_closed on armed is the ordinary end of a socket and tracks websocket volume; on forwarded the owner keeps its admission past the socket, so a closing socket ends it as downstream_detached and connection_closed on armed means the provider closed the upstream connection. A completed in-band compaction ends no admission: the final request's own success re-arms it for the next compaction (stage armed), so no reason counts completed compactions. connection_closed on compacting or finalizing is the upstream connection closing under the admission: a compaction already collected is still delivered and a final still to be sent runs as an ordinary turn, while one cut in flight fails. Any other reason on the compacting or finalizing stage is an in-band compaction that did not complete: compact_failure and final_failure are unsuccessful upstream exchanges, owner_drained, upstream_exited, stale_owner and handoff_timeout are owner lifecycle events cutting it short, downstream_detached and downstream_cancelled are the client leaving, and request_rejected is only the runtime's explicit clear after it rejected the compaction request. A clear on a connection that never held an admission is not counted. No Pool, API-key, session, request or lifecycle identifier is exported.",
       "targets": [
         {
           "expr": "sum by (reason, stage, topology) (rate(codex_pooler_gateway_native_compaction_admission_clear_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{reason}} {{stage}} {{topology}}",
           "range": true,
           "instant": false,
@@ -2785,22 +2808,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Saved-reset Convergence Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Committed post-consume transitions observed by scraped web nodes only. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2816,10 +2823,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Saved-reset Convergence Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Committed post-consume transitions observed by scraped web nodes only. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "targets": [
         {
           "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{source}} {{outcome}}",
           "range": true,
           "instant": false,
@@ -2837,22 +2859,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Saved-reset Convergence p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Best-effort web-node timing for committed transitions. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2868,10 +2874,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "title": "Saved-reset Convergence p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Best-effort web-node timing for committed transitions. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to canonical",
           "range": true,
           "instant": false,
@@ -2879,7 +2900,6 @@
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{outcome}} canonical to lifecycle",
           "range": true,
           "instant": false,
@@ -2887,7 +2907,6 @@
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
-          "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to lifecycle",
           "range": true,
           "instant": false,
@@ -2905,22 +2924,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Routing Circuit Transitions",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Routing circuit transition rate by bounded transition, route class, and reason class. Compare open, half-open, and closed transitions.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2936,10 +2939,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Routing Circuit Transitions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Routing circuit transition rate by bounded transition, route class, and reason class. Compare open, half-open, and closed transitions.",
       "targets": [
         {
           "expr": "sum by (transition, route_class, reason_class) (rate(codex_pooler_gateway_routing_circuit_transition_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{transition}} {{route_class}} {{reason_class}}",
           "range": true,
           "instant": false,
@@ -2957,22 +2975,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Affinity Stale Writes",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence orders writers on the event clock each writer stamps from its own node clock, so it is correct and a low cluster-wide rate is ordinary reordering between nodes. The pod label names the writer that was refused, not the writer that caused it: a sustained rate concentrated on one pod means that pod's clock lags its peers and it loses every affinity write it attempts, while a sustained rate spread across every pod but one means the remaining pod's clock runs ahead and its stamps refuse everyone else's writes. Either way the affected pods stop contributing prompt-cache steering while serving traffic normally; routing, retries, settlement, and accounting are unaffected. Compare the pods' clocks against each other.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -2988,10 +2990,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Affinity Stale Writes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence orders writers on the event clock each writer stamps from its own node clock, so it is correct and a low cluster-wide rate is ordinary reordering between nodes. The pod label names the writer that was refused, not the writer that caused it: a sustained rate concentrated on one pod means that pod's clock lags its peers and it loses every affinity write it attempts, while a sustained rate spread across every pod but one means the remaining pod's clock runs ahead and its stamps refuse everyone else's writes. Either way the affected pods stop contributing prompt-cache steering while serving traffic normally; routing, retries, settlement, and accounting are unaffected. Compare the pods' clocks against each other.",
       "targets": [
         {
           "expr": "sum by (pod, operation, affinity_kind) (rate(codex_pooler_gateway_routing_affinity_stale_write_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{pod}} {{operation}} {{affinity_kind}}",
           "range": true,
           "instant": false,
@@ -3009,22 +3026,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Ingress Firewall Denial Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Ingress firewall denials by bounded scope and reason. These denials happen before authenticated request accounting.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -3040,10 +3041,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Ingress Firewall Denial Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Ingress firewall denials by bounded scope and reason. These denials happen before authenticated request accounting.",
       "targets": [
         {
           "expr": "sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "{{scope}} {{reason}}",
           "range": true,
           "instant": false,
@@ -3061,22 +3077,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Instance Heartbeat Write Failure Rate",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Failed instance-presence heartbeat writes on scraped pods. InstanceHeartbeat runs on every release role, but OBAN_MODE=worker and scheduler have no Prometheus reporter; this graph shows only the web/all share. An empty graph does not prove those roles are healthy. Check instance_presences.last_seen_at for durable presence freshness on every role.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -3092,10 +3092,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "title": "Instance Heartbeat Write Failure Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Failed instance-presence heartbeat writes on scraped pods. InstanceHeartbeat runs on every release role, but OBAN_MODE=worker and scheduler have no Prometheus reporter; this graph shows only the web/all share. An empty graph does not prove those roles are healthy. Check instance_presences.last_seen_at for durable presence freshness on every role.",
       "targets": [
         {
           "expr": "sum(rate(codex_pooler_instance_presence_heartbeat_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "",
           "legendFormat": "failed writes",
           "range": true,
           "instant": false,
@@ -3126,22 +3141,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Relay Unclaimed Backlog",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Shared unclaimed rows and samples, including expired backlog. Values are replicated observations: max avoids counting each app observer again. job_relay remains shadowed; in_process panels stay authoritative.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -3157,10 +3156,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Relay Unclaimed Backlog",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Shared unclaimed rows and samples, including expired backlog. Values are replicated observations: max avoids counting each app observer again. job_relay remains shadowed; in_process panels stay authoritative.",
       "targets": [
         {
           "expr": "max(codex_pooler_telemetry_relay_backlog_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "rows",
           "range": true,
           "instant": false,
@@ -3168,7 +3182,6 @@
         },
         {
           "expr": "max(codex_pooler_telemetry_relay_backlog_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "samples",
           "range": true,
           "instant": false,
@@ -3186,22 +3199,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Relay Fresh Consumers",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Non-quiesced consumers with a heartbeat in the last 60 seconds. This is consumer health, not the writer database-access insert gate. A missing series means no scraped observer, not zero backlog.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -3217,10 +3214,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Relay Fresh Consumers",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Non-quiesced consumers with a heartbeat in the last 60 seconds. This is consumer health, not the writer database-access insert gate. A missing series means no scraped observer, not zero backlog.",
       "targets": [
         {
           "expr": "max(codex_pooler_telemetry_relay_consumers_fresh{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "fresh consumers",
           "range": true,
           "instant": false,
@@ -3238,22 +3250,6 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "Relay Known Lost Samples",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "Durable cumulative loss totals by fixed reason. max avoids duplicate observer counts. Includes expired unclaimed, buffer overflow and shutdown unflushed samples when persistence succeeds. Hard kills, unavailable loss persistence and post-claim/pre-scrape loss remain unquantified.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 8,
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
         "legend": {
           "displayMode": "table",
@@ -3269,10 +3265,25 @@
           "sort": "asc"
         }
       },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "title": "Relay Known Lost Samples",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Durable cumulative loss totals by fixed reason. max avoids duplicate observer counts. Includes expired unclaimed, buffer overflow and shutdown unflushed samples when persistence succeeds. Hard kills, unavailable loss persistence and post-claim/pre-scrape loss remain unquantified.",
       "targets": [
         {
           "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "{{reason}} samples",
           "range": true,
           "instant": false,
@@ -3280,7 +3291,6 @@
         },
         {
           "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
-          "refId": "",
           "legendFormat": "{{reason}} rows",
           "range": true,
           "instant": false,

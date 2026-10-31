@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.12",
-    "@grafana/grafana-foundation-sdk": "11.6.0-cogv0.0.x.1769699379",
+    "@grafana/grafana-foundation-sdk": "0.0.22",
     "typescript": "6.0.3"
   },
   "overrides": {

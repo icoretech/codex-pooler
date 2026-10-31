@@ -34,6 +34,10 @@ function buildPanel(spec) {
   if (spec.description) panel.description(spec.description);
   if (spec.unit) panel.unit(spec.unit);
 
+  if (spec.type === "stat") {
+    panel.reduceOptions(new common.ReduceDataOptionsBuilder().values(false).calcs(["lastNotNull"]));
+  }
+
   if (spec.type === "timeseries") {
     panel
       .fillOpacity(8)
