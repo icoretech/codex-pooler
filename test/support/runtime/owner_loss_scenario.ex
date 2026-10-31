@@ -29,7 +29,6 @@ defmodule CodexPoolerWeb.Runtime.OwnerLossScenario do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
-  alias CodexPooler.Gateway.Transports.Websocket.OwnerDefaults
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
@@ -111,7 +110,8 @@ defmodule CodexPoolerWeb.Runtime.OwnerLossScenario do
     # Draining an active owner cancels a response executor that may be in a
     # transaction. Give its peers independent connections, as production does.
     if is_nil(peer_node), do: OwnerCrashAfterSendScenario.per_process_connections!()
-    configure_drain_budget!(peer_node)
+    # This scenario checks recovery, not settlement expiry. Keep the normal
+    # owner budget so committed interruption and lease cleanup can finish.
     first_gate = make_ref()
     next_gate = make_ref()
 
@@ -133,25 +133,6 @@ defmodule CodexPoolerWeb.Runtime.OwnerLossScenario do
     client = connect!(port, setup, @public_route, window)
     %{setup: setup, upstream: upstream, client: client, first_gate: first_gate, next_gate: next_gate}
   end
-
-  defp configure_drain_budget!(peer_node) do
-    defaults = CodexPooler.TestAppEnv.restore_on_exit(OwnerDefaults)
-    Application.put_env(:codex_pooler, OwnerDefaults, Keyword.merge(defaults, owner_call_timeout_ms: 1_500))
-
-    if peer_node do
-      prior = :erpc.call(peer_node, Application, :fetch_env, [:codex_pooler, OwnerDefaults])
-
-      on_exit(fn -> restore_peer_drain_budget!(peer_node, prior) end)
-
-      :ok = :erpc.call(peer_node, Application, :put_env, [:codex_pooler, OwnerDefaults, Keyword.merge(defaults, owner_call_timeout_ms: 1_500)])
-    end
-  end
-
-  defp restore_peer_drain_budget!(peer_node, {:ok, value}),
-    do: :erpc.call(peer_node, Application, :put_env, [:codex_pooler, OwnerDefaults, value])
-
-  defp restore_peer_drain_budget!(peer_node, :error),
-    do: :erpc.call(peer_node, Application, :delete_env, [:codex_pooler, OwnerDefaults])
 
   defp send_public_turn!(client, setup, stream_id) do
     payload = frame(setup, client, "synthetic") |> CodexPooler.JSON.decode!() |> Map.put("stream_id", stream_id) |> CodexPooler.JSON.encode!()
