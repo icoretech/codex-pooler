@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 3, to_form: 2]
   import Phoenix.LiveView, only: [put_flash: 3, clear_flash: 2]
 
@@ -37,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
          ) do
       {:ok, _result} ->
         socket
-        |> put_flash(:info, "Saved reset policy updated")
+        |> put_flash(:info, gettext("Saved reset policy updated"))
         |> close_fun.()
         |> reload_fun.()
 
@@ -59,7 +61,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
 
     case visible_account(socket, identity_id) do
       nil ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       account ->
         cond do
@@ -67,11 +69,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
             resume_status(socket, account, refresh_editing_fun)
 
           not confirmed? ->
-            put_flash(socket, :error, "Confirm saved reset redemption before continuing")
+            put_flash(socket, :error, gettext("Confirm saved reset redemption before continuing"))
 
           not account.saved_reset_redemption_action.available? ->
             socket
-            |> put_flash(:error, account.saved_reset_redemption_action.reason || "Saved reset redemption is not available")
+            |> put_flash(:error, account.saved_reset_redemption_action.reason || gettext("Saved reset redemption is not available"))
             |> then(&refresh_editing_fun.(&1, identity_id))
 
           true ->
@@ -90,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
             socket
             |> clear_flash(:error)
             |> assign(:confirming_saved_reset_redemption, nil)
-            |> put_flash(:info, "Review the recorded saved reset status before taking another action")
+            |> put_flash(:info, gettext("Review the recorded saved reset status before taking another action"))
 
           account.saved_reset_redemption_action.available? ->
             assign(
@@ -104,7 +106,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
         end
 
       _account ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
     end
   end
 
@@ -119,8 +121,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
            ) do
       message =
         if job.conflict?,
-          do: "Saved reset redemption is already queued",
-          else: "Saved reset redemption queued"
+          do: gettext("Saved reset redemption is already queued"),
+          else: gettext("Saved reset redemption queued")
 
       socket =
         socket
@@ -135,13 +137,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
         socket = reload_fun.(socket)
 
         case visible_account(socket, account.identity.id) do
-          nil -> put_flash(socket, :error, "Upstream account was not found")
+          nil -> put_flash(socket, :error, gettext("Upstream account was not found"))
           current -> resume_status(socket, current, refresh_editing_fun)
         end
 
       {:error, _reason} ->
         socket
-        |> put_flash(:error, "Saved reset request was not accepted. Use Refresh to see the current account state.")
+        |> put_flash(:error, gettext("Saved reset request was not accepted. Use Refresh to see the current account state."))
         |> reload_fun.()
         |> then(&refresh_editing_fun.(&1, account.identity.id))
     end
@@ -153,7 +155,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
     socket
     |> clear_flash(:error)
     |> assign(:confirming_saved_reset_redemption, nil)
-    |> put_flash(:info, "Review the recorded saved reset status before taking another action")
+    |> put_flash(:info, gettext("Review the recorded saved reset status before taking another action"))
     |> then(&refresh_editing_fun.(&1, account.identity.id))
   end
 
@@ -179,5 +181,5 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.SavedResetWorkflow do
        do: {:ok, pool_id}
 
   defp redemption_pool_id(_account),
-    do: {:error, %{message: "Saved reset redemption requires a Pool assignment"}}
+    do: {:error, %{message: gettext("Saved reset redemption requires a Pool assignment")}}
 end

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -54,6 +56,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
     snapshot
     |> Map.drop([:last_redemption])
     |> Map.merge(%{
+      label: snapshot_label(snapshot),
       next_expires_label: next_expires_label(snapshot, datetime_preferences),
       next_expires_title: next_expires_title(snapshot, datetime_preferences),
       last_auto_redemption_cause: last_auto_redemption_cause(snapshot.last_redemption),
@@ -65,31 +68,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
          "trigger_kind" => "gateway_auto",
          "trigger_detail" => "exhausted"
        }),
-       do: %{label: "Request · long-window quota exhausted"}
+       do: %{label: gettext("Request · long-window quota exhausted")}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "gateway_auto",
          "trigger_detail" => "threshold"
        }),
-       do: %{label: "Request · quota threshold"}
+       do: %{label: gettext("Request · quota threshold")}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "scheduled_expiry_rescue",
          "trigger_detail" => "exhausted"
        }),
-       do: %{label: "Scheduled · long-window quota exhausted"}
+       do: %{label: gettext("Scheduled · long-window quota exhausted")}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "scheduled_expiry_rescue",
          "trigger_detail" => "threshold"
        }),
-       do: %{label: "Scheduled · quota threshold"}
+       do: %{label: gettext("Scheduled · quota threshold")}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "scheduled_expiry_rescue",
          "trigger_detail" => "last_call"
        }),
-       do: %{label: "Scheduled · last call"}
+       do: %{label: gettext("Scheduled · last call")}
 
   defp last_auto_redemption_cause(_redemption), do: nil
 
@@ -142,25 +145,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   not established yet. The operator reviews that status instead of submitting again.
   """
   @spec status_hold(map() | nil) :: String.t() | nil
-  def status_hold(%{request: %{state: state}}) when state in [:queued, :processing], do: "saved reset request is already accepted"
-  def status_hold(%{request: %{state: :unavailable}}), do: "saved reset request status is unavailable"
-  def status_hold(%{active?: true}), do: "the last saved reset is still in progress"
-  def status_hold(%{unresolved?: true}), do: "the last saved reset is unresolved; another redemption waits until it resolves"
+  def status_hold(%{request: %{state: state}}) when state in [:queued, :processing], do: gettext("saved reset request is already accepted")
+  def status_hold(%{request: %{state: :unavailable}}), do: gettext("saved reset request status is unavailable")
+  def status_hold(%{active?: true}), do: gettext("the last saved reset is still in progress")
+  def status_hold(%{unresolved?: true}), do: gettext("the last saved reset is unresolved; another redemption waits until it resolves")
   def status_hold(_operation), do: nil
 
   defp domain_redemption_action(account) do
     cond do
       account.identity.status == "deleted" ->
-        action(false, "deleted accounts cannot redeem saved resets")
+        action(false, gettext("deleted accounts cannot redeem saved resets"))
 
       account.identity.status == "disabled" ->
-        action(false, "disabled accounts cannot redeem saved resets")
+        action(false, gettext("disabled accounts cannot redeem saved resets"))
 
       not auth_clearly_usable?(account) ->
-        action(false, "saved reset redemption requires usable credentials")
+        action(false, gettext("saved reset redemption requires usable credentials"))
 
       account.assignments == [] ->
-        action(false, "saved reset redemption requires a Pool assignment")
+        action(false, gettext("saved reset redemption requires a Pool assignment"))
 
       true ->
         bank_redemption_action(account.saved_resets)
@@ -170,13 +173,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   defp bank_redemption_action(saved_resets) do
     cond do
       saved_resets.reported? == false ->
-        action(false, "saved reset count is not reported")
+        action(false, gettext("saved reset count is not reported"))
 
       saved_resets.available? == false ->
-        action(false, "no saved resets are available")
+        action(false, gettext("no saved resets are available"))
 
       saved_resets.in_progress? == true ->
-        action(false, "saved reset redemption is already in progress")
+        action(false, gettext("saved reset redemption is already in progress"))
 
       Map.get(saved_resets, :redemption_blocked?) == true ->
         action(false, blocked_redemption_reason(get_in(saved_resets, [:reset_lifecycle, :phase])))
@@ -189,17 +192,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   # The claim refuses these records too, so offering the action would only
   # queue a request that stops before reaching the provider.
   defp blocked_redemption_reason("reblocked"),
-    do: "the last saved reset was applied and quota is still blocked; another redemption waits until a usage report shows quota recovered"
+    do: gettext("the last saved reset was applied and quota is still blocked; another redemption waits until a usage report shows quota recovered")
 
   defp blocked_redemption_reason("expired"),
-    do: "the last saved reset was not confirmed in time; another redemption waits until a usage report shows quota recovered"
+    do: gettext("the last saved reset was not confirmed in time; another redemption waits until a usage report shows quota recovered")
 
-  defp blocked_redemption_reason(_phase), do: "the last saved reset is unresolved; another redemption waits until it resolves"
+  defp blocked_redemption_reason(_phase), do: gettext("the last saved reset is unresolved; another redemption waits until it resolves")
 
   defp next_expires_label(%{next_expires_at: expires_at}, datetime_preferences) do
     case Formatting.parse_datetime(expires_at) do
       %DateTime{} = datetime ->
-        "Next expires " <> DateTimeDisplay.format_datetime(datetime, datetime_preferences)
+        gettext("Next expires %{timestamp}", timestamp: DateTimeDisplay.format_datetime(datetime, datetime_preferences))
 
       nil ->
         nil
@@ -225,4 +228,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   end
 
   defp auth_clearly_usable?(_account), do: false
+
+  defp snapshot_label(%{reported?: true, available_count: count}) when is_integer(count) and count > 0,
+    do: ngettext("%{count} saved reset", "%{count} saved resets", count)
+
+  defp snapshot_label(%{reported?: true}), do: gettext("No saved resets")
+  defp snapshot_label(%{status: "unavailable"}), do: gettext("Saved resets unavailable")
+  defp snapshot_label(_snapshot), do: gettext("Saved resets not reported")
 end

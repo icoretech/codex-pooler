@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
   attr :card_statuses, :map, required: true
   attr :current_session_ip, :string, default: nil
 
+  @spec cards(map()) :: Phoenix.LiveView.Rendered.t()
   def cards(assigns) do
     ~H"""
     <section
@@ -24,21 +25,21 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
       <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
         <div class="min-w-0">
           <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
-            Runtime ingress
+            {gettext("Runtime ingress")}
           </p>
-          <h2 class="mt-1 text-lg font-semibold text-base-content">Firewall visibility</h2>
+          <h2 class="mt-1 text-lg font-semibold text-base-content">{gettext("Firewall visibility")}</h2>
           <p class="mt-1 text-sm text-base-content/60">
-            Current policy state and the network address recorded for this authenticated session.
+            {gettext("Current policy state and the network address recorded for this authenticated session.")}
           </p>
           <p id="system-runtime-firewall-scope" class="mt-2 text-xs text-base-content/60">
-            Covers compatibility routes and /mcp. /metrics uses its separate bearer boundary.
+            {gettext("Covers compatibility routes and /mcp. /metrics uses its separate bearer boundary.")}
           </p>
         </div>
 
         <dl class="grid min-w-0 gap-3 sm:grid-cols-2 md:min-w-[22rem]">
           <div class="rounded-field border border-base-300 bg-base-200/50 px-3 py-2">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50">
-              Firewall
+              {gettext("Firewall")}
             </dt>
             <dd class="mt-1">
               <span
@@ -53,14 +54,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
 
           <div class="min-w-0 rounded-field border border-base-300 bg-base-200/50 px-3 py-2">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50">
-              Current session IP
+              {gettext("Current session IP")}
             </dt>
             <dd
               id="system-current-session-ip"
               data-state={if @current_session_ip, do: "available", else: "unavailable"}
               class="mt-1 truncate font-mono text-xs font-semibold text-base-content"
             >
-              {@current_session_ip || "not recorded"}
+              {@current_session_ip || gettext("not recorded")}
             </dd>
           </div>
         </dl>
@@ -76,16 +77,16 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
       <.inputs_for :let={ingress_form} field={@forms["ingress"][:ingress]}>
         <FormControls.settings_group
           id="instance-settings-ingress"
-          eyebrow="Ingress"
-          title="Runtime ingress"
-          description="Firewall, trusted proxy, and compressed-body controls for compatibility routes."
-          hint="Evaluated for new requests; keep proxy lists metadata-only and CIDR based."
+          eyebrow={gettext("Ingress")}
+          title={gettext("Runtime ingress")}
+          description={gettext("Firewall, trusted proxy, and compressed-body controls for compatibility routes.")}
+          hint={gettext("Evaluated for new requests; keep proxy lists metadata-only and CIDR based.")}
         >
           <div class="grid gap-4 lg:grid-cols-2">
             <FormControls.list_textarea
               id="instance-settings-firewall-allowlist"
               name="instance_settings[ingress][firewall_allowlist]"
-              label="Firewall allowlist"
+              label={gettext("Firewall allowlist")}
               placeholder={firewall_allowlist_placeholder()}
               value={
                 param_list_value(
@@ -99,7 +100,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
             <FormControls.list_textarea
               id="instance-settings-trusted-proxies"
               name="instance_settings[ingress][trusted_proxies]"
-              label="Trusted proxies"
+              label={gettext("Trusted proxies")}
               placeholder={trusted_proxies_placeholder()}
               value={
                 param_list_value(
@@ -148,39 +149,39 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
         type: :select,
         id: "instance-settings-forwarded-client-ip-source",
         field: :forwarded_client_ip_source,
-        label: "Forwarded client IP source",
+        label: gettext("Forwarded client IP source"),
         options: SystemSettingsForm.forwarded_client_ip_source_options()
       },
       %{
         type: :number,
         id: "instance-settings-forwarded-proxy-depth",
         field: :forwarded_proxy_depth,
-        label: "Forwarded proxy depth",
-        hint: "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
+        label: gettext("Forwarded proxy depth"),
+        hint: gettext("number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking.")
       },
       %{
         type: :number,
         id: "instance-settings-max-compressed-body-bytes",
         field: :max_compressed_body_bytes,
-        label: "Max compressed bytes"
+        label: gettext("Max compressed bytes")
       },
       %{
         type: :number,
         id: "instance-settings-max-decompressed-body-bytes",
         field: :max_decompressed_body_bytes,
-        label: "Max decompressed bytes"
+        label: gettext("Max decompressed bytes")
       },
       %{
         type: :number,
         id: "instance-settings-max-decompression-ratio",
         field: :max_decompression_ratio,
-        label: "Max ratio"
+        label: gettext("Max ratio")
       },
       %{
         type: :number,
         id: "instance-settings-decompression-timeout-ms",
         field: :decompression_timeout_ms,
-        label: "Timeout (ms)"
+        label: gettext("Timeout (ms)")
       }
     ]
   end
@@ -221,7 +222,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
     do: if(firewall_enabled?(settings), do: "enabled", else: "disabled")
 
   defp firewall_label(settings),
-    do: if(firewall_enabled?(settings), do: "Enabled", else: "Disabled")
+    do: if(firewall_enabled?(settings), do: gettext("Enabled"), else: gettext("Disabled"))
 
   defp firewall_status_class(settings) do
     if firewall_enabled?(settings) do

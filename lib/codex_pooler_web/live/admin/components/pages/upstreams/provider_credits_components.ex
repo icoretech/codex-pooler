@@ -3,8 +3,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
 
   use CodexPoolerWeb, :html
 
-  @policy_help "Use available provider credits when compatible included capacity cannot serve the request, before blocked-request banked-reset recovery. Proactive threshold and expiry reset policies remain separate. Applies to every Pool using this upstream. This is an admission policy, not a provider spending limit; already admitted requests and other clients may still spend credits."
-
   @type balance_state :: :finite | :unlimited | :unknown
   @type availability :: :available | :conditional | :disabled | :unavailable | :unknown
   @type summary :: %{
@@ -44,7 +42,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
       |> assign(:field, field)
       |> assign(:checked?, field.value in [true, "true", "1"])
       |> assign(:errors, errors)
-      |> assign(:policy_help, @policy_help)
+      |> assign(:policy_help, gettext("Use available provider credits when compatible included capacity cannot serve the request, before blocked-request banked-reset recovery. Proactive threshold and expiry reset policies remain separate. Applies to every Pool using this upstream. This is an admission policy, not a provider spending limit; already admitted requests and other clients may still spend credits."))
       |> assign(:described_by, Enum.join(["provider-credits-policy-help" | if(errors == [], do: [], else: ["provider-credits-policy-errors"])], " "))
 
     ~H"""
@@ -58,7 +56,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
     >
       <div class="grid gap-2">
         <label for="provider-credits-enabled" class="flex items-center justify-between gap-3 text-sm font-semibold text-base-content">
-          <span>Use provider credits</span>
+          <span>{gettext("Use provider credits")}</span>
           <input type="hidden" name={@field.name} value="false" disabled={@disabled} />
           <input
             id="provider-credits-enabled"
@@ -114,13 +112,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
           "absolute -inset-x-2 -inset-y-1.5 z-10 cursor-pointer rounded border border-transparent transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
           trigger_tone(@summary.observed_percent)
         ]}
-        aria-label={"Provider credits: #{balance_label(@summary)}. Open provider credits policy"}
+        aria-label={gettext("Provider credits: %{balance}. Open provider credits policy", balance: balance_label(@summary))}
         aria-haspopup="dialog"
         aria-controls="provider-credits-policy-dialog"
         phx-click={@open_policy}
-      ><span class="sr-only">Open provider credits policy</span></button>
+      ><span class="sr-only">{gettext("Open provider credits policy")}</span></button>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
-        <span id={"#{@id}-title"} class="min-w-0 truncate font-medium text-base-content">Credits</span>
+        <span id={"#{@id}-title"} class="min-w-0 truncate font-medium text-base-content">{gettext("Credits")}</span>
         <span :if={@percent_label} id={"#{@id}-percent"} class={["shrink-0 font-medium tabular-nums", percent_tone(@summary.observed_percent)]}>{@percent_label}</span>
       </div>
       <progress
@@ -129,20 +127,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
         data-role="provider-credits-observed-progress"
         value={@percent_value}
         max="100"
-        aria-label="Observed provider credit balance relative to observed baseline"
-        aria-valuetext={"#{@percent_label} of observed baseline"}
+        aria-label={gettext("Observed provider credit balance relative to observed baseline")}
+        aria-valuetext={gettext("%{percent} of observed baseline", percent: @percent_label)}
         aria-describedby={"#{@id}-baseline-description"}
         class={["progress admin-live-progress progress-striped h-1.5 w-full", progress_tone(@summary.observed_percent)]}
       >
         {@percent_label}
       </progress>
       <div class="flex items-center justify-between gap-3 text-[11px] text-base-content/60">
-        <span id={"#{@id}-policy"}>{if @summary.allow_provider_credits, do: "Enabled", else: "Disabled"}</span>
+        <span id={"#{@id}-policy"}>{if @summary.allow_provider_credits, do: gettext("Enabled"), else: gettext("Disabled")}</span>
         <span id={"#{@id}-balance"} data-role="provider-credits-balance" class="tabular-nums" title={Map.get(@summary, :balance_exact_label)}>{balance_label(@summary)}</span>
       </div>
-      <span :if={@percent_label} id={"#{@id}-baseline-description"} class="sr-only">Observed baseline: <span id={"#{@id}-baseline"}>{@summary.observed_baseline_label}</span>. This reference is not the purchased total or confirmed credit use.</span>
+      <span :if={@percent_label} id={"#{@id}-baseline-description"} class="sr-only">{gettext("Observed baseline: %{baseline}. This reference is not the purchased total or confirmed credit use.", baseline: @summary.observed_baseline_label)}</span>
+      <span :if={@percent_label} id={"#{@id}-baseline"} class="sr-only" aria-hidden="true">{@summary.observed_baseline_label}</span>
       <section :if={@included_windows != []} id={"#{@id}-included-windows"} data-role="provider-credits-included-windows" aria-labelledby={"#{@id}-included-title"} class="grid gap-3 border-t border-base-300 pt-4">
-        <h3 id={"#{@id}-included-title"} class="text-sm font-semibold text-base-content">Included quota windows</h3>
+        <h3 id={"#{@id}-included-title"} class="text-sm font-semibold text-base-content">{gettext("Included quota windows")}</h3>
         {render_slot(@included_windows)}
       </section>
     </section>
@@ -156,32 +155,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents 
     ~H"""
     <dl id="provider-credits-details" class="grid gap-x-5 gap-y-3 text-xs sm:grid-cols-2">
       <div class="grid gap-1">
-        <dt class="text-base-content/60">Observed balance</dt>
+        <dt class="text-base-content/60">{gettext("Observed balance")}</dt>
         <dd class="break-words font-semibold tabular-nums text-base-content" title={Map.get(@summary, :balance_exact_label)}>{balance_label(@summary)}</dd>
       </div>
       <div :if={@summary.balance_state == :finite && @summary.observed_baseline_label} class="grid gap-1">
-        <dt class="text-base-content/60">Observed baseline</dt>
+        <dt class="text-base-content/60">{gettext("Observed baseline")}</dt>
         <dd class="tabular-nums text-base-content">{@summary.observed_baseline_label}</dd>
       </div>
       <div class="grid gap-1 sm:col-span-2">
-        <dt class="text-base-content/60">Availability</dt>
+        <dt class="text-base-content/60">{gettext("Availability")}</dt>
         <dd class="font-semibold text-base-content">{@summary.availability_label}</dd>
         <dd class="leading-5 text-base-content/60">{@summary.availability_detail}</dd>
       </div>
       <div class="grid gap-1 sm:col-span-2">
-        <dt class="text-base-content/60">Balance reference</dt>
-        <dd class="leading-5 text-base-content/60">The baseline is a retained observation, not a purchased total, original allowance or proof of credit use. Credit expiry is not reported.</dd>
+        <dt class="text-base-content/60">{gettext("Balance reference")}</dt>
+        <dd class="leading-5 text-base-content/60">{gettext("The baseline is a retained observation, not a purchased total, original allowance or proof of credit use. Credit expiry is not reported.")}</dd>
       </div>
     </dl>
     """
   end
 
   defp balance_label(%{balance_state: :finite, balance_label: label}), do: label
-  defp balance_label(%{balance_state: :unlimited}), do: "Unlimited"
-  defp balance_label(_summary), do: "Balance unavailable"
+  defp balance_label(%{balance_state: :unlimited}), do: gettext("Unlimited")
+  defp balance_label(_summary), do: gettext("Balance unavailable")
 
   defp row_title(summary, nil), do: summary.availability_label
-  defp row_title(summary, percent), do: "#{summary.availability_label}; #{percent} of observed baseline (not purchased allocation)"
+  defp row_title(summary, percent), do: gettext("%{availability}; %{percent} of observed baseline (not purchased allocation)", availability: summary.availability_label, percent: percent)
 
   defp meter_tone(%Decimal{} = percent) do
     cond do

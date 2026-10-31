@@ -102,6 +102,68 @@ defmodule CodexPooler.Access.InviteEmailTest do
     assert_no_email_sent()
   end
 
+  test "renders Chinese invite content from the stored invite language and restores the caller locale" do
+    pool = pool_fixture(%{name: "Chinese Pool"})
+    scope = fixture_owner_scope()
+    {:ok, %{invite: invite}} = Access.create_invite(scope, pool, %{invited_email: "chinese-invite@example.com", locale: "zh-CN"})
+    Gettext.put_locale("en")
+
+    assert {:ok, _receipt} = InviteEmail.deliver_pool_invite(invite, "https://example.com/invite", pool, scope.user)
+
+    assert_email_sent(fn email ->
+      assert email.subject == "Codex Pooler Pool 邀请"
+      assert email.text_body =~ "邀请您将 OpenAI 账号连接到 Chinese Pool。"
+      assert email.text_body =~ "接受邀请：https://example.com/invite"
+      assert email.html_body =~ ~s(lang="zh-CN")
+      assert email.html_body =~ "接受邀请"
+      true
+    end)
+
+    assert Gettext.get_locale() == "en"
+  end
+
+  test "null and unsupported stored invite languages fall back to English rather than the sender locale" do
+    pool = pool_fixture()
+    scope = fixture_owner_scope()
+    {:ok, %{invite: invite}} = Access.create_invite(scope, pool, %{invited_email: "fallback-invite@example.com"})
+    Gettext.put_locale("zh_CN")
+
+    for locale <- [nil, "retired-locale"] do
+      email = InviteEmail.pool_invite_email(%{invite | locale: locale}, "https://example.com/invite", pool, scope.user)
+      assert email.subject == "Codex Pooler Pool invite"
+      assert email.text_body =~ "What happens next:"
+      assert email.html_body =~ ~s(lang="en")
+    end
+
+    assert Gettext.get_locale() == "zh_CN"
+  end
+
+  test "reissuing an invite retains its stored language after the inviter changes language" do
+    pool = pool_fixture()
+    scope = fixture_owner_scope()
+    {:ok, %{invite: invite}} = Access.create_invite(scope, pool, %{invited_email: "resend-locale@example.com", locale: "zh-CN"})
+    {:ok, user} = CodexPooler.Accounts.update_user_locale(scope.user, "en")
+    scope = Scope.for_user(user, ["instance_owner"])
+
+    assert {:ok, %{invite: replacement}} = Access.reissue_invite(scope, invite)
+    assert replacement.locale == "zh-CN"
+    assert Repo.reload!(replacement).locale == "zh-CN"
+    assert {:ok, _receipt} = InviteEmail.deliver_pool_invite(replacement, "https://example.com/invite", pool, user)
+    assert_email_sent(subject: "Codex Pooler Pool 邀请")
+  end
+
+  test "invites reject unsupported locale values at creation and enforce the database constraint" do
+    pool = pool_fixture()
+    scope = fixture_owner_scope()
+    assert {:error, changeset} = Access.create_invite(scope, pool, %{invited_email: "invalid-locale@example.com", locale: "zh-TW"})
+    assert "is invalid" in errors_on(changeset).locale
+
+    {:ok, %{invite: invite}} = Access.create_invite(scope, pool, %{invited_email: "constraint-locale@example.com"})
+    changeset = invite |> Ecto.Changeset.change(locale: "zh-TW") |> Ecto.Changeset.check_constraint(:locale, name: :invites_locale_check)
+    assert {:error, changeset} = Repo.update(changeset, mode: :savepoint)
+    assert "is invalid" in errors_on(changeset).locale
+  end
+
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture()
     Scope.for_user(user, ["instance_owner"])

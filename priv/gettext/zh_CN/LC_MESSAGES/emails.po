@@ -1,0 +1,230 @@
+## This file is a PO Template file.
+##
+## "msgid"s here are often extracted from source code.
+## Add new messages manually only if they're dynamic
+## messages that can't be statically extracted.
+##
+## Run "mix gettext.extract" to bring this file up to
+## date. Leave "msgstr"s empty as changing them here has no
+## effect: edit them in PO (.po) files instead.
+#
+msgid ""
+msgstr ""
+"Language: zh_CN\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: lib/codex_pooler/access/invite_email.ex:105
+#: lib/codex_pooler/access/invite_email.ex:124
+#, elixir-autogen, elixir-format
+msgid "%{inviter} invited you to connect an OpenAI account to %{pool}."
+msgstr "%{inviter} 邀请您将 OpenAI 账号连接到 %{pool}。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:311
+#, elixir-autogen, elixir-format
+msgid "- none"
+msgstr "- 无"
+
+#: lib/codex_pooler/access/invite_email.ex:129
+#, elixir-autogen, elixir-format
+msgid "Accept invite"
+msgstr "接受邀请"
+
+#: lib/codex_pooler/access/invite_email.ex:107
+#, elixir-autogen, elixir-format
+msgid "Accept invite: %{url}"
+msgstr "接受邀请：%{url}"
+
+#: lib/codex_pooler/access/invite_email.ex:110
+#, elixir-autogen, elixir-format
+msgid "After accepting the invite and linking an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy."
+msgstr "接受邀请并关联 OpenAI 账号后，该账号将加入 %{pool}，并可由其路由策略使用。"
+
+#: lib/codex_pooler/access/invite_email.ex:126
+#, elixir-autogen, elixir-format
+msgid "After you accept and link an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy."
+msgstr "接受并关联 OpenAI 账号后，该账号将加入 %{pool}，并可由其路由策略使用。"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:95
+#, elixir-autogen, elixir-format
+msgid "An administrator created or updated Codex Pooler operator access for this email."
+msgstr "管理员已为此邮箱创建或更新 Codex Pooler 运营者访问权限。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:289
+#, elixir-autogen, elixir-format
+msgid "Channel id: %{id}"
+msgstr "渠道 ID：%{id}"
+
+#: lib/codex_pooler/access/invite_email.ex:40
+#: lib/codex_pooler/access/invite_email.ex:122
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler Pool invite"
+msgstr "Codex Pooler Pool 邀请"
+
+#: lib/codex_pooler/platform/mailer.ex:168
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler SMTP test email"
+msgstr "Codex Pooler SMTP 测试邮件"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:276
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler alert"
+msgstr "Codex Pooler 告警"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:286
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler alert notification"
+msgstr "Codex Pooler 告警通知"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:30
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler operator access"
+msgstr "Codex Pooler 运营者访问权限"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:37
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler temporary password"
+msgstr "Codex Pooler 临时密码"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:298
+#, elixir-autogen, elixir-format
+msgid "First seen at: %{time}"
+msgstr "首次出现时间：%{time}"
+
+#: lib/codex_pooler/access/invite_email.ex:112
+#: lib/codex_pooler/access/invite_email.ex:128
+#, elixir-autogen, elixir-format
+msgid "If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email."
+msgstr "如果您未预期收到此邀请，请在打开前向系统管理员核实。您也可以丢弃此邮件。"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:96
+#, elixir-autogen, elixir-format
+msgid "If you did not expect this email, do not sign in with this password. Contact your system administrator or ignore this email."
+msgstr "如果您未预期收到此邮件，请勿使用此密码登录。请联系系统管理员或忽略此邮件。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:288
+#, elixir-autogen, elixir-format
+msgid "Incident id: %{id}"
+msgstr "告警事件 ID：%{id}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:293
+#, elixir-autogen, elixir-format
+msgid "Incident state: %{state}"
+msgstr "告警事件状态：%{state}"
+
+#: lib/codex_pooler/access/invite_email.ex:114
+#, elixir-autogen, elixir-format
+msgid "Invited by: %{email}"
+msgstr "邀请人：%{email}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:299
+#, elixir-autogen, elixir-format
+msgid "Last seen at: %{time}"
+msgstr "最近出现时间：%{time}"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:99
+#, elixir-autogen, elixir-format
+msgid "Login URL: %{url}"
+msgstr "登录地址：%{url}"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:97
+#, elixir-autogen, elixir-format
+msgid "Never forward this temporary password. Codex Pooler administrators will not ask you to send it back."
+msgstr "切勿转发此临时密码。Codex Pooler 管理员不会要求您将其发回。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:297
+#, elixir-autogen, elixir-format
+msgid "Occurrence count: %{count}"
+msgid_plural "Occurrence count: %{count}"
+msgstr[0] "发生次数：%{count}"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:100
+#, elixir-autogen, elixir-format
+msgid "Operator email: %{email}"
+msgstr "运营者邮箱：%{email}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:408
+#, elixir-autogen, elixir-format
+msgid "Pool id: %{id}"
+msgstr "Pool ID：%{id}"
+
+#: lib/codex_pooler/access/invite_email.ex:123
+#, elixir-autogen, elixir-format
+msgid "Pool invite for %{pool}"
+msgstr "%{pool} 的 Pool 邀请"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:410
+#, elixir-autogen, elixir-format
+msgid "Reason code: %{code}"
+msgstr "原因代码：%{code}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:291
+#, elixir-autogen, elixir-format
+msgid "Rule kind: %{kind}"
+msgstr "规则类型：%{kind}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:301
+#, elixir-autogen, elixir-format
+msgid "Safe evidence summary:"
+msgstr "安全证据摘要："
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:290
+#, elixir-autogen, elixir-format
+msgid "Scope type: %{scope}"
+msgstr "作用域类型：%{scope}"
+
+#: lib/codex_pooler/access/invite_email.ex:130
+#, elixir-autogen, elixir-format
+msgid "Sent by %{inviter} from %{email}."
+msgstr "由 %{inviter} 通过 %{email} 发送。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:292
+#, elixir-autogen, elixir-format
+msgid "Severity: %{severity}"
+msgstr "严重程度：%{severity}"
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:101
+#, elixir-autogen, elixir-format
+msgid "Temporary password: %{password}"
+msgstr "临时密码：%{password}"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:304
+#, elixir-autogen, elixir-format
+msgid "This alert contains metadata only. Runtime content and credentials are never included."
+msgstr "此告警仅包含元数据。绝不会包含运行时内容和凭据。"
+
+#: lib/codex_pooler/access/invite_email.ex:131
+#, elixir-autogen, elixir-format
+msgid "This invite is intended only for the Codex account email that received it. Do not forward the link."
+msgstr "此邀请仅供收到邮件的 Codex 账号使用。请勿转发此链接。"
+
+#: lib/codex_pooler/platform/mailer.ex:169
+#, elixir-autogen, elixir-format
+msgid "This test email confirms Codex Pooler can send email with the current SMTP settings."
+msgstr "这封测试邮件确认 Codex Pooler 可以使用当前 SMTP 设置发送邮件。"
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:409
+#, elixir-autogen, elixir-format
+msgid "Upstream identity id: %{id}"
+msgstr "上游身份 ID：%{id}"
+
+#: lib/codex_pooler/access/invite_email.ex:127
+#, elixir-autogen, elixir-format
+msgid "Verify unexpected invites"
+msgstr "核实意外收到的邀请"
+
+#: lib/codex_pooler/access/invite_email.ex:125
+#, elixir-autogen, elixir-format
+msgid "What happens after accepting"
+msgstr "接受后会发生什么"
+
+#: lib/codex_pooler/access/invite_email.ex:109
+#, elixir-autogen, elixir-format
+msgid "What happens next:"
+msgstr "接下来会发生什么："
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:102
+#, elixir-autogen, elixir-format
+msgid "You will be asked to change this password after sign in."
+msgstr "登录后，系统会要求您更改此密码。"

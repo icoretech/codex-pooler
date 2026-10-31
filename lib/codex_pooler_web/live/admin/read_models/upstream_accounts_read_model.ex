@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Admin.{
     UpstreamCircuitReadiness,
     UpstreamQuotaReadiness,
@@ -117,11 +119,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:plan_reported?) => boolean(),
           required(:refresh_status) => String.t(),
           required(:token_refresh_label) => String.t(),
+          required(:token_refresh_value_label) => String.t(),
           required(:refresh_job_state) => String.t() | nil,
           required(:quota_refresh_status) => String.t(),
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
           required(:access_token_label) => String.t(),
+          required(:auth_verified_value_label) => String.t(),
           required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
@@ -145,23 +149,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         }
 
   @terminal_reconciliation_statuses ~w(succeeded partial failed)
-  @safe_reconciliation_messages %{
-    "catalog_refreshed" => "catalog refreshed",
-    "catalog_sync_failed" => "catalog sync failed",
-    "catalog_sync_in_progress" => "catalog sync in progress",
-    "catalog_sync_partial" => "catalog sync partially completed",
-    "catalog_sync_skipped" => "catalog sync skipped",
-    "health_preserved" => "assignment health preserved",
-    "health_refreshed" => "assignment health refreshed",
-    "health_skipped" => "assignment health skipped",
-    "quota_refreshed" => "quota refreshed",
-    "quota_refresh_auth_unavailable" => "quota refresh authentication unavailable",
-    "quota_refresh_failed" => "quota refresh failed",
-    "quota_refresh_superseded" => "quota refresh superseded",
-    "quota_refresh_unavailable" => "quota refresh unavailable",
-    "quota_reused_fresh" => "fresh quota evidence reused",
-    "workspace_identity_mismatch" => "workspace identity mismatch"
-  }
   @type oauth_flow_state :: %{
           required(:items) => [Upstreams.oauth_flow_summary()],
           required(:count) => non_neg_integer(),
@@ -369,7 +356,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       id: assignment.id,
       upstream_identity_id: assignment.upstream_identity_id,
       pool_id: assignment.pool_id,
-      assignment_label: assignment.assignment_label || "Pool assignment",
+      assignment_label: assignment.assignment_label || gettext("Pool assignment"),
       stored_assignment_label: Formatting.present_string(assignment.assignment_label),
       status: assignment.status,
       health_status: assignment.health_status,
@@ -453,6 +440,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           identity
           |> UpstreamRoutingReadiness.from_inputs(assignment, quota_readiness)
           |> UpstreamRoutingReadiness.with_model_availability(quota_snapshot, [assignment])
+          |> Formatting.localize_routing_readiness()
 
         Map.put(assignment, :routing_readiness, readiness)
       end)
@@ -476,6 +464,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       |> UpstreamRoutingReadiness.from_inputs(identity_assignments, quota_readiness)
       |> UpstreamRoutingReadiness.with_model_availability(quota_snapshot, identity_assignments)
       |> UpstreamRoutingReadiness.with_circuit_visibility(circuit_readiness)
+      |> Formatting.localize_routing_readiness()
 
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
@@ -489,6 +478,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       plan_reported?: account_plan_reported?(identity),
       refresh_status: refresh_status_label(identity),
       token_refresh_label: token_refresh_label(identity, datetime_preferences),
+      token_refresh_value_label: token_refresh_value_label(identity, datetime_preferences),
       refresh_job_state: refresh_job_state(refresh_job),
       quota_refresh_status:
         QuotaProjection.quota_refresh_status(
@@ -507,6 +497,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           identity.auth_verified_at,
           datetime_preferences
         ),
+      auth_verified_value_label: Formatting.timestamp_value_label(identity.auth_verified_at, datetime_preferences),
       access_token_label: access_token_label(identity_observability.credential_expiry, datetime_preferences),
       secret_status: Secrets.secret_status(identity),
       reauth_required?: reauth_required?(identity),
@@ -750,14 +741,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
          %{"status" => "failed"} = metadata,
          _datetime_preferences
        ) do
-    token_refresh_failure_label("token refresh failed", metadata)
+    token_refresh_failure_label(:failed, metadata)
   end
 
   defp token_refresh_label_from_metadata(
          %{"status" => "reauth_required"} = metadata,
          _datetime_preferences
        ) do
-    token_refresh_failure_label("reauth required", metadata)
+    token_refresh_failure_label(:reauth_required, metadata)
   end
 
   defp token_refresh_label_from_metadata(
@@ -784,32 +775,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp token_refresh_label_from_metadata(%{"status" => status}, _datetime_preferences)
        when is_binary(status),
-       do: "token refresh #{String.replace(status, "_", " ")}"
+       do: gettext("token refresh %{status}", status: String.replace(status, "_", " "))
 
   defp token_refresh_label_from_metadata(_metadata, _datetime_preferences),
-    do: "token refresh not run"
+    do: gettext("token refresh not run")
 
-  defp token_refresh_failure_label(prefix, %{"reason" => %{} = reason}) do
-    message = Formatting.present_string(reason["message"])
-    code = Formatting.present_string(reason["code"])
+  defp token_refresh_failure_label(status, %{"reason" => %{} = reason}) do
+    token_refresh_failure_label(status, token_refresh_reason_message(reason), Formatting.present_string(reason["code"]))
+  end
 
-    cond do
-      message && code -> "#{token_refresh_message_label(prefix, message)} (#{code})"
-      message -> token_refresh_message_label(prefix, message)
-      code -> "#{prefix}: #{code}"
-      true -> prefix
+  defp token_refresh_failure_label(:failed, _metadata), do: gettext("token refresh failed")
+  defp token_refresh_failure_label(:reauth_required, _metadata), do: gettext("reauth required")
+
+  defp token_refresh_failure_label(:failed, message, code) when is_binary(message) and is_binary(code), do: gettext("token refresh failed: %{message} (%{code})", message: message, code: code)
+  defp token_refresh_failure_label(:failed, message, nil) when is_binary(message), do: gettext("token refresh failed: %{message}", message: message)
+  defp token_refresh_failure_label(:failed, nil, code) when is_binary(code), do: gettext("token refresh failed: %{code}", code: code)
+  defp token_refresh_failure_label(:reauth_required, message, code) when is_binary(message) and is_binary(code), do: gettext("reauth required: %{message} (%{code})", message: message, code: code)
+  defp token_refresh_failure_label(:reauth_required, message, nil) when is_binary(message), do: gettext("reauth required: %{message}", message: message)
+  defp token_refresh_failure_label(:reauth_required, nil, code) when is_binary(code), do: gettext("reauth required: %{code}", code: code)
+  defp token_refresh_failure_label(status, _message, _code), do: token_refresh_failure_label(status, nil)
+
+  defp token_refresh_value_label(identity, preferences) do
+    metadata = current_token_refresh_status(identity)
+
+    case metadata["status"] do
+      "succeeded" -> gettext("succeeded %{time}", time: Formatting.timestamp_value_label(Formatting.parse_timestamp(metadata["finished_at"]), preferences))
+      "refreshing" -> gettext("started %{time}", time: Formatting.timestamp_value_label(Formatting.parse_timestamp(metadata["started_at"]), preferences))
+      "imported" -> gettext("imported %{time}", time: Formatting.timestamp_value_label(Formatting.parse_timestamp(metadata["finished_at"]), preferences))
+      "failed" -> token_refresh_value_failure(metadata)
+      "reauth_required" -> token_refresh_failure_label(:reauth_required, metadata)
+      status when is_binary(status) -> status
+      _missing -> gettext("not run")
     end
   end
 
-  defp token_refresh_failure_label(prefix, _metadata), do: prefix
-
-  defp token_refresh_message_label(prefix, message) do
-    if String.starts_with?(message, "#{prefix}:") do
-      message
-    else
-      "#{prefix}: #{message}"
+  defp token_refresh_value_failure(%{"reason" => %{} = reason}) do
+    case {token_refresh_reason_message(reason), Formatting.present_string(reason["code"])} do
+      {message, code} when is_binary(message) and is_binary(code) -> gettext("failed: %{message} (%{code})", message: message, code: code)
+      {message, nil} when is_binary(message) -> gettext("failed: %{message}", message: message)
+      {nil, code} when is_binary(code) -> gettext("failed: %{code}", code: code)
+      _missing -> gettext("failed")
     end
   end
+
+  defp token_refresh_value_failure(_metadata), do: gettext("failed")
+
+  defp token_refresh_reason_message(reason) do
+    reason["message"] |> Formatting.present_string() |> token_refresh_reason_label()
+  end
+
+  defp token_refresh_reason_label("refresh token is missing"), do: gettext("refresh token is missing")
+  defp token_refresh_reason_label("refresh token was revoked"), do: gettext("refresh token was revoked")
+  defp token_refresh_reason_label("upstream returned an invalid refresh response"), do: gettext("upstream returned an invalid refresh response")
+  defp token_refresh_reason_label("provider usage authentication was rejected"), do: gettext("provider usage authentication was rejected")
+  defp token_refresh_reason_label("upstream OAuth refresh failed"), do: gettext("upstream OAuth refresh failed")
+  defp token_refresh_reason_label("token refresh failed: " <> detail), do: detail
+  defp token_refresh_reason_label("reauth required: " <> detail), do: detail
+  defp token_refresh_reason_label(message), do: message
 
   defp access_token_label(
          %{state: "known_future", expires_at: %DateTime{} = expires_at},
@@ -823,7 +845,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
        ),
        do: Formatting.timestamp_status_label("access token expired", expires_at, preferences)
 
-  defp access_token_label(_credential_expiry, _preferences), do: "access token expiry unavailable"
+  defp access_token_label(_credential_expiry, _preferences), do: gettext("access token expiry unavailable")
 
   defp reauth_required?(%{status: "reauth_required"}), do: true
   defp reauth_required?(_identity), do: false
@@ -837,7 +859,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   defp reauth_reason_message(identity) do
     identity
     |> token_refresh_reason()
-    |> Map.get("message")
+    |> token_refresh_reason_message()
   end
 
   defp token_refresh_reason(identity) do
@@ -867,12 +889,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     end
   end
 
-  defp usage_poll_pause_origin_label(status_code, source) do
-    status = if status_code, do: "HTTP #{status_code}", else: "a throttling response"
-    instruction = if source == "retry_after", do: "Retry-After", else: "a provider instruction"
+  defp usage_poll_pause_origin_label(status_code, "retry_after") when is_integer(status_code),
+    do: gettext("HTTP %{status_code} with Retry-After", status_code: status_code)
 
-    "#{status} with #{instruction}"
-  end
+  defp usage_poll_pause_origin_label(status_code, _source) when is_integer(status_code),
+    do: gettext("HTTP %{status_code} with a provider instruction", status_code: status_code)
+
+  defp usage_poll_pause_origin_label(_status_code, "retry_after"), do: gettext("a throttling response with Retry-After")
+  defp usage_poll_pause_origin_label(_status_code, _source), do: gettext("a throttling response with a provider instruction")
 
   defp refresh_job_state(nil), do: nil
   defp refresh_job_state(%{state: state}) when is_binary(state), do: state
@@ -965,19 +989,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   defp reconciliation_reason(status, steps) when status in ["partial", "failed"] do
     steps
     |> List.wrap()
-    |> Enum.find_value({nil, nil}, fn
-      %{} = step ->
-        code = map_value(step, :code)
-
-        if map_value(step, :status) == "failed" and
-             Map.has_key?(@safe_reconciliation_messages, code) do
-          {code, Map.fetch!(@safe_reconciliation_messages, code)}
-        end
-
-      _step ->
-        nil
-    end)
+    |> Enum.find_value({nil, nil}, &reconciliation_step_reason/1)
   end
+
+  defp reconciliation_step_reason(%{} = step) do
+    with "failed" <- map_value(step, :status),
+         code = map_value(step, :code),
+         message when is_binary(message) <- reconciliation_message(code) do
+      {code, message}
+    else
+      _not_failed_or_unreported -> nil
+    end
+  end
+
+  defp reconciliation_step_reason(_step), do: nil
+
+  defp reconciliation_message("catalog_refreshed"), do: gettext("catalog refreshed")
+  defp reconciliation_message("catalog_sync_failed"), do: gettext("catalog sync failed")
+  defp reconciliation_message("catalog_sync_in_progress"), do: gettext("catalog sync in progress")
+  defp reconciliation_message("catalog_sync_partial"), do: gettext("catalog sync partially completed")
+  defp reconciliation_message("catalog_sync_skipped"), do: gettext("catalog sync skipped")
+  defp reconciliation_message("health_preserved"), do: gettext("assignment health preserved")
+  defp reconciliation_message("health_refreshed"), do: gettext("assignment health refreshed")
+  defp reconciliation_message("health_skipped"), do: gettext("assignment health skipped")
+  defp reconciliation_message("quota_refreshed"), do: gettext("quota refreshed")
+  defp reconciliation_message("quota_refresh_auth_unavailable"), do: gettext("quota refresh authentication unavailable")
+  defp reconciliation_message("quota_refresh_failed"), do: gettext("quota refresh failed")
+  defp reconciliation_message("quota_refresh_superseded"), do: gettext("quota refresh superseded")
+  defp reconciliation_message("quota_refresh_unavailable"), do: gettext("quota refresh unavailable")
+  defp reconciliation_message("quota_reused_fresh"), do: gettext("fresh quota evidence reused")
+  defp reconciliation_message("workspace_identity_mismatch"), do: gettext("workspace identity mismatch")
+  defp reconciliation_message(_code), do: nil
 
   defp newest_non_future_timestamp(items, field, now) do
     items
@@ -1049,6 +1091,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp nested_map(_map, _key), do: nil
 
-  defp pool_label(nil), do: "Unknown Pool"
+  defp pool_label(nil), do: gettext("Unknown Pool")
   defp pool_label(pool), do: pool.name
 end

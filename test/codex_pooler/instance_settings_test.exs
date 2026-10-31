@@ -1558,7 +1558,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert "must be present when SMTP username is set" in errors_on(changeset).smtp.password
   end
 
-  test "send_smtp_test_email/3 uses unsaved values, preserves stored password, passes runtime config, and leaves the row unchanged" do
+  test "send_smtp_test_email/4 uses unsaved values, preserves stored password, passes runtime config, and leaves the row unchanged" do
     %{user: user} =
       AccountsFixtures.bootstrap_owner_fixture(%{"email" => AccountsFixtures.unique_user_email()})
 
@@ -1629,7 +1629,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     end)
 
     assert {:ok, %{code: :smtp_test_email_sent}} =
-             InstanceSettings.send_smtp_test_email(configured, success_attrs, scope)
+             InstanceSettings.send_smtp_test_email(configured, success_attrs, scope, "en")
 
     assert_received {^telemetry_ref, delivery_config}
     assert delivery_config[:relay] == "localhost"
@@ -1648,7 +1648,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert current.lock_version == before.lock_version
   end
 
-  test "send_smtp_test_email/3 returns validation errors when auth requires a usable password and clear is explicit" do
+  test "send_smtp_test_email/4 returns validation errors when auth requires a usable password and clear is explicit" do
     %{user: user} =
       AccountsFixtures.bootstrap_owner_fixture(%{"email" => AccountsFixtures.unique_user_email()})
 
@@ -1670,12 +1670,12 @@ defmodule CodexPooler.InstanceSettingsTest do
       }
       |> InstanceSettings.clear_smtp_password()
 
-    assert {:error, changeset} = InstanceSettings.send_smtp_test_email(settings, attrs, scope)
+    assert {:error, changeset} = InstanceSettings.send_smtp_test_email(settings, attrs, scope, "en")
     assert "must be present when SMTP username is set" in errors_on(changeset).smtp.password
     assert_no_email_sent()
   end
 
-  test "send_smtp_test_email/3 returns a sanitized error when the signed-in operator email is missing" do
+  test "send_smtp_test_email/4 returns a sanitized error when the signed-in operator email is missing" do
     %{user: user} =
       AccountsFixtures.bootstrap_owner_fixture(%{"email" => AccountsFixtures.unique_user_email()})
 
@@ -1700,7 +1700,7 @@ defmodule CodexPooler.InstanceSettingsTest do
       }
 
     assert {:error, %{code: :smtp_test_email_recipient_missing, message: message} = error} =
-             InstanceSettings.send_smtp_test_email(settings, attrs, scope)
+             InstanceSettings.send_smtp_test_email(settings, attrs, scope, "en")
 
     assert message == "Signed-in operator email is required for SMTP test email"
     refute inspect(error) =~ user.email

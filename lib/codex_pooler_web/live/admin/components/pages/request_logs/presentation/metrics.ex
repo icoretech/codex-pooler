@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Metrics do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPoolerWeb.Admin.Format
 
   @model_colors ~w(--color-info --color-success --color-secondary --color-warning --color-neutral --color-base-content)
@@ -15,13 +17,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Metrics do
   def token_composition(%{input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: total}) do
     if known_counts?([input, cached, output, total]) and total > 0 and input + output == total and cached <= input do
       segments = [
-        %{key: :cached_input, label: "Cached input", count: cached},
-        %{key: :uncached_input, label: "Uncached input", count: input - cached},
-        %{key: :output, label: "Output", count: output}
+        %{key: :cached_input, label: gettext("Cached input"), count: cached},
+        %{key: :uncached_input, label: gettext("Uncached input"), count: input - cached},
+        %{key: :output, label: gettext("Output"), count: output}
       ]
 
-      detail = Enum.map_join(segments, "; ", &"#{&1.label}: #{Format.integer(&1.count)}")
-      %{segments: segments, title: "#{Format.integer(total)} total tokens — #{detail}. Output includes reasoning tokens."}
+      title = ngettext("%{tokens} total token — Cached input: %{cached}; Uncached input: %{uncached}; Output: %{output}. Output includes reasoning tokens.", "%{tokens} total tokens — Cached input: %{cached}; Uncached input: %{uncached}; Output: %{output}. Output includes reasoning tokens.", total, tokens: Format.integer(total), cached: Format.integer(cached), uncached: Format.integer(input - cached), output: Format.integer(output))
+      %{segments: segments, title: title}
     end
   end
 

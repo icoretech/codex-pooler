@@ -47,10 +47,10 @@ defmodule CodexPoolerWeb.DateTimeInputTest do
     params = ApiKeyPolicyForm.empty_params([], "Europe/Rome")
     gap = Map.put(params, "expires_at", "2026-03-29T02:30")
     overlap = Map.put(params, "expires_at", "2026-10-25T02:30")
-    assert [expires_at: {gap_error, []}] = ApiKeyPolicyForm.expiry_errors(gap)
-    assert gap_error =~ "does not exist"
-    assert [expires_at: {overlap_error, []}] = ApiKeyPolicyForm.expiry_errors(overlap)
-    assert overlap_error =~ "occurs twice"
+    assert [expires_at: {gap_error, [timezone: "Europe/Rome"]}] = ApiKeyPolicyForm.expiry_errors(gap)
+    assert gap_error == "does not exist in %{timezone} because the clocks move forward"
+    assert [expires_at: {overlap_error, [timezone: "Europe/Rome"]}] = ApiKeyPolicyForm.expiry_errors(overlap)
+    assert overlap_error == "occurs twice in %{timezone}; choose a time outside the repeated hour"
   end
 
   test "an existing overlap deadline keeps its exact occurrence and precision" do

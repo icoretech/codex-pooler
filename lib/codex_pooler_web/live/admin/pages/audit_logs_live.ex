@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Audit logs",
+       page_title: gettext("Audit logs"),
        pools: [],
        selected_pool: nil,
        audit_logs: empty_audit_logs(),
@@ -125,6 +125,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:audit_logs}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -141,8 +143,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
           <section id="admin-audit-logs-live" class="grid min-w-0 gap-6">
             <AdminComponents.page_header
               id="audit-log-page-header"
-              title="Audit logs"
-              description="Who did what on this instance, from sign-ins to settings changes."
+              title={gettext("Audit logs")}
+              description={gettext("Who did what on this instance, from sign-ins to settings changes.")}
             />
 
             <.audit_log_filters
@@ -327,7 +329,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         form_values["outcome"],
         @outcome_options,
         :outcome,
-        "Outcome filter is not supported"
+        gettext("Outcome filter is not supported")
       )
 
     {actor_type, actor_type_error} =
@@ -335,7 +337,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         form_values["actor_type"],
         @actor_type_options,
         :actor_type,
-        "Actor type filter is not supported"
+        gettext("Actor type filter is not supported")
       )
 
     {action, action_error} =
@@ -343,7 +345,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         form_values["action"],
         Audit.supported_actions(),
         :action,
-        "Action filter is not supported"
+        gettext("Action filter is not supported")
       )
 
     {date_from, date_from_error} = parse_date(form_values["date_from"], :date_from, timezone)
@@ -386,7 +388,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         {pool, nil}
 
       true ->
-        {nil, %{field: :pool_id, message: "Pool filter did not match an available Pool"}}
+        {nil, %{field: :pool_id, message: gettext("Pool filter did not match an available Pool")}}
     end
   end
 
@@ -408,13 +410,13 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
         {datetime, nil}
 
       {:error, :gap} ->
-        {nil, %{field: field, message: "#{date_label(field)} does not exist in the selected timezone"}}
+        {nil, %{field: field, message: gettext("%{field} does not exist in the selected timezone", field: date_label(field))}}
 
       {:error, :unknown_timezone} ->
-        {nil, %{field: field, message: "#{date_label(field)} timezone is unavailable; update your timezone in Settings"}}
+        {nil, %{field: field, message: gettext("%{field} timezone is unavailable; update your timezone in Settings", field: date_label(field))}}
 
       {:error, _reason} ->
-        {nil, %{field: field, message: "#{date_label(field)} must be a valid date"}}
+        {nil, %{field: field, message: gettext("%{field} must be a valid date", field: date_label(field))}}
     end
   end
 
@@ -427,8 +429,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   defp selected_audit_event(%{id: selected_id}, events),
     do: Enum.find(events, &(&1.id == selected_id))
 
-  defp date_label(:date_from), do: "Date from"
-  defp date_label(:date_to), do: "Date to"
+  defp date_label(:date_from), do: gettext("Date from")
+  defp date_label(:date_to), do: gettext("Date to")
 
   defp string_param(params, key), do: params |> Map.get(key) |> blank_to_nil()
   defp blank_to_nil(value), do: if(blank?(value), do: nil, else: String.trim(to_string(value)))

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.OperatorForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Accounts
@@ -160,8 +162,8 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   def reset_operation(_operation), do: :reset
 
   @spec temporary_password_success(:reactivate | :reset) :: String.t()
-  def temporary_password_success(:reactivate), do: "Operator reactivated"
-  def temporary_password_success(:reset), do: "Operator password reset"
+  def temporary_password_success(:reactivate), do: gettext("Operator reactivated")
+  def temporary_password_success(:reset), do: gettext("Operator password reset")
 
   @spec temporary_password_receipt(map(), String.t()) :: temporary_password_receipt()
   def temporary_password_receipt(result, label) do

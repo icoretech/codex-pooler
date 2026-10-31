@@ -1,8 +1,11 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPoolerWeb.DateTimeDisplay
 
+  @spec format_errors(map(), map()) :: [String.t()]
   def format_errors(%{errors: errors}, datetime_preferences) do
     if is_nil(errors) or errors == [] do
       ["—"]
@@ -17,8 +20,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
     labels =
       Enum.map(errors, fn error ->
         cond do
-          quota_exhaustion_error?(error) -> "quota exhausted"
-          quota_evidence_unavailable?(error) -> "quota evidence unavailable"
+          quota_exhaustion_error?(error) -> gettext("quota exhausted")
+          quota_evidence_unavailable?(error) -> gettext("quota evidence unavailable")
           true -> retained_refusal_label(error, datetime_preferences) || format_single_error(error)
         end
       end)
@@ -48,7 +51,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   @spec format_advised_reset([map()] | nil, map()) :: String.t() | nil
   def format_advised_reset(errors, datetime_preferences) do
     case advised_reset(errors) do
-      {reset_at, seconds} -> "#{format_reset_at(reset_at, datetime_preferences)} (Retry-After #{seconds} s)"
+      {reset_at, seconds} -> gettext("%{time} (Retry-After %{seconds} s)", time: format_reset_at(reset_at, datetime_preferences), seconds: seconds)
       nil -> nil
     end
   end
@@ -66,7 +69,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   defp reset_display_items(nil, _datetime_preferences), do: []
 
   defp reset_display_items(reset_at, datetime_preferences),
-    do: ["resets #{format_reset_at(reset_at, datetime_preferences)}"]
+    do: [gettext("resets %{time}", time: format_reset_at(reset_at, datetime_preferences))]
 
   defp exhausted_reset_at(errors) do
     Enum.find_value(errors, fn error ->
@@ -115,7 +118,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
          {:ok, observed} <- diagnostic_datetime(error_field(error, :retained_refusal_observed_at)),
          {:ok, reset} <- diagnostic_datetime(error_field(error, :retained_refusal_reset_at)),
          :lt <- DateTime.compare(observed, reset) do
-      "feature refusal retained (#{code}); observed #{format_reset_at(observed, preferences)}; resets #{format_reset_at(reset, preferences)}"
+      gettext("feature refusal retained (%{code}); observed %{observed}; resets %{reset}", code: code, observed: format_reset_at(observed, preferences), reset: format_reset_at(reset, preferences))
     else
       _invalid -> nil
     end
@@ -144,6 +147,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
        when is_binary(source) and is_binary(kind),
        do: "#{source}:#{kind}"
 
-  defp format_single_error(%{}), do: "error"
-  defp format_single_error(_other), do: "error"
+  defp format_single_error(%{}), do: gettext("error")
+  defp format_single_error(_other), do: gettext("error")
 end

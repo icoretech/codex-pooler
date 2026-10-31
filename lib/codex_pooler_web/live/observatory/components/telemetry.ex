@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
   use Phoenix.Component
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   import CodexPoolerWeb.CoreComponents, only: [icon: 1]
 
@@ -9,6 +10,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
   attr :models, :list, required: true
   attr :window, :string, default: nil
 
+  @spec telemetry(map()) :: Phoenix.LiveView.Rendered.t()
   def telemetry(assigns) do
     ~H"""
     <.overview_strip overview={@overview} />
@@ -20,10 +22,11 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
 
   attr :overview, :map, required: true
 
+  @spec overview_strip(map()) :: Phoenix.LiveView.Rendered.t()
   def overview_strip(assigns) do
     ~H"""
     <section id="observatory-overview" aria-labelledby="observatory-overview-title">
-      <h2 id="observatory-overview-title" class="sr-only">Usage overview</h2>
+      <h2 id="observatory-overview-title" class="sr-only">{gettext("Usage overview")}</h2>
 
       <dl id="observatory-overview-facts" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div id="observatory-fact-success" class="observatory-kpi">
@@ -31,7 +34,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             <span class="observatory-kpi-icon bg-success/15 text-success">
               <.icon name="hero-check-circle" class="size-4" />
             </span>
-            Success rate <.grade_badge id="observatory-success-grade" grade={Map.get(Map.get(@overview, :success_rate, %{}), :grade)} />
+            {gettext("Success rate")} <.grade_badge id="observatory-success-grade" grade={Map.get(Map.get(@overview, :success_rate, %{}), :grade)} />
           </dt>
           <dd class="observatory-kpi-value-row">
             <span class="observatory-kpi-value">{text(
@@ -39,7 +42,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
               :success_rate,
               :measure,
               :value,
-              "Unavailable"
+              gettext("Unavailable")
             )}<span class="observatory-kpi-unit">{text(@overview, :success_rate, :measure, :unit, "")}</span></span>
             <span
               :if={trend_direction(@overview, :success_rate) != "unavailable"}
@@ -52,7 +55,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             </span>
           </dd>
           <dd class="observatory-kpi-detail">
-            {text(@overview, :success_rate, :detail, "No details available")}
+            {text(@overview, :success_rate, :detail, gettext("No details available"))}
           </dd>
         </div>
 
@@ -61,7 +64,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             <span class="observatory-kpi-icon bg-info/15 text-info">
               <.icon name="hero-circle-stack" class="size-4" />
             </span>
-            Cache rate <.grade_badge id="observatory-cache-grade" grade={Map.get(Map.get(@overview, :cache_rate, %{}), :grade)} />
+            {gettext("Cache rate")} <.grade_badge id="observatory-cache-grade" grade={Map.get(Map.get(@overview, :cache_rate, %{}), :grade)} />
           </dt>
           <dd class="observatory-kpi-value-row">
             <span class="observatory-kpi-value">{text(
@@ -69,7 +72,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
               :cache_rate,
               :measure,
               :value,
-              "Unavailable"
+              gettext("Unavailable")
             )}<span class="observatory-kpi-unit">{text(@overview, :cache_rate, :measure, :unit, "")}</span></span>
             <span
               :if={trend_direction(@overview, :cache_rate) != "unavailable"}
@@ -82,7 +85,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             </span>
           </dd>
           <dd class="observatory-kpi-detail">
-            {text(@overview, :cache_rate, :detail, "No cache details available")}
+            {text(@overview, :cache_rate, :detail, gettext("No cache details available"))}
           </dd>
         </div>
 
@@ -91,13 +94,13 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             <span class="observatory-kpi-icon bg-primary/15 text-primary">
               <.icon name="hero-banknotes" class="size-4" />
             </span>
-            Cost
+            {gettext("Cost")}
           </dt>
           <dd class="observatory-kpi-value-row">
-            <span class="observatory-kpi-value">{text(@overview, :cost, :settled, :label, "Unavailable")}</span>
+            <span class="observatory-kpi-value">{text(@overview, :cost, :settled, :label, gettext("Unavailable"))}</span>
           </dd>
           <dd class="observatory-kpi-detail">
-            {text(@overview, :cost, :detail, "Cost details unavailable")}
+            {text(@overview, :cost, :detail, gettext("Cost details unavailable"))}
           </dd>
         </div>
 
@@ -106,13 +109,13 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             <span class="observatory-kpi-icon bg-base-200 text-base-content/70">
               <.icon name="hero-chart-bar" class="size-4" />
             </span>
-            Tokens
+            {gettext("Tokens")}
           </dt>
           <dd class="observatory-kpi-value-row">
-            <span class="observatory-kpi-value">{text(@overview, :tokens, :value, "Unavailable")}</span>
+            <span class="observatory-kpi-value">{text(@overview, :tokens, :value, gettext("Unavailable"))}</span>
           </dd>
           <dd class="observatory-kpi-detail">
-            {text(@overview, :tokens, :detail, "No token details available")}
+            {text(@overview, :tokens, :detail, gettext("No token details available"))}
           </dd>
         </div>
       </dl>
@@ -150,6 +153,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
   attr :models, :list, required: true
   attr :window, :string, default: nil
 
+  @spec model_distribution(map()) :: Phoenix.LiveView.Rendered.t()
   def model_distribution(assigns) do
     ~H"""
     <section
@@ -157,7 +161,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
       class="grid min-w-0 content-start gap-4"
       aria-labelledby="observatory-models-title"
     >
-      <Section.divider id="observatory-models-title" label="Model Distribution" suffix={@window} />
+      <Section.divider id="observatory-models-title" label={gettext("Model Distribution")} suffix={@window} />
       <ol class="grid gap-3.5">
         <li
           :for={{model, rank} <- ranked_models(@models)}
@@ -180,7 +184,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
             data-role="observatory-model-bar"
             class="-mt-px h-1.5 overflow-hidden rounded-full bg-base-300/70"
             role="progressbar"
-            aria-label={"Model #{rank} share"}
+            aria-label={gettext("Model %{rank} share", rank: rank)}
             aria-valuemin="0"
             aria-valuemax="100"
             aria-valuenow={bar_percent(model)}
@@ -208,9 +212,9 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
     |> Enum.with_index(1)
   end
 
-  defp safe_model_label(model), do: text(model, :label, "Unnamed model")
-  defp safe_model_tokens(model), do: text(model, :token_label, "No token data")
-  defp model_requests(model), do: text(model, :requests_label, "No request data")
+  defp safe_model_label(model), do: text(model, :label, gettext("Unnamed model"))
+  defp safe_model_tokens(model), do: text(model, :token_label, gettext("No token data"))
+  defp model_requests(model), do: text(model, :requests_label, gettext("No request data"))
   defp model_share(model), do: text(model, :share_label, "—")
   defp model_cost(model), do: text(model, :cost_label, "—")
 
@@ -257,7 +261,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
   defp trend_value(_map, _parent), do: %{}
 
   defp trend_text(map, parent),
-    do: scalar(Map.get(trend_value(map, parent), :label), "not available")
+    do: scalar(Map.get(trend_value(map, parent), :label), gettext("not available"))
 
   defp trend_class(map, parent) do
     case Map.get(trend_value(map, parent), :tone) do

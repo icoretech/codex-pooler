@@ -156,3 +156,16 @@ test("clicking toggles, persists and reports", () => {
 	assert.equal(el.dataset.paused, "true");
 	assert.deepEqual(pushed, [["set_live_updates", { paused: true }]]);
 });
+
+test("translated accessible name remains server-owned while pausing and resuming", () => {
+	const { el, hook } = mountHook(memoryStorage());
+	el.attrs["aria-label"] = "暂停实时更新";
+	el.listeners.click();
+	assert.equal(el.attrs["aria-pressed"], "true");
+	assert.equal(el.attrs["aria-label"], "暂停实时更新");
+	hook.updated();
+	el.listeners.click();
+	assert.equal(el.attrs["aria-pressed"], "false");
+	assert.equal(el.attrs["aria-label"], "暂停实时更新");
+	hook.destroyed();
+});

@@ -37,6 +37,8 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   so the clause is owed the moment such a page gains a subscription.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 3]
 
   alias CodexPooler.Events
@@ -207,14 +209,14 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
              |> assign_openai_status()
              |> Phoenix.LiveView.put_flash(
                :error,
-               "Incidents changed. Review the latest updates before dismissing."
+               gettext("Incidents changed. Review the latest updates before dismissing.")
              )}
 
           {:error, _reason} ->
             {:halt,
              socket
              |> assign_openai_status()
-             |> Phoenix.LiveView.put_flash(:error, "Incidents could not be dismissed. Try again.")}
+             |> Phoenix.LiveView.put_flash(:error, gettext("Incidents could not be dismissed. Try again."))}
         end
 
       _ ->
@@ -326,12 +328,12 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
     Phoenix.LiveView.put_flash(
       socket,
       :info,
-      "Live updates paused. Lists hold still until you resume."
+      gettext("Live updates paused. Lists hold still until you resume.")
     )
   end
 
   defp announce(socket, false) do
-    Phoenix.LiveView.put_flash(socket, :info, "Live updates resumed.")
+    Phoenix.LiveView.put_flash(socket, :info, gettext("Live updates resumed."))
   end
 
   # The event name is owned here, so every shape of it is too: a payload without

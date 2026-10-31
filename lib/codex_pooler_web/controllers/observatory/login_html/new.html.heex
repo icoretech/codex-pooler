@@ -1,4 +1,4 @@
-<Layouts.app flash={@flash} auth_surface>
+<Layouts.app flash={@flash} locale={@locale} locale_preference={@locale_preference} auth_surface>
   <section
     id="observatory-login"
     class="mx-auto grid min-h-[calc(100svh-10rem)] w-full max-w-4xl items-center px-4 py-10"
@@ -17,11 +17,11 @@
                 <.icon name="hero-sparkles" class="size-6" />
               </span>
               <h1 class="text-3xl font-bold text-base-content sm:text-4xl">
-                Observatory
+                {gettext("Observatory")}
               </h1>
             </div>
             <p class="max-w-md text-sm leading-6 text-base-content/70">
-              Your access key at a glance: a read-only view of what it sends through Codex Pooler, with success rate, cache hits, speed and cost.
+              {gettext("Your access key at a glance: a read-only view of what it sends through Codex Pooler, with success rate, cache hits, speed and cost.")}
             </p>
           </div>
         </div>
@@ -47,12 +47,12 @@
             field={@form[:api_key]}
             id="observatory-api-key"
             type="password"
-            label="Access key"
+            label={gettext("Access key")}
             autocomplete="current-password"
             required
           />
           <.button id="observatory-login-submit" class="btn btn-primary w-full gap-2 sm:w-fit">
-            <span>Continue</span>
+            <span>{gettext("Continue")}</span>
             <.icon name="hero-arrow-right" class="size-4" />
           </.button>
         </.form>

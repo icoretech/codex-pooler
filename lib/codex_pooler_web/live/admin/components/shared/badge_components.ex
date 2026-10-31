@@ -4,80 +4,61 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   """
   use CodexPoolerWeb, :html
 
-  # Keys cover both the raw `chatgpt_plan_type` claim values (underscored, kept
-  # in plan_label) and their slugified plan_family forms (dashed). The raw
-  # value set tracks the Codex reference `KnownPlan` enum.
+  # The curated labels cover both raw `chatgpt_plan_type` claims (underscored)
+  # and their slugified plan_family forms (dashed). Product plan names remain
+  # verbatim; generic subscription tiers are translated at render time.
   # Pro display names follow https://help.openai.com/en/articles/9793128-about-chatgpt-pro-tiers.
-  @canonical_plan_labels %{
-    "business" => "Business",
-    "chatgpt plus" => "ChatGPT Plus",
-    "chatgpt pro" => "ChatGPT Pro",
-    "chatgpt team" => "ChatGPT Team",
-    "edu" => "Edu",
-    "edu-plus" => "Edu Plus",
-    "edu-pro" => "Edu Pro",
-    "edu_plus" => "Edu Plus",
-    "edu_pro" => "Edu Pro",
-    "education" => "Education",
-    "ent26" => "Enterprise",
-    "enterprise" => "Enterprise",
-    "enterprise-cbp-automation" => "Enterprise Automation",
-    "enterprise_cbp_automation" => "Enterprise Automation",
-    "enterprise-cbp-usage-based" => "Enterprise CBP Usage Based",
-    "enterprise_cbp_usage_based" => "Enterprise CBP Usage Based",
-    "free" => "Free",
-    "free plan" => "Free",
-    "go" => "Go",
-    "hc" => "Enterprise",
-    "plus" => "Plus",
-    "pro" => "Pro 200",
-    "prolite" => "Pro 100",
-    "promax" => "Pro 500",
-    "self-serve-business-prolite" => "Self Serve Business ProLite",
-    "self_serve_business_prolite" => "Self Serve Business ProLite",
-    "self-serve-business-usage-based" => "Self Serve Business Usage Based",
-    "self_serve_business_usage_based" => "Self Serve Business Usage Based",
-    "team" => "Team"
-  }
 
-  @routing_strategy_presentations %{
-    "bridge_ring" => %{
-      label: "Cache locality",
+  @spec routing_strategy_presentation(term()) :: map() | nil
+  def routing_strategy_presentation("bridge_ring") do
+    %{
+      label: gettext("Cache locality"),
       icon: "hero-circle-stack",
-      description: "Stable routing with a preference for matching prompt-cache keys.",
-      feature: "Prefer cache locality",
-      detail: "Matching cache keys prefer the same eligible upstream.",
-      cache_title: "Cache affinity can improve reuse",
-      cache_description: "It does not guarantee a cache hit."
-    },
-    "deterministic_rotation" => %{
-      label: "Rotation",
-      icon: "hero-arrow-path",
-      description: "Varies the starting upstream for independent requests.",
-      feature: "Vary the starting upstream",
-      detail: "Independent requests use a deterministic rotation.",
-      cache_title: "Cache keys do not override rotation",
-      cache_description: "Provider caching remains available."
-    },
-    "least_recent_success" => %{
-      label: "Least recent success",
-      icon: "hero-clock",
-      description: "Prefers upstreams whose last successful request was longest ago.",
-      feature: "Prefer the least recent success",
-      detail: "Prefers accounts without successes, then the oldest success.",
-      cache_title: "Cache keys do not override success history",
-      cache_description: "Provider caching remains available."
-    },
-    "quota_first" => %{
-      label: "Quota first",
-      icon: "hero-chart-bar-square",
-      description: "Prefers upstreams with more usable quota for the requested model.",
-      feature: "Prefer available quota",
-      detail: "Prioritizes usable remaining quota for the requested model.",
-      cache_title: "Quota takes priority over cache locality",
-      cache_description: "Provider caching remains available."
+      description: gettext("Stable routing with a preference for matching prompt-cache keys."),
+      feature: gettext("Prefer cache locality"),
+      detail: gettext("Matching cache keys prefer the same eligible upstream."),
+      cache_title: gettext("Cache affinity can improve reuse"),
+      cache_description: gettext("It does not guarantee a cache hit.")
     }
-  }
+  end
+
+  def routing_strategy_presentation("deterministic_rotation") do
+    %{
+      label: gettext("Rotation"),
+      icon: "hero-arrow-path",
+      description: gettext("Varies the starting upstream for independent requests."),
+      feature: gettext("Vary the starting upstream"),
+      detail: gettext("Independent requests use a deterministic rotation."),
+      cache_title: gettext("Cache keys do not override rotation"),
+      cache_description: gettext("Provider caching remains available.")
+    }
+  end
+
+  def routing_strategy_presentation("least_recent_success") do
+    %{
+      label: gettext("Least recent success"),
+      icon: "hero-clock",
+      description: gettext("Prefers upstreams whose last successful request was longest ago."),
+      feature: gettext("Prefer the least recent success"),
+      detail: gettext("Prefers accounts without successes, then the oldest success."),
+      cache_title: gettext("Cache keys do not override success history"),
+      cache_description: gettext("Provider caching remains available.")
+    }
+  end
+
+  def routing_strategy_presentation("quota_first") do
+    %{
+      label: gettext("Quota first"),
+      icon: "hero-chart-bar-square",
+      description: gettext("Prefers upstreams with more usable quota for the requested model."),
+      feature: gettext("Prefer available quota"),
+      detail: gettext("Prioritizes usable remaining quota for the requested model."),
+      cache_title: gettext("Quota takes priority over cache locality"),
+      cache_description: gettext("Provider caching remains available.")
+    }
+  end
+
+  def routing_strategy_presentation(_strategy), do: nil
 
   @consumer_plan_tones %{
     "go" => :go,
@@ -156,6 +137,7 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   def alert_severity_chip_class("info"), do: chip_class(:info)
   def alert_severity_chip_class(_severity), do: chip_class(:neutral)
 
+  @spec routing_strategy_label(term()) :: String.t() | nil
   def routing_strategy_label(strategy) do
     case routing_strategy_presentation(strategy) do
       %{label: label} -> label
@@ -163,12 +145,12 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     end
   end
 
-  def routing_strategy_icon(strategy) do
-    case routing_strategy_presentation(strategy) do
-      %{icon: icon} -> icon
-      nil -> "hero-server-stack"
-    end
-  end
+  @spec routing_strategy_icon(term()) :: String.t()
+  def routing_strategy_icon("bridge_ring"), do: "hero-circle-stack"
+  def routing_strategy_icon("deterministic_rotation"), do: "hero-arrow-path"
+  def routing_strategy_icon("least_recent_success"), do: "hero-clock"
+  def routing_strategy_icon("quota_first"), do: "hero-chart-bar-square"
+  def routing_strategy_icon(_strategy), do: "hero-server-stack"
 
   def lifecycle_chip_class("active"), do: chip_class(:success)
   def lifecycle_chip_class("disabled"), do: chip_class(:warning)
@@ -180,16 +162,17 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   attr :id, :string, default: nil
   attr :label, :string, default: nil
   attr :family, :string, default: nil
-  attr :placeholder, :string, default: "Plan unknown"
+  attr :placeholder, :string, default: nil
   attr :class, :any, default: nil
   attr :rest, :global
 
+  @spec plan_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def plan_badge(assigns) do
     assigns =
       assigns
       |> assign(
         :badge_label,
-        plan_badge_label(assigns.label, assigns.family, assigns.placeholder)
+        plan_badge_label(assigns.label, assigns.family, assigns.placeholder || gettext("Plan unknown"))
       )
       |> assign(:badge_class, plan_badge_class(assigns.label || assigns.family))
 
@@ -200,7 +183,8 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     """
   end
 
-  def plan_badge_label(plan_label), do: plan_badge_text(plan_label, "Plan unknown")
+  @spec plan_badge_label(String.t() | nil) :: String.t()
+  def plan_badge_label(plan_label), do: plan_badge_text(plan_label, gettext("Plan unknown"))
 
   def plan_badge_class(plan_label) do
     plan_label
@@ -262,15 +246,30 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
 
   defp canonical_plan_label(plan_label) do
     normalized = plan_label |> String.downcase() |> String.trim()
-    Map.get(@canonical_plan_labels, normalized, plan_label)
+    canonical_plan_label(normalized, plan_label)
   end
 
-  @spec routing_strategy_presentation(term()) :: map() | nil
-  def routing_strategy_presentation(strategy) when is_binary(strategy) do
-    Map.get(@routing_strategy_presentations, strategy)
-  end
-
-  def routing_strategy_presentation(_strategy), do: nil
+  defp canonical_plan_label("business", _), do: pgettext("subscription plan", "Business")
+  defp canonical_plan_label("chatgpt plus", _), do: "ChatGPT Plus"
+  defp canonical_plan_label("chatgpt pro", _), do: "ChatGPT Pro"
+  defp canonical_plan_label("chatgpt team", _), do: "ChatGPT Team"
+  defp canonical_plan_label("team", _), do: "Team"
+  defp canonical_plan_label("edu", _), do: "Edu"
+  defp canonical_plan_label(value, _) when value in ["edu-plus", "edu_plus"], do: "Edu Plus"
+  defp canonical_plan_label(value, _) when value in ["edu-pro", "edu_pro"], do: "Edu Pro"
+  defp canonical_plan_label("education", _), do: pgettext("subscription plan", "Education")
+  defp canonical_plan_label(value, _) when value in ["ent26", "enterprise", "hc"], do: pgettext("subscription plan", "Enterprise")
+  defp canonical_plan_label(value, _) when value in ["enterprise-cbp-automation", "enterprise_cbp_automation"], do: pgettext("subscription plan", "Enterprise Automation")
+  defp canonical_plan_label(value, _) when value in ["enterprise-cbp-usage-based", "enterprise_cbp_usage_based"], do: pgettext("subscription plan", "Enterprise CBP Usage Based")
+  defp canonical_plan_label(value, _) when value in ["free", "free plan"], do: pgettext("subscription plan", "Free")
+  defp canonical_plan_label("go", _), do: "Go"
+  defp canonical_plan_label("plus", _), do: "Plus"
+  defp canonical_plan_label("pro", _), do: "Pro 200"
+  defp canonical_plan_label("prolite", _), do: "Pro 100"
+  defp canonical_plan_label("promax", _), do: "Pro 500"
+  defp canonical_plan_label(value, _) when value in ["self-serve-business-prolite", "self_serve_business_prolite"], do: pgettext("subscription plan", "Self Serve Business ProLite")
+  defp canonical_plan_label(value, _) when value in ["self-serve-business-usage-based", "self_serve_business_usage_based"], do: pgettext("subscription plan", "Self Serve Business Usage Based")
+  defp canonical_plan_label(_normalized, original), do: original
 
   defp plan_tone(plan_label) when is_binary(plan_label) do
     normalized = plan_label |> String.downcase() |> String.trim()

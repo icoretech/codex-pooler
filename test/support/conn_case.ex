@@ -43,6 +43,7 @@ defmodule CodexPoolerWeb.ConnCase do
   end
 
   setup tags do
+    Gettext.put_locale("en")
     sandbox = CodexPooler.DataCase.setup_sandbox(tags)
     {:ok, Map.put(sandbox, :conn, ConnTest.build_conn())}
   end
@@ -75,6 +76,23 @@ defmodule CodexPoolerWeb.ConnCase do
       :live_socket_id,
       CodexPoolerWeb.UserAuth.live_socket_id_for_token(token)
     )
+  end
+
+  @doc "Sets an explicit browser-language request cookie for controller and LiveView tests."
+  @spec put_locale(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  def put_locale(conn, tag) do
+    Plug.Test.put_req_cookie(conn, CodexPoolerWeb.Locale.cookie_name(), tag)
+  end
+
+  @doc "Persists an account preference before signing its existing fixture session into a connection."
+  @spec sign_in_with_locale(
+          Plug.Conn.t(),
+          %{required(:user) => CodexPooler.Accounts.User.t(), required(:token) => binary()},
+          String.t() | nil
+        ) :: Plug.Conn.t()
+  def sign_in_with_locale(conn, %{user: user, token: token}, tag) do
+    {:ok, user} = CodexPooler.Accounts.update_user_locale(user, tag)
+    log_in_user(conn, user, token)
   end
 
   @spec start_rollout_drain_harness(keyword()) :: %{

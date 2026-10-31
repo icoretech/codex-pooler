@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamFilterForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -69,7 +71,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamFilterForm do
 
   defp any_status_option do
     %{
-      label: "Any status",
+      label: gettext("Any status"),
       value: "",
       icon: "hero-circle-stack",
       tone: :neutral
@@ -85,11 +87,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamFilterForm do
     }
   end
 
-  defp status_label(status) do
-    status
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp status_label("pending"), do: gettext("Pending")
+  defp status_label("active"), do: gettext("Active")
+  defp status_label("paused"), do: gettext("Paused")
+  defp status_label("refresh_due"), do: gettext("Refresh due")
+  defp status_label("refreshing"), do: gettext("Refreshing")
+  defp status_label("refresh_failed"), do: gettext("Refresh failed")
+  defp status_label("reauth_required"), do: gettext("Reauth required")
+  defp status_label("disabled"), do: gettext("Disabled")
+  defp status_label("errored"), do: gettext("Errored")
+  defp status_label("deleted"), do: gettext("Deleted")
 
   defp status_icon("active"), do: "hero-check-circle"
   defp status_icon("paused"), do: "hero-pause-circle"

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Ecto.Query
   import Phoenix.Component, only: [to_form: 2]
 
@@ -34,7 +36,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         }
   @type delivery_attempt :: %{
           required(:id) => Ecto.UUID.t(),
-          required(:channel_id) => Ecto.UUID.t(),
+          required(:channel_id) => Ecto.UUID.t() | nil,
           required(:channel_label) => String.t(),
           required(:status) => String.t(),
           required(:status_label) => String.t(),
@@ -135,16 +137,20 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   end
 
   @spec severity_label(String.t() | nil) :: String.t()
-  def severity_label("critical"), do: "Critical"
-  def severity_label("warning"), do: "Warning"
-  def severity_label("info"), do: "Info"
-  def severity_label(_severity), do: "Unknown severity"
+  def severity_label("critical"), do: gettext("Critical")
+  def severity_label("warning"), do: gettext("Warning")
+  def severity_label("info"), do: gettext("Info")
+  def severity_label(_severity), do: gettext("Unknown severity")
 
   @spec state_label(String.t() | nil) :: String.t()
-  def state_label("open"), do: "Open"
-  def state_label("acknowledged"), do: "Acknowledged"
-  def state_label("resolved"), do: "Resolved"
-  def state_label(_state), do: "Unknown state"
+  def state_label("open") do
+    gettext_comment("Open means an unresolved alert incident, not the action for opening a page.")
+    pgettext("incident state", "Open")
+  end
+
+  def state_label("acknowledged"), do: gettext("Acknowledged")
+  def state_label("resolved"), do: gettext("Resolved")
+  def state_label(_state), do: gettext("Unknown state")
 
   defp manageable_pools(scope) do
     case Alerts.list_manageable_pools(scope) do
@@ -185,7 +191,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         form_values["severity"],
         AlertIncident.severities(),
         :severity,
-        "Severity filter is not supported"
+        gettext("Severity filter is not supported")
       )
 
     {state, state_error} =
@@ -193,7 +199,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         form_values["state"],
         AlertIncident.states(),
         :state,
-        "State filter is not supported"
+        gettext("State filter is not supported")
       )
 
     {rule_id, rule_error} =
@@ -201,7 +207,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         form_values["rule_id"],
         Enum.map(rules, & &1.id),
         :rule_id,
-        "Rule filter is not available"
+        gettext("Rule filter is not available")
       )
 
     {channel_id, channel_error} =
@@ -209,7 +215,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         form_values["channel_id"],
         Enum.map(channels, & &1.id),
         :channel_id,
-        "Channel filter is not available"
+        gettext("Channel filter is not available")
       )
 
     filters = %{
@@ -252,7 +258,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   end
 
   defp parse_incident_id(_value), do: invalid_incident_id()
-  defp invalid_incident_id, do: {nil, %{field: :incident_id, message: "Incident filter is not valid"}}
+  defp invalid_incident_id, do: {nil, %{field: :incident_id, message: gettext("Incident filter is not valid")}}
 
   defp parse_pool_id(nil, _pools), do: {nil, nil}
   defp parse_pool_id("", _pools), do: {nil, nil}
@@ -261,7 +267,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     if Enum.any?(pools, &(&1.id == pool_id)) do
       {pool_id, nil}
     else
-      {nil, %{field: :pool_id, message: "Pool filter did not match an available Pool"}}
+      {nil, %{field: :pool_id, message: gettext("Pool filter did not match an available Pool")}}
     end
   end
 
@@ -394,20 +400,20 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       sent_count: 0,
       attention_count: 0,
       latest_status: nil,
-      label: "No delivery attempts",
+      label: gettext("No delivery attempts"),
       attempts: []
     }
   end
 
   defp delivery_label(0, _sent_count, _attention_count, _latest_status),
-    do: "No delivery attempts"
+    do: gettext("No delivery attempts")
 
   defp delivery_label(total_count, sent_count, attention_count, latest_status) do
     [
-      pluralize(total_count, "attempt", "attempts"),
-      pluralize(sent_count, "sent", "sent"),
-      if(attention_count > 0, do: pluralize(attention_count, "needs attention", "needs attention")),
-      latest_status && "latest #{delivery_status_label(latest_status)}"
+      ngettext("%{count} attempt", "%{count} attempts", total_count),
+      ngettext("%{count} sent", "%{count} sent", sent_count),
+      if(attention_count > 0, do: ngettext("%{count} needs attention", "%{count} needs attention", attention_count)),
+      latest_status && gettext("latest %{status}", status: delivery_status_label(latest_status))
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join(" · ")
@@ -417,7 +423,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     %{
       id: attempt.id,
       channel_id: attempt.channel_id,
-      channel_label: attempt.channel_label,
+      channel_label: attempt.channel_label || gettext("Deleted channel"),
       status: attempt.status,
       status_label: delivery_status_label(attempt.status),
       attempt_number: attempt.attempt_number,
@@ -437,18 +443,18 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     failure_metadata = attempt.failure_metadata || %{}
 
     [
-      detail("Adapter", metadata["delivery_adapter"]),
-      detail("Channel type", metadata["channel_type"]),
-      detail("Endpoint host", metadata["endpoint_host"]),
-      detail("Endpoint path", metadata["endpoint_path_prefix"]),
-      detail("Endpoint fingerprint", metadata["endpoint_fingerprint"]),
-      detail("Recipient domain", metadata["recipient_domain"]),
-      detail("Payload bytes", metadata["payload_bytes"]),
-      detail("HTTP status", attempt.response_status_code || metadata["response_status_code"]),
-      detail("Reason", metadata["reason_code"]),
-      detail("Delivery", metadata["delivery_status"]),
-      detail("Failure code", attempt.failure_code || failure_metadata["failure_code"]),
-      detail("Retryable", retryable_label(attempt.retryable || failure_metadata["retryable"]))
+      detail(gettext("Adapter"), metadata["delivery_adapter"]),
+      detail(gettext("Channel type"), metadata["channel_type"]),
+      detail(gettext("Endpoint host"), metadata["endpoint_host"]),
+      detail(gettext("Endpoint path"), metadata["endpoint_path_prefix"]),
+      detail(gettext("Endpoint fingerprint"), metadata["endpoint_fingerprint"]),
+      detail(gettext("Recipient domain"), metadata["recipient_domain"]),
+      detail(gettext("Payload bytes"), metadata["payload_bytes"]),
+      detail(gettext("HTTP status"), attempt.response_status_code || metadata["response_status_code"]),
+      detail(gettext("Reason"), metadata["reason_code"]),
+      detail(gettext("Delivery"), metadata["delivery_status"]),
+      detail(gettext("Failure code"), attempt.failure_code || failure_metadata["failure_code"]),
+      detail(gettext("Retryable"), retryable_label(attempt.retryable || failure_metadata["retryable"]))
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.take(8)
@@ -469,7 +475,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp safe_detail_value(value) when is_binary(value), do: safe_text(value)
   defp safe_detail_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp safe_detail_value(value) when is_boolean(value), do: if(value, do: "yes", else: "no")
+  defp safe_detail_value(value) when is_boolean(value), do: if(value, do: gettext("yes"), else: gettext("no"))
   defp safe_detail_value(value), do: value |> to_string() |> safe_text()
 
   defp safe_text(value) do
@@ -491,7 +497,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp truncate_detail_value(value), do: value
 
-  defp retryable_label(true), do: "yes"
+  defp retryable_label(true), do: gettext("yes")
   defp retryable_label(false), do: nil
   defp retryable_label(_value), do: nil
 
@@ -522,7 +528,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp upstream_account_label(identity) do
     safe_account_identifier(identity.account_label) ||
       safe_account_identifier(identity.chatgpt_account_id) ||
-      "Upstream account"
+      gettext("Upstream account")
   end
 
   defp safe_account_identifier(value) do
@@ -543,40 +549,40 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     end
   end
 
-  defp reason_title(%{rule_kind: "pool_no_usable_assignments"}), do: "No usable assignments"
+  defp reason_title(%{rule_kind: "pool_no_usable_assignments"}), do: gettext("No usable assignments")
 
   defp reason_title(%{rule_kind: "pool_low_usable_assignments"}),
-    do: "Low usable assignment coverage"
+    do: gettext("Low usable assignment coverage")
 
   defp reason_title(%{rule_kind: "pool_all_assignments_in_state"}),
-    do: "Assignments match an attention state"
+    do: gettext("Assignments match an attention state")
 
-  defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: "Quota threshold reached"
-  defp reason_title(%{rule_kind: "upstream_auth_state"}), do: "Upstream auth attention needed"
+  defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: gettext("Quota threshold reached")
+  defp reason_title(%{rule_kind: "upstream_auth_state"}), do: gettext("Upstream auth attention needed")
 
   defp reason_title(%{rule_kind: "upstream_saved_reset_banked_first_seen"}),
-    do: "New banked reset evidence"
+    do: gettext("New banked reset evidence")
 
-  defp reason_title(_incident), do: "Alert condition matched"
+  defp reason_title(_incident), do: gettext("Alert condition matched")
 
   defp reason_detail(incident, upstream_account_label)
 
   defp reason_detail(%{rule_kind: "upstream_quota_threshold"}, _upstream_account_label) do
-    "Persisted quota evidence crossed the configured threshold for at least one manageable impacted Pool."
+    gettext("Persisted quota evidence crossed the configured threshold for at least one manageable impacted Pool.")
   end
 
   defp reason_detail(%{rule_kind: "upstream_auth_state"}, _upstream_account_label) do
-    "Persisted upstream account state matched an alert condition for at least one manageable impacted Pool."
+    gettext("Persisted upstream account state matched an alert condition for at least one manageable impacted Pool.")
   end
 
   defp reason_detail(
          %{rule_kind: "upstream_saved_reset_banked_first_seen"} = incident,
          upstream_account_label
        ) do
-    label = upstream_account_label || "Upstream account"
+    label = upstream_account_label || gettext("Upstream account")
 
     [
-      "Persisted metadata shows new banked reset evidence on an upstream account: #{label}.",
+      gettext("Persisted metadata shows new banked reset evidence on an upstream account: %{account}.", account: label),
       saved_reset_count_detail(incident.safe_evidence_snapshot || %{}),
       saved_reset_expiration_detail(incident.safe_evidence_snapshot || %{})
     ]
@@ -585,24 +591,28 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   end
 
   defp reason_detail(%{rule_kind: "pool_all_assignments_in_state"}, _upstream_account_label) do
-    "Persisted assignment and quota evidence show all enabled assignments in the selected attention state."
+    gettext("Persisted assignment and quota evidence show all enabled assignments in the selected attention state.")
   end
 
   defp reason_detail(%{rule_kind: "pool_low_usable_assignments"}, _upstream_account_label) do
-    "Persisted routing evidence shows fewer usable assignments than this rule requires."
+    gettext("Persisted routing evidence shows fewer usable assignments than this rule requires.")
   end
 
   defp reason_detail(_incident, _upstream_account_label) do
-    "Persisted routing evidence shows no currently usable assignment for this condition."
+    gettext("Persisted routing evidence shows no currently usable assignment for this condition.")
   end
 
   # Pool rules record how many assignments were in each state; name them in
   # the bounded alert vocabulary so, for example, an unserved model is
   # visible in words. Unknown states are dropped by the vocabulary.
   defp with_assignment_states(detail, %{safe_evidence_snapshot: %{} = evidence}) do
-    case AssignmentState.describe(evidence["state_counts"]) do
-      nil -> detail
-      states -> "#{detail} Assignment states: #{states}."
+    case AssignmentState.bounded_counts(evidence["state_counts"]) do
+      nil ->
+        detail
+
+      counts ->
+        states = AssignmentState.states() |> Enum.filter(&Map.has_key?(counts, &1)) |> Enum.map_join(", ", &assignment_state_count(&1, Map.fetch!(counts, &1)))
+        gettext("%{detail} Assignment states: %{states}.", detail: detail, states: states)
     end
   end
 
@@ -610,12 +620,8 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp saved_reset_count_detail(%{} = evidence) do
     [
-      count_fragment(evidence["new_reset_count"], "new reset", "new resets"),
-      count_fragment(
-        evidence["available_count"],
-        "banked reset available",
-        "banked resets available"
-      )
+      count_fragment(evidence["new_reset_count"], :new),
+      count_fragment(evidence["available_count"], :available)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("; ")
@@ -625,11 +631,8 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp saved_reset_expiration_detail(%{} = evidence) do
     [
-      expiration_fragment(
-        "next expires",
-        evidence["next_reset_expires_at"] || evidence["reset_expires_at"]
-      ),
-      expiration_fragment("latest expires", evidence["latest_reset_expires_at"])
+      expiration_fragment(:next, evidence["next_reset_expires_at"] || evidence["reset_expires_at"]),
+      expiration_fragment(:latest, evidence["latest_reset_expires_at"])
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("; ")
@@ -637,41 +640,48 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp saved_reset_expiration_detail(_evidence), do: nil
 
-  defp count_fragment(count, singular, plural) when is_integer(count) and count >= 0,
-    do: pluralize(count, singular, plural)
+  defp count_fragment(count, :new) when is_integer(count) and count >= 0,
+    do: ngettext("%{count} new reset", "%{count} new resets", count)
 
-  defp count_fragment(_count, _singular, _plural), do: nil
+  defp count_fragment(count, :available) when is_integer(count) and count >= 0,
+    do: ngettext("%{count} banked reset available", "%{count} banked resets available", count)
 
-  defp expiration_fragment(label, value) when is_binary(value) do
-    value = safe_detail_value(value)
-    if value == "", do: nil, else: "#{label} #{value}"
+  defp count_fragment(_count, _kind), do: nil
+
+  defp expiration_fragment(kind, value) when is_binary(value) do
+    case safe_detail_value(value) do
+      "" -> nil
+      time -> expiration_label(kind, time)
+    end
   end
 
-  defp expiration_fragment(_label, _value), do: nil
+  defp expiration_fragment(_kind, _value), do: nil
+  defp expiration_label(:next, time), do: gettext("next expires %{time}", time: time)
+  defp expiration_label(:latest, time), do: gettext("latest expires %{time}", time: time)
 
   defp severity_filter_options do
-    [%{label: "Any severity", value: "", icon: "hero-adjustments-horizontal"}] ++
+    [%{label: gettext("Any severity"), value: "", icon: "hero-adjustments-horizontal"}] ++
       Enum.map(AlertIncident.severities(), fn severity ->
         %{label: severity_label(severity), value: severity, icon: severity_icon(severity)}
       end)
   end
 
   defp state_filter_options do
-    [%{label: "Any state", value: "", icon: "hero-adjustments-horizontal"}] ++
+    [%{label: gettext("Any state"), value: "", icon: "hero-adjustments-horizontal"}] ++
       Enum.map(AlertIncident.states(), fn state ->
         %{label: state_label(state), value: state, icon: state_icon(state)}
       end)
   end
 
   defp rule_filter_options(rules) do
-    [%{label: "Any rule", value: "", icon: "hero-bell-alert"}] ++
+    [%{label: gettext("Any rule"), value: "", icon: "hero-bell-alert"}] ++
       Enum.map(rules, fn rule ->
         %{label: rule.display_name, value: rule.id, icon: "hero-bell-alert"}
       end)
   end
 
   defp channel_filter_options(channels) do
-    [%{label: "Any channel", value: "", icon: "hero-paper-airplane"}] ++
+    [%{label: gettext("Any channel"), value: "", icon: "hero-paper-airplane"}] ++
       Enum.map(channels, fn channel ->
         %{
           label: channel.display_name,
@@ -692,15 +702,22 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp state_icon("acknowledged"), do: "hero-hand-raised"
   defp state_icon(_state), do: "hero-bell-alert"
 
-  defp delivery_status_label("sent"), do: "sent"
-  defp delivery_status_label("retryable"), do: "retryable"
-  defp delivery_status_label("failed"), do: "failed"
-  defp delivery_status_label("discarded"), do: "discarded"
-  defp delivery_status_label("pending"), do: "pending"
-  defp delivery_status_label(_status), do: "unknown"
+  defp delivery_status_label("sent"), do: gettext("sent")
+  defp delivery_status_label("retryable"), do: gettext("retryable")
+  defp delivery_status_label("failed"), do: gettext("failed")
+  defp delivery_status_label("discarded"), do: gettext("discarded")
+  defp delivery_status_label("pending"), do: gettext("pending")
+  defp delivery_status_label(_status), do: gettext("unknown")
 
-  defp pluralize(1, singular, _plural), do: "1 #{singular}"
-  defp pluralize(count, _singular, plural), do: "#{count} #{plural}"
+  defp assignment_state_count("model_not_served", count), do: ngettext("%{count} model not served", "%{count} model not served", count)
+  defp assignment_state_count("exhausted", count), do: ngettext("%{count} quota exhausted", "%{count} quota exhausted", count)
+  defp assignment_state_count("stale", count), do: ngettext("%{count} quota stale", "%{count} quota stale", count)
+  defp assignment_state_count("missing_evidence", count), do: ngettext("%{count} quota evidence missing", "%{count} quota evidence missing", count)
+  defp assignment_state_count("weekly_only", count), do: ngettext("%{count} weekly-only quota evidence", "%{count} weekly-only quota evidence", count)
+  defp assignment_state_count("credit_backed_probe", count), do: ngettext("%{count} credit-backed quota probe", "%{count} credit-backed quota probe", count)
+  defp assignment_state_count("usable", count), do: ngettext("%{count} quota usable", "%{count} quota usable", count)
+  defp assignment_state_count("reauth_required", count), do: ngettext("%{count} reauthorization required", "%{count} reauthorization required", count)
+  defp assignment_state_count("refresh_failed", count), do: ngettext("%{count} token refresh failed", "%{count} token refresh failed", count)
 
   defp present_string(value) when is_binary(value) do
     value = safe_text(value)

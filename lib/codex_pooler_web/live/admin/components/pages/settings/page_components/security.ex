@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
   attr :password_form, :any, required: true
   attr :browser_sessions, :list, required: true
 
+  @spec panel(map()) :: Phoenix.LiveView.Rendered.t()
   def panel(assigns) do
     ~H"""
     <section id="settings-security-panel" class="grid gap-4">
@@ -40,20 +41,20 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="grid gap-2">
           <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-            Second factor
+            {gettext("Second factor")}
           </p>
-          <h3 class="text-xl font-semibold text-base-content">Authenticator app</h3>
+          <h3 class="text-xl font-semibold text-base-content">{gettext("Authenticator app")}</h3>
           <p id="settings-totp-status" class="text-sm leading-6 text-base-content/65">
             {if @totp_enabled?,
-              do: "TOTP enabled",
-              else: "TOTP not set up"}
+              do: gettext("TOTP enabled"),
+              else: gettext("TOTP not set up")}
           </p>
         </div>
         <AdminComponents.action_button
           :if={!@totp_enabled?}
           id="settings-enable-totp"
           icon="hero-shield-check"
-          label="Set up TOTP"
+          label={gettext("Set up TOTP")}
           phx-click="enable_totp"
           variant={:primary}
         />
@@ -69,6 +70,8 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
           class="grid content-start gap-3"
           phx-hook="TotpSetupTools"
           data-otpauth-uri={totp_otpauth_uri(@totp_setup, @current_scope.user)}
+          data-qr-label={gettext("Authenticator app QR code")}
+          data-qr-error-label={gettext("QR code could not be rendered")}
         >
           <div class="rounded-box border border-base-300 bg-base-100 p-3">
             <div
@@ -85,18 +88,18 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
             class="btn btn-secondary btn-sm gap-2"
             phx-hook="ClipboardCopy"
             data-copy-text={@totp_setup.secret}
-            data-copy-label="Copy secret"
-            data-copied-label="Copied"
+            data-copy-label={gettext("Copy secret")}
+            data-copied-label={gettext("Copied")}
           >
             <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-            <span data-copy-label>Copy secret</span>
+            <span data-copy-label>{gettext("Copy secret")}</span>
           </button>
         </div>
         <div class="grid min-w-0 gap-4">
           <div class="grid gap-1">
-            <p class="font-semibold text-base-content">Save these details now</p>
+            <p class="font-semibold text-base-content">{gettext("Save these details now")}</p>
             <p class="text-sm leading-6 text-base-content/70">
-              Scan the QR code, copy the secret if scanning is not available, then download the recovery codes.
+              {gettext("Scan the QR code, copy the secret if scanning is not available, then download the recovery codes.")}
             </p>
           </div>
           <code
@@ -107,7 +110,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
           </code>
           <div class="flex flex-wrap items-center justify-between gap-2">
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-              Recovery codes
+              {gettext("Recovery codes")}
             </p>
             <div class="flex flex-wrap gap-2">
               <button
@@ -116,11 +119,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
                 class="btn btn-secondary btn-sm gap-2"
                 phx-hook="ClipboardCopy"
                 data-copy-text={recovery_codes_text(@totp_setup)}
-                data-copy-label="Copy codes"
-                data-copied-label="Copied"
+                data-copy-label={gettext("Copy codes")}
+                data-copied-label={gettext("Copied")}
               >
                 <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-                <span data-copy-label>Copy codes</span>
+                <span data-copy-label>{gettext("Copy codes")}</span>
               </button>
               <a
                 id="settings-totp-recovery-download"
@@ -129,7 +132,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
                 download="codex-pooler-recovery-codes.txt"
               >
                 <.icon name="hero-arrow-down-tray" class="size-4" />
-                <span>Download</span>
+                <span>{gettext("Download")}</span>
               </a>
             </div>
           </div>
@@ -162,11 +165,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
         <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
           <div>
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Password
+              {gettext("Password")}
             </p>
-            <h3 class="mt-1 text-xl font-semibold text-base-content">Change password</h3>
+            <h3 class="mt-1 text-xl font-semibold text-base-content">{gettext("Change password")}</h3>
             <p class="mt-1 text-sm leading-6 text-base-content/65">
-              Enter your current password and choose the password you will use next.
+              {gettext("Enter your current password and choose the password you will use next.")}
             </p>
           </div>
           <div class="grid gap-4 md:grid-cols-3">
@@ -174,7 +177,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
               id="settings-current-password"
               field={@password_form[:current_password]}
               type="password"
-              label="Current password"
+              label={gettext("Current password")}
               autocomplete="current-password"
               required
             />
@@ -182,7 +185,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
               id="settings-new-password"
               field={@password_form[:new_password]}
               type="password"
-              label="New password"
+              label={gettext("New password")}
               autocomplete="new-password"
               required
             />
@@ -190,7 +193,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
               id="settings-new-password-confirmation"
               field={@password_form[:new_password_confirmation]}
               type="password"
-              label="Confirm new password"
+              label={gettext("Confirm new password")}
               autocomplete="new-password"
               required
             />
@@ -200,7 +203,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
           <AdminComponents.action_button
             id="settings-password-submit"
             icon="hero-lock-closed"
-            label="Update password"
+            label={gettext("Update password")}
             type="submit"
             variant={:primary}
           />
@@ -222,17 +225,17 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="grid gap-2">
           <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-            Sessions
+            {gettext("Sessions")}
           </p>
-          <h3 class="text-xl font-semibold text-base-content">Browser sessions</h3>
+          <h3 class="text-xl font-semibold text-base-content">{gettext("Browser sessions")}</h3>
           <p class="text-sm leading-6 text-base-content/65">
-            Review active browser sessions for this operator account.
+            {gettext("Review active browser sessions for this operator account.")}
           </p>
         </div>
         <AdminComponents.action_button
           id="settings-logout-other-sessions"
           icon="hero-arrow-left-start-on-rectangle"
-          label="Log out other sessions"
+          label={gettext("Log out other sessions")}
           phx-click="logout_other_sessions"
           disabled={other_session_count(@browser_sessions) == 0}
           variant={:secondary}
@@ -259,7 +262,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
                 id="settings-current-session-badge"
                 class={[CodexPoolerWeb.Admin.BadgeComponents.metadata_chip_class(:primary), "mt-1"]}
               >
-                This session
+                {gettext("This session")}
               </span>
             </div>
           </div>
@@ -271,12 +274,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
               {user_agent_label(session.user_agent)}
             </p>
             <p class="text-xs leading-5 text-base-content/50">
-              IP {ip_address_label(session.ip_address)} · Created {datetime_label(
-                session.created_at,
-                @datetime_preferences
-              )} · Last seen {datetime_label(session.last_seen_at, @datetime_preferences)} · Expires {datetime_label(
-                session.expires_at,
-                @datetime_preferences
+              {gettext("IP %{ip} · Created %{created} · Last seen %{last_seen} · Expires %{expires}",
+                ip: ip_address_label(session.ip_address),
+                created: datetime_label(session.created_at, @datetime_preferences),
+                last_seen: datetime_label(session.last_seen_at, @datetime_preferences),
+                expires: datetime_label(session.expires_at, @datetime_preferences)
               )}
             </p>
           </div>
@@ -288,7 +290,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
             phx-value-id={session.id}
           >
             <.icon name="hero-arrow-left-start-on-rectangle" class="size-4" />
-            <span>Sign out</span>
+            <span>{gettext("Sign out")}</span>
           </button>
         </li>
       </ul>
@@ -344,20 +346,20 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
 
   defp session_device(_session), do: "desktop"
 
-  defp session_title(%{current?: true}), do: "Current browser"
-  defp session_title(_session), do: "Browser session"
+  defp session_title(%{current?: true}), do: gettext("Current browser")
+  defp session_title(_session), do: gettext("Browser session")
 
   defp user_agent_label(user_agent) when is_binary(user_agent) and user_agent != "",
     do: user_agent
 
-  defp user_agent_label(_user_agent), do: "Unknown browser"
+  defp user_agent_label(_user_agent), do: gettext("Unknown browser")
 
   defp ip_address_label(ip_address) when is_binary(ip_address) and ip_address != "",
     do: ip_address
 
-  defp ip_address_label(_ip_address), do: "not recorded"
+  defp ip_address_label(_ip_address), do: gettext("not recorded")
 
   defp datetime_label(datetime, preferences) do
-    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: "not yet")
+    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: gettext("not yet"))
   end
 end

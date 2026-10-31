@@ -172,5 +172,35 @@ defmodule CodexPoolerWeb.DateTimeDisplayTest do
       assert DateTimeDisplay.format_datetime(@example_instant, preferences) ==
                "2026-05-27 15:45:06 Europe/Rome"
     end
+
+    test "Chinese long dates honor the selected timezone and restore the caller locale" do
+      preferences = %{datetime_format: "long", timezone: "Europe/Rome"}
+      original_locale = Gettext.get_locale()
+
+      Gettext.with_locale("zh_CN", fn ->
+        assert DateTimeDisplay.format_datetime(@example_instant, preferences) ==
+                 "2026年5月27日 15:45:06 Europe/Rome"
+
+        assert DateTimeDisplay.format_datetime_parts(@example_instant, preferences) == %{
+                 date: "2026年5月27日",
+                 time: "15:45:06 Europe/Rome"
+               }
+      end)
+
+      assert Gettext.get_locale() == original_locale
+    end
+
+    test "Chinese numeric and ISO presets preserve unambiguous timestamps" do
+      Gettext.with_locale("zh_CN", fn ->
+        assert DateTimeDisplay.format_datetime(@example_instant, %{datetime_format: "default", timezone: "Etc/UTC"}) ==
+                 "2026-05-27 13:45:06 UTC"
+
+        assert DateTimeDisplay.format_datetime(@example_instant, %{datetime_format: "short", timezone: "Etc/UTC"}) ==
+                 "2026-05-27 13:45"
+
+        assert DateTimeDisplay.format_datetime(@example_instant, %{datetime_format: "iso8601", timezone: "Etc/UTC"}) ==
+                 "2026-05-27T13:45:06Z"
+      end)
+    end
   end
 end

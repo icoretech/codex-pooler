@@ -30,7 +30,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
     socket =
       socket
       |> assign(
-        page_title: "Jobs",
+        page_title: gettext("Jobs"),
         owner_authorized?: Pools.owner?(socket.assigns.current_scope),
         jobs_reload_timer: nil,
         jobs_page_loaded?: false,
@@ -141,7 +141,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
           {:noreply, put_flash(socket, :error, enqueue_worker_group_error(socket, worker_group, reason))}
       end
     else
-      {:noreply, put_flash(socket, :error, "System jobs require owner access")}
+      {:noreply, put_flash(socket, :error, gettext("System jobs require owner access"))}
     end
   end
 
@@ -192,6 +192,8 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:jobs}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -208,15 +210,15 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
           <section id="admin-jobs-page" class="grid min-w-0 gap-6">
             <AdminComponents.page_header
               id="admin-jobs-page-header"
-              title="System Jobs"
-              description="Background jobs across the instance: queued, running, retrying, or done."
+              title={gettext("System Jobs")}
+              description={gettext("Background jobs across the instance: queued, running, retrying, or done.")}
             />
 
             <AdminComponents.empty_state
               :if={!@owner_authorized?}
               id="admin-jobs-owner-denied"
-              title="System jobs require owner access"
-              description="Only instance owners can inspect global background job state."
+              title={gettext("System jobs require owner access")}
+              description={gettext("Only instance owners can inspect global background job state.")}
               icon="hero-lock-closed"
             />
 
@@ -390,51 +392,66 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
     cond do
       errors_count > 0 ->
-        {:error, "#{title} enqueue partially failed: #{inserted_count} queued, #{conflicts_count} already queued, #{errors_count} failed"}
+        {:error,
+         ngettext(
+           "%{title} enqueue partially failed: %{count} queued, %{conflicts} already queued, %{errors} failed",
+           "%{title} enqueue partially failed: %{count} queued, %{conflicts} already queued, %{errors} failed",
+           inserted_count,
+           title: title,
+           conflicts: conflicts_count,
+           errors: errors_count
+         )}
 
       inserted_count == 1 and conflicts_count == 0 ->
-        {:info, "#{title} queued"}
+        {:info, gettext("%{title} queued", title: title)}
 
       inserted_count == 0 and conflicts_count > 0 ->
-        {:info, "#{title} already queued"}
+        {:info, gettext("%{title} already queued", title: title)}
 
       inserted_count == 0 and conflicts_count == 0 ->
         {:info, enqueue_worker_group_empty_message(socket, worker_group)}
 
       true ->
-        {:info, "#{title} enqueue requested: #{inserted_count} queued, #{conflicts_count} already queued"}
+        {:info,
+         ngettext(
+           "%{title} enqueue requested: %{count} queued, %{conflicts} already queued",
+           "%{title} enqueue requested: %{count} queued, %{conflicts} already queued",
+           inserted_count,
+           title: title,
+           conflicts: conflicts_count
+         )}
     end
   end
 
   defp enqueue_worker_group_flash(socket, worker_group, %{conflict?: true}) do
-    {:info, "#{worker_group_title(socket, worker_group)} already queued"}
+    {:info, gettext("%{title} already queued", title: worker_group_title(socket, worker_group))}
   end
 
   defp enqueue_worker_group_flash(socket, worker_group, %Oban.Job{}) do
-    {:info, "#{worker_group_title(socket, worker_group)} queued"}
+    {:info, gettext("%{title} queued", title: worker_group_title(socket, worker_group))}
   end
 
   defp enqueue_worker_group_empty_message(socket, worker_group) do
     title = worker_group_title(socket, worker_group)
 
     case worker_group_key(worker_group) do
-      "catalog_sync" -> "#{title} has no active pools to sync"
-      "account_reconciliation" -> "#{title} has no active assignments to reconcile"
-      "alert_evaluation" -> "#{title} has no active alert rules to evaluate"
-      _worker_group -> "#{title} has no work to enqueue"
+      "catalog_sync" -> gettext("%{title} has no active pools to sync", title: title)
+      "account_reconciliation" -> gettext("%{title} has no active assignments to reconcile", title: title)
+      "alert_evaluation" -> gettext("%{title} has no active alert rules to evaluate", title: title)
+      _worker_group -> gettext("%{title} has no work to enqueue", title: title)
     end
   end
 
   defp enqueue_worker_group_error(socket, worker_group, :worker_group_requires_target) do
-    "#{worker_group_title(socket, worker_group)} requires a target"
+    gettext("%{title} requires a target", title: worker_group_title(socket, worker_group))
   end
 
   defp enqueue_worker_group_error(_socket, _worker_group, :unknown_worker_group) do
-    "Unknown worker group"
+    gettext("Unknown worker group")
   end
 
   defp enqueue_worker_group_error(socket, worker_group, _reason) do
-    "#{worker_group_title(socket, worker_group)} could not be queued"
+    gettext("%{title} could not be queued", title: worker_group_title(socket, worker_group))
   end
 
   defp worker_group_title(socket, worker_group) do

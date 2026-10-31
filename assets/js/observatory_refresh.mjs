@@ -1,3 +1,5 @@
+import { hookLabel, readHookLabels } from "./hook_labels.mjs";
+
 const REFRESH_INTERVAL_MS = 30_000;
 const FRESHNESS_REPAINT_MS = 1_000;
 let observatoryPaused = false;
@@ -18,46 +20,46 @@ const parseNumber = (value) => {
 	return Number.isFinite(number) ? number : null;
 };
 
-const statusFor = ({ connected, now, paused, receiptAt, visible }) => {
+const statusFor = ({ connected, now, paused, receiptAt, visible }, labels) => {
 	if (!connected) {
 		return {
-			ariaLabel: "Refresh disconnected",
+			ariaLabel: hookLabel(labels, "disconnectedAria", "Refresh disconnected"),
 			kind: "disconnected",
-			label: "Connection interrupted",
-			spoken: "Disconnected",
+			label: hookLabel(labels, "disconnectedLabel", "Connection interrupted"),
+			spoken: hookLabel(labels, "disconnectedSpoken", "Disconnected"),
 		};
 	}
 	if (paused) {
 		return {
-			ariaLabel: "Refresh paused",
+			ariaLabel: hookLabel(labels, "pausedAria", "Refresh paused"),
 			kind: "paused",
-			label: "Updates paused",
-			spoken: "Paused",
+			label: hookLabel(labels, "pausedLabel", "Updates paused"),
+			spoken: hookLabel(labels, "pausedSpoken", "Paused"),
 		};
 	}
 	if (!visible) {
 		return {
-			ariaLabel: "Refresh paused while tab hidden",
+			ariaLabel: hookLabel(labels, "hiddenAria", "Refresh paused while tab hidden"),
 			kind: "hidden",
-			label: "Updates paused while hidden",
-			spoken: "Paused while hidden",
+			label: hookLabel(labels, "hiddenLabel", "Updates paused while hidden"),
+			spoken: hookLabel(labels, "hiddenSpoken", "Paused while hidden"),
 		};
 	}
 	if (receiptAt === null) {
 		return {
-			ariaLabel: "Refresh live",
+			ariaLabel: hookLabel(labels, "liveAria", "Refresh live"),
 			kind: "live",
-			label: "Updating usage",
-			spoken: "Live",
+			label: hookLabel(labels, "updatingLabel", "Updating usage"),
+			spoken: hookLabel(labels, "liveSpoken", "Live"),
 		};
 	}
 
 	const seconds = Math.max(0, Math.floor((now - receiptAt) / 1_000));
 	return {
-		ariaLabel: "Refresh live",
+		ariaLabel: hookLabel(labels, "liveAria", "Refresh live"),
 		kind: "live",
-		label: `${seconds}s ago`,
-		spoken: "Live",
+		label: hookLabel(labels, "secondsAgo", "%{seconds}s ago", { seconds }),
+		spoken: hookLabel(labels, "liveSpoken", "Live"),
 	};
 };
 
@@ -67,6 +69,7 @@ export const createObservatoryRefreshController = ({
 	initiallyPaused = false,
 	lastAppliedAtMs = null,
 	freshnessGeneration = null,
+	labels = {},
 	onRefresh,
 	onStatus,
 }) => {
@@ -90,7 +93,7 @@ export const createObservatoryRefreshController = ({
 	const isActive = () => connected && visible && !paused;
 	const repaint = () => {
 		onStatus(
-			statusFor({ connected, now: clock.now(), paused, receiptAt, visible }),
+			statusFor({ connected, now: clock.now(), paused, receiptAt, visible }, labels),
 		);
 	};
 	const requestRefresh = (reason) => {
@@ -157,6 +160,11 @@ export const createObservatoryRefreshController = ({
 			paused = value;
 			reconcile(value ? null : "resume");
 		},
+		syncLabels(nextLabels) {
+			if (destroyed) return;
+			labels = nextLabels;
+			repaint();
+		},
 		syncAppliedAt(value, freshnessGeneration) {
 			const nextAppliedAt = parseNumber(value);
 			const nextFreshnessGeneration = parseNumber(freshnessGeneration);
@@ -213,12 +221,14 @@ export const createObservatoryRefreshHook = (options = {}) => ({
 		const initiallyPaused = this.el.dataset.paused === "true";
 		observatoryPaused = initiallyPaused;
 		this.observatoryRefreshFocusAction = null;
+		this.observatoryRefreshLabelsValue = this.el.dataset.refreshLabels;
 		const controller = createObservatoryRefreshController({
 			clock: options.clock ?? defaultClock,
 			documentTarget,
 			initiallyPaused,
 			lastAppliedAtMs: this.el.dataset.lastAppliedAtMs,
 			freshnessGeneration: this.el.dataset.freshnessGeneration,
+			labels: readHookLabels(this.el.dataset.refreshLabels),
 			onRefresh: (reason) => {
 				const event =
 					reason === "resume" ? "resume-refresh" : "observatory-refresh";
@@ -256,6 +266,10 @@ export const createObservatoryRefreshHook = (options = {}) => ({
 	updated() {
 		const paused = this.el.dataset.paused === "true";
 		observatoryPaused = paused;
+		if (this.observatoryRefreshLabelsValue !== this.el.dataset.refreshLabels) {
+			this.observatoryRefreshLabelsValue = this.el.dataset.refreshLabels;
+			this.observatoryRefreshController.syncLabels(readHookLabels(this.el.dataset.refreshLabels));
+		}
 		this.observatoryRefreshController.syncPaused(paused);
 		this.observatoryRefreshController.syncAppliedAt(
 			this.el.dataset.lastAppliedAtMs,

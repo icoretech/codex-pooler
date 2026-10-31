@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
 
   attr :groups, :list, required: true
 
+  @spec matrix(map()) :: Phoenix.LiveView.Rendered.t()
   def matrix(assigns) do
     ~H"""
     <section
@@ -13,9 +14,9 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
       class="grid min-w-0 gap-3"
     >
       <div class="grid max-w-3xl gap-1">
-        <h4 class="text-sm font-medium text-base-content">Runtime limits</h4>
+        <h4 class="text-sm font-medium text-base-content">{gettext("Runtime limits")}</h4>
         <p class="text-xs leading-5 text-base-content/60">
-          Edit each limit or reset a group to its canonical runtime defaults.
+          {gettext("Edit each limit or reset a group to its canonical runtime defaults.")}
         </p>
       </div>
 
@@ -23,7 +24,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
         id="instance-settings-gateway-scalar-mobile-cue"
         class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50 sm:hidden"
       >
-        Swipe table for values &rarr;
+        {gettext("Swipe table for values →")}
       </p>
 
       <div
@@ -34,8 +35,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
         <table class="table table-sm min-w-xl bg-base-100">
           <thead>
             <tr class="text-[0.62rem] uppercase tracking-[0.08em] text-base-content/45">
-              <th scope="col" class="w-full min-w-64 border-b-0">Setting</th>
-              <th scope="col" class="min-w-64 border-b-0">Current value</th>
+              <th scope="col" class="w-full min-w-64 border-b-0">{gettext("Setting")}</th>
+              <th scope="col" class="min-w-64 border-b-0">{gettext("Current value")}</th>
             </tr>
           </thead>
           <.settings_group :for={group <- @groups} group={group} />
@@ -43,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
       </div>
 
       <p class="text-xs leading-5 text-base-content/55">
-        Group resets load defaults into the form. They are not persisted until this card is saved.
+        {gettext("Group resets load defaults into the form. They are not persisted until this card is saved.")}
       </p>
     </section>
     """
@@ -76,8 +77,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
               phx-click="restore_gateway_group_defaults"
               phx-value-group={@group.id}
               class="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/60 hover:text-base-content"
-              aria-label={"Reset #{@group.label} settings to their defaults"}
-              title={"Reset #{@group.label} settings to their defaults"}
+              aria-label={gettext("Reset %{group} settings to their defaults", group: @group.label)}
+              title={gettext("Reset %{group} settings to their defaults", group: @group.label)}
             >
               <.icon name="hero-arrow-path" class="size-3.5" />
             </button>
@@ -150,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
             max={@setting.maximum}
             step="1"
             inputmode="numeric"
-            aria-label={"Current value for #{@setting.label}"}
+            aria-label={gettext("Current value for %{setting}", setting: @setting.label)}
             aria-invalid={to_string(not is_nil(@error))}
             aria-describedby={@error && "#{@setting.id}-error"}
             class="min-w-0 grow bg-transparent outline-none"

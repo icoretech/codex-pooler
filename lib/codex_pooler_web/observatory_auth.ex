@@ -24,10 +24,10 @@ defmodule CodexPoolerWeb.ObservatoryAuth do
     case Plug.Conn.get_session(conn, @handoff_key) do
       %{dashboard_session_id: dashboard_session_id} = handoff
       when map_size(handoff) == 1 and is_binary(dashboard_session_id) ->
-        %{@handoff_key => handoff}
+        Map.put(CodexPoolerWeb.Locale.live_session(conn), @handoff_key, handoff)
 
       _missing_or_invalid_handoff ->
-        %{}
+        CodexPoolerWeb.Locale.live_session(conn)
     end
   end
 

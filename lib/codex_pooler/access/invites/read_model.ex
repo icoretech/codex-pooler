@@ -24,6 +24,7 @@ defmodule CodexPooler.Access.Invites.ReadModel do
           pool_name: String.t(),
           pool_slug: String.t(),
           invited_email: String.t(),
+          locale: String.t() | nil,
           inviter_email: String.t(),
           status: String.t(),
           stored_status: String.t(),
@@ -69,6 +70,7 @@ defmodule CodexPooler.Access.Invites.ReadModel do
       |> maybe_filter_pool(Map.get(filters, :pool_id))
       |> maybe_filter_status(Map.get(filters, :status))
       |> maybe_filter_email(Map.get(filters, :email))
+      |> maybe_filter_recipient_email(Map.get(filters, :invited_email))
 
     %{
       items: invite_rows(query, limit),
@@ -94,6 +96,7 @@ defmodule CodexPooler.Access.Invites.ReadModel do
       pool_name: pool_name,
       pool_slug: pool_slug,
       invited_email: invite.invited_email,
+      locale: invite.locale,
       inviter_email: inviter_email || "",
       status: effective_status(invite),
       stored_status: invite.status,
@@ -161,6 +164,13 @@ defmodule CodexPooler.Access.Invites.ReadModel do
   end
 
   defp maybe_filter_email(query, _email), do: query
+
+  defp maybe_filter_recipient_email(query, email) when is_binary(email) do
+    email = email |> String.trim() |> String.downcase()
+    from [invite, ...] in query, where: fragment("lower(?)", invite.invited_email) == ^email
+  end
+
+  defp maybe_filter_recipient_email(query, _email), do: query
 
   defp effective_status(%Invite{status: @status_active, expires_at: %DateTime{} = expires_at}) do
     if DateTime.compare(expires_at, now()) == :gt, do: @status_active, else: @status_expired

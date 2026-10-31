@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
   attr :upload, :map, required: true
   attr :upload_limit_label, :string, required: true
 
+  @spec auth_json_import_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def auth_json_import_dialog(assigns) do
     assigns = assign(assigns, :auth_json_docs_url, @auth_json_docs_url)
 
@@ -26,11 +27,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
       <div class="modal-box sm:max-w-5xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Upstream credentials
+            {gettext("Upstream credentials")}
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Import auth.json</h2>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Import auth.json")}</h2>
           <p class="mt-2 w-full text-sm leading-6 text-base-content/70">
-            Import a Codex CLI or Codex Desktop auth.json into encrypted upstream storage.
+            {gettext("Import a Codex CLI or Codex Desktop auth.json into encrypted upstream storage.")}
           </p>
         </div>
 
@@ -45,7 +46,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
           <.input
             field={@auth_json_form[:pool_id]}
             type="select"
-            label="Target Pool"
+            label={gettext("Target Pool")}
             options={@pool_options}
           />
 
@@ -63,16 +64,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
               class="grid gap-3 rounded-box border border-base-300 bg-base-100 p-4"
             >
               <div>
-                <h3 class="font-semibold text-base-content">Paste contents</h3>
+                <h3 class="font-semibold text-base-content">{gettext("Paste contents")}</h3>
                 <p class="mt-1 text-sm leading-6 text-base-content/65">
-                  Use this when the file is already open.
+                  {gettext("Use this when the file is already open.")}
                 </p>
               </div>
               <.input
                 field={@auth_json_form[:content]}
                 type="textarea"
-                label="File contents"
-                placeholder="Paste auth.json contents"
+                label={gettext("File contents")}
+                placeholder={gettext("Paste auth.json contents")}
                 value=""
               />
             </section>
@@ -85,14 +86,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
               <div class="grid h-full min-h-40 place-items-center gap-3 rounded-box bg-base-100 p-5 text-center">
                 <.icon name="hero-document-arrow-up" class="size-7 text-base-content/45" />
                 <div class="grid gap-0.5">
-                  <h3 class="font-semibold text-base-content">Drop auth.json</h3>
+                  <h3 class="font-semibold text-base-content">{gettext("Drop auth.json")}</h3>
                   <p class="text-sm leading-6 text-base-content/65">
-                    Upload auth.json up to {@upload_limit_label}.
+                    {gettext("Upload auth.json up to %{limit}.", limit: @upload_limit_label)}
                   </p>
                 </div>
                 <label for={@upload.ref} class="btn btn-neutral btn-sm cursor-pointer gap-2">
                   <.icon name="hero-folder-open" class="size-4" />
-                  <span>Choose file</span>
+                  <span>{gettext("Choose file")}</span>
                 </label>
                 <span id="auth-json-import-file-input" class="sr-only">
                   <.live_file_input upload={@upload} />
@@ -107,8 +108,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
                 >
                   <div class="flex items-center justify-between gap-3">
                     <div class="min-w-0">
-                      <p class="font-semibold text-base-content">auth.json selected</p>
-                      <p class="text-xs text-base-content/60">{entry.progress}% uploaded</p>
+                      <p class="font-semibold text-base-content">{gettext("auth.json selected")}</p>
+                      <p class="text-xs text-base-content/60">{gettext("%{progress}% uploaded", progress: entry.progress)}</p>
                     </div>
                     <button
                       id={"auth-json-import-upload-cancel-#{entry.ref}"}
@@ -116,7 +117,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
                       class="btn btn-ghost btn-sm btn-square"
                       phx-click="cancel_auth_json_upload"
                       phx-value-ref={entry.ref}
-                      aria-label="Remove selected auth.json file"
+                      aria-label={gettext("Remove selected auth.json file")}
                     >
                       <.icon name="hero-x-mark" class="size-4" />
                     </button>
@@ -154,14 +155,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
           <:actions>
             <AdminComponents.action_button
               id="auth-json-import-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_import_auth_json"
             />
             <AdminComponents.action_button
               id="auth-json-import-submit"
               icon="hero-document-arrow-up"
-              label="Import auth.json"
+              label={gettext("Import auth.json")}
               type="submit"
               form="auth-json-import-form"
               variant={:primary}
@@ -170,7 +171,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_import_auth_json">close</button>
+        <button type="button" phx-click="cancel_import_auth_json">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -179,7 +180,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
   defp auth_json_form_error_messages(form) do
     form.errors
     |> Enum.map(fn
-      {_field, {message, _opts}} -> message
+      {_field, {message, opts}} -> translate_error({message, opts})
       {_field, message} when is_binary(message) -> message
     end)
     |> Enum.uniq()
@@ -197,8 +198,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
     |> Enum.map(&auth_json_upload_error_message/1)
   end
 
-  defp auth_json_upload_error_message(:too_large), do: "File must be 64 KB or smaller"
-  defp auth_json_upload_error_message(:too_many_files), do: "Upload one auth.json file"
-  defp auth_json_upload_error_message(:not_accepted), do: "Upload auth.json as a .json file"
-  defp auth_json_upload_error_message(_error), do: "Uploaded file is invalid"
+  defp auth_json_upload_error_message(:too_large), do: gettext("File must be 64 KB or smaller")
+  defp auth_json_upload_error_message(:too_many_files), do: gettext("Upload one auth.json file")
+  defp auth_json_upload_error_message(:not_accepted), do: gettext("Upload auth.json as a .json file")
+  defp auth_json_upload_error_message(_error), do: gettext("Uploaded file is invalid")
 end

@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   use CodexPoolerWeb, :admin_live_view
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounts
   alias CodexPooler.Events
   alias CodexPooler.Mailer
   alias CodexPooler.Pools
@@ -16,29 +17,33 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   alias Phoenix.HTML.Form
 
   @page_size 50
-  @status_options [
-    %{label: "Any status", value: "", icon: "hero-envelope", tone: :neutral},
-    %{label: "Active", value: "active", icon: "hero-paper-airplane", tone: :primary},
-    %{label: "Accepted", value: "accepted", icon: "hero-check-circle", tone: :success},
-    %{label: "Expired", value: "expired", icon: "hero-clock", tone: :warning},
-    %{label: "Revoked", value: "revoked", icon: "hero-no-symbol", tone: :error}
-  ]
+  defp status_options do
+    [
+      %{label: gettext("Any status"), value: "", icon: "hero-envelope", tone: :neutral},
+      %{label: gettext("Active"), value: "active", icon: "hero-paper-airplane", tone: :primary},
+      %{label: gettext("Accepted"), value: "accepted", icon: "hero-check-circle", tone: :success},
+      %{label: gettext("Expired"), value: "expired", icon: "hero-clock", tone: :warning},
+      %{label: gettext("Revoked"), value: "revoked", icon: "hero-no-symbol", tone: :error}
+    ]
+  end
 
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Invites",
+       page_title: gettext("Invites"),
        pools: [],
        invites: empty_invites(),
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
        pool_filter_options: [],
-       status_options: @status_options,
+       status_options: status_options(),
        subscribed_pool_ids: MapSet.new(),
        creating_invite: false,
-       invite_form: PoolInviteForm.empty_form(),
+       invite_form: PoolInviteForm.empty_form(socket.assigns.locale.tag),
        invite_form_valid?: false,
+       invite_locale_explicit?: false,
+       invite_locale_source: :inviter,
        last_invite: nil,
        mailer_configured?: Mailer.configured?(),
        revoking_invite: nil
@@ -77,7 +82,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       |> Access.reissue_invite(invite_id)
       |> deliver_reissued_invite(socket)
     else
-      {:noreply, put_flash(socket, :error, "SMTP is not configured for invite email.")}
+      {:noreply, put_flash(socket, :error, gettext("SMTP is not configured for invite email."))}
     end
   end
 
@@ -85,8 +90,10 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     {:noreply,
      assign(socket,
        creating_invite: true,
-       invite_form: PoolInviteForm.empty_form(),
+       invite_form: PoolInviteForm.empty_form(socket.assigns.locale.tag),
        invite_form_valid?: false,
+       invite_locale_explicit?: false,
+       invite_locale_source: :inviter,
        last_invite: nil,
        revoking_invite: nil
      )}
@@ -96,7 +103,9 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     {:noreply, close_invite_dialog(socket)}
   end
 
-  def handle_event("validate_invite", %{"invite" => invite_params}, socket) do
+  def handle_event("validate_invite", %{"invite" => invite_params} = params, socket) do
+    explicit? = socket.assigns.invite_locale_explicit? or params["_target"] == ["invite", "locale"]
+    {invite_params, default} = PoolInviteForm.derive_locale(invite_params, Accounts.get_user_by_email(invite_params["invited_email"]), socket.assigns.locale.tag, explicit?)
     pool = selected_pool(socket.assigns.pools, invite_params["pool_id"])
     changeset = PoolInviteForm.changeset(invite_params, pool)
 
@@ -104,10 +113,15 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
      socket
      |> assign(:invite_form, PoolInviteForm.form_for_changeset(changeset))
      |> assign(:invite_form_valid?, changeset.valid?)
+     |> assign(:invite_locale_explicit?, explicit?)
+     |> assign(:invite_locale_source, default.source)
      |> assign(:last_invite, nil)}
   end
 
   def handle_event("create_invite", %{"invite" => invite_params}, socket) do
+    explicit? = socket.assigns.invite_locale_explicit? or Map.has_key?(invite_params, "locale")
+    {invite_params, default} = PoolInviteForm.derive_locale(invite_params, Accounts.get_user_by_email(invite_params["invited_email"]), socket.assigns.locale.tag, explicit?)
+    socket = assign(socket, invite_locale_explicit?: explicit?, invite_locale_source: default.source)
     pool = selected_pool(socket.assigns.pools, invite_params["pool_id"])
     send_email? = PoolInviteForm.send_email?(invite_params, socket.assigns.mailer_configured?)
     changeset = PoolInviteForm.changeset(invite_params, pool)
@@ -119,8 +133,8 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     else
       message =
         if pool,
-          do: "Pool invite could not be created",
-          else: "Select an active Pool before creating an invite"
+          do: gettext("Pool invite could not be created"),
+          else: gettext("Select an active Pool before creating an invite")
 
       {:noreply,
        socket
@@ -150,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       {:ok, _invite} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Pool invite revoked")
+         |> put_flash(:info, gettext("Pool invite revoked"))
          |> assign(revoking_invite: nil)
          |> load_invites(socket.assigns.filter_values)}
 
@@ -194,7 +208,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       |> close_if(lost_revoke_target?(socket), &assign(&1, revoking_invite: nil))
       |> close_if(lost_create_pool?(socket), &close_invite_dialog/1)
 
-    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+    {:noreply, if(closed?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
   end
 
   defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
@@ -230,6 +244,8 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:invites}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -237,15 +253,15 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       <section id="admin-invites-live" class="grid gap-6">
         <AdminComponents.page_header
           id="invite-page-header"
-          title="Invites"
-          description="Each invite lets its recipient link an account into a Pool through the device-code flow."
+          title={gettext("Invites")}
+          description={gettext("Each invite lets its recipient link an account into a Pool through the device-code flow.")}
         >
           <:actions>
             <AdminComponents.action_button
               :if={@pools == [] && Pools.owner?(@current_scope)}
               id="invite-page-create-pool"
               icon="hero-server-stack"
-              label="Create Pool"
+              label={gettext("Create Pool")}
               navigate={~p"/admin/pools"}
               size={:md}
               variant={:primary}
@@ -254,7 +270,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
               :if={@pools != []}
               id="invite-page-create-action"
               icon="hero-user-plus"
-              label="Create Pool invite"
+              label={gettext("Create Pool invite")}
               phx-click="open_create_invite"
               size={:md}
               variant={:primary}
@@ -266,6 +282,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
           creating_invite={@creating_invite}
           invite_form={@invite_form}
           invite_form_valid?={@invite_form_valid?}
+          invite_locale_source={@invite_locale_source}
           last_invite={@last_invite}
           mailer_configured?={@mailer_configured?}
           pool_options={dialog_pool_options(@pools)}
@@ -280,14 +297,14 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
         >
           <PoolFilterComponents.pool_filter_dropdown
             id="invite-pool-filter"
-            label="Pool"
+            label={gettext("Pool")}
             hidden_id="filters_pool_id"
             selected_value={@filter_values["pool_id"] || ""}
             options={@pool_filter_options}
           />
           <InvitesPageComponents.invite_filter_dropdown
             id="invite-status-filter"
-            label="Status"
+            label={gettext("Status")}
             field_name="status"
             hidden_id="filters_status"
             role="status-filter"
@@ -332,9 +349,9 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   end
 
   defp filter_params(%{"create" => "1"} = params),
-    do: Map.drop(params, ["create", "pool_id", "invited_email", "send_email"])
+    do: Map.drop(params, ["create", "reinvite", "pool_id", "invited_email", "send_email", "locale"])
 
-  defp filter_params(params), do: Map.drop(params, ["create", "invited_email", "send_email"])
+  defp filter_params(params), do: Map.drop(params, ["create", "reinvite", "invited_email", "send_email", "locale"])
 
   defp maybe_prefill_invite_dialog(socket, %{"create" => "1"} = params) do
     pool_id = selected_pool_id(Map.get(params, "pool_id", ""), socket.assigns.pools)
@@ -345,16 +362,36 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       "send_email" => send_email_param(params)
     }
 
+    {invite_params, default} = prefill_locale(socket, params, invite_params)
+
     socket
     |> assign(
       creating_invite: true,
       last_invite: nil,
-      revoking_invite: nil
+      revoking_invite: nil,
+      invite_locale_explicit?: default.source == :stored,
+      invite_locale_source: default.source
     )
     |> prefill_invite_form(params, invite_params, pool_id)
   end
 
   defp maybe_prefill_invite_dialog(socket, _params), do: socket
+
+  defp prefill_locale(socket, %{"reinvite" => "1"}, %{"pool_id" => pool_id, "invited_email" => email} = params)
+       when pool_id != "" and email != "" do
+    case Access.list_visible_invites(socket.assigns.current_scope, limit: 1, filters: [pool_id: pool_id, invited_email: email]).items do
+      [invite] ->
+        locale = if invite.locale in CodexPooler.SupportedLocales.tags(), do: invite.locale, else: "en"
+        {Map.put(params, "locale", locale), %{locale: locale, source: :stored}}
+
+      [] ->
+        prefill_locale(socket, %{}, params)
+    end
+  end
+
+  defp prefill_locale(socket, _request_params, params) do
+    PoolInviteForm.derive_locale(params, Accounts.get_user_by_email(params["invited_email"]), socket.assigns.locale.tag, false)
+  end
 
   defp prefill_invite_form(socket, params, invite_params, pool_id) do
     if validate_invite_prefill?(params) do
@@ -413,15 +450,17 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
          socket
          |> put_flash(:info, PoolInviteForm.created_flash(result))
          |> load_invites(socket.assigns.filter_values)
-         |> assign(:invite_form, PoolInviteForm.empty_form())
+         |> assign(:invite_form, PoolInviteForm.empty_form(socket.assigns.locale.tag))
          |> assign(:invite_form_valid?, false)
+         |> assign(:invite_locale_explicit?, false)
+         |> assign(:invite_locale_source, :inviter)
          |> assign(:creating_invite, true)
          |> assign(:last_invite, PoolInviteForm.receipt(pool, invite, invite_url, result))}
 
       nil ->
         {:noreply,
          socket
-         |> put_flash(:error, "Select an active Pool before creating an invite")
+         |> put_flash(:error, gettext("Select an active Pool before creating an invite"))
          |> assign(:invite_form, PoolInviteForm.form_for_params(invite_params))
          |> assign(:invite_form_valid?, false)
          |> assign(:creating_invite, true)
@@ -430,7 +469,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
-         |> put_flash(:error, "Pool invite could not be created")
+         |> put_flash(:error, gettext("Pool invite could not be created"))
          |> assign(:invite_form, PoolInviteForm.form_for_changeset(changeset))
          |> assign(:invite_form_valid?, false)
          |> assign(:creating_invite, true)
@@ -482,12 +521,12 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     pools
     |> Enum.map(&{pool_name(&1), &1.id})
     |> case do
-      [] -> [{"No active Pools available", ""}]
+      [] -> [{gettext("No active Pools available"), ""}]
       options -> options
     end
   end
 
-  defp pool_name(nil), do: "Unknown Pool"
+  defp pool_name(nil), do: gettext("Unknown Pool")
   defp pool_name(pool), do: pool.name
 
   defp selected_pool(pools, pool_id) when is_binary(pool_id),
@@ -518,13 +557,13 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
       %{email_error?: true} ->
         {:noreply,
          socket
-         |> put_flash(:error, "Pool invite reissued, but email delivery failed")
+         |> put_flash(:error, gettext("Pool invite reissued, but email delivery failed"))
          |> load_invites(socket.assigns.filter_values)}
 
       %{email_error?: false} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Pool invite reissued and emailed")
+         |> put_flash(:info, gettext("Pool invite reissued and emailed"))
          |> load_invites(socket.assigns.filter_values)}
     end
   end
@@ -539,8 +578,10 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   defp close_invite_dialog(socket) do
     assign(socket,
       creating_invite: false,
-      invite_form: PoolInviteForm.empty_form(),
+      invite_form: PoolInviteForm.empty_form(socket.assigns.locale.tag),
       invite_form_valid?: false,
+      invite_locale_explicit?: false,
+      invite_locale_source: :inviter,
       last_invite: nil
     )
   end
@@ -572,6 +613,17 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
 
   defp empty_invites, do: %{items: [], total: 0, limit: @page_size}
 
-  defp invite_error_message(%{message: message}), do: message
-  defp invite_error_message(_reason), do: "Pool invite could not be updated"
+  defp invite_error_message(%{message: "pool was not found"}), do: gettext("pool was not found")
+  defp invite_error_message(%{message: "invite was not found"}), do: gettext("invite was not found")
+  defp invite_error_message(%{message: "invite was not active"}), do: gettext("invite was not active")
+  defp invite_error_message(%{message: "user scope is required"}), do: gettext("user scope is required")
+  defp invite_error_message(%{message: "An active invite already exists for this Codex account and Pool."}), do: gettext("An active invite already exists for this Codex account and Pool.")
+  defp invite_error_message(%{message: "only node admins can perform this capability"}), do: gettext("only node admins can perform this capability")
+  defp invite_error_message(%{message: "the actor role cannot perform this capability in the requested scope"}), do: gettext("the actor role cannot perform this capability in the requested scope")
+  defp invite_error_message(%{message: "this capability requires a Pool scope"}), do: gettext("this capability requires a Pool scope")
+  defp invite_error_message(%{message: "only the instance owner can perform this global capability"}), do: gettext("only the instance owner can perform this global capability")
+  defp invite_error_message(%{message: "assigned-pool admin capabilities require a Pool scope"}), do: gettext("assigned-pool admin capabilities require a Pool scope")
+  defp invite_error_message(%{message: "the assigned-pool admin cannot access the requested Pool"}), do: gettext("the assigned-pool admin cannot access the requested Pool")
+  defp invite_error_message(%{message: "invite is expired or already consumed"}), do: gettext("invite is expired or already consumed")
+  defp invite_error_message(_reason), do: gettext("Pool invite could not be updated")
 end

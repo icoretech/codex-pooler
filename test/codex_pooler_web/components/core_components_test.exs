@@ -4,6 +4,28 @@ defmodule CodexPoolerWeb.CoreComponentsTest do
   import Phoenix.LiveViewTest
   import CodexPoolerWeb.CoreComponents
 
+  setup do
+    Gettext.put_locale("en")
+    :ok
+  end
+
+  test "Chinese OTP slots expose localized digit labels" do
+    Gettext.put_locale("zh_CN")
+
+    document =
+      render_component(&otp_input/1, %{id: "zh_totp", name: "user[totp_code]", value: ""})
+      |> LazyHTML.from_fragment()
+
+    assert document |> LazyHTML.query("#zh_totp_digit_0[aria-label='第 1 位，共 6 位']") |> Enum.count() == 1
+    assert document |> LazyHTML.query("#zh_totp_digit_5[aria-label='第 6 位，共 6 位']") |> Enum.count() == 1
+  end
+
+  test "Chinese validation translates the real count error branch" do
+    Gettext.put_locale("zh_CN")
+
+    assert translate_error({"should be at least %{count} character(s)", count: 3}) == "长度应至少为 3 个字符"
+  end
+
   test "otp input does not autofocus a slot by default" do
     document =
       render_component(&otp_input/1, %{

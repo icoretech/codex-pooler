@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
 
   attr :created_secret, :map, required: true
 
+  @spec created_secret_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def created_secret_dialog(assigns) do
     assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
 
@@ -24,11 +25,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            API key
+            {gettext("API key")}
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this key before closing</h2>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Copy this key before closing")}</h2>
           <p id="api-key-created-secret" class="mt-2 text-sm leading-6 text-base-content/70">
-            It is shown once. Afterwards only the fingerprint <span class="font-semibold text-base-content">{@created_secret.key_prefix}</span> identifies it.
+            <span class="font-semibold text-base-content">{gettext("It is shown once. Afterwards only the fingerprint %{prefix} identifies it.", prefix: @created_secret.key_prefix)}</span>
           </p>
         </div>
 
@@ -37,8 +38,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             value={@created_secret.raw_key}
             value_id="api-key-created-secret-value"
             copy_id="api-key-copy-created-secret"
-            copy_label="Copy key"
-            copy_aria_label="Copy API key"
+            copy_label={gettext("Copy key")}
+            copy_aria_label={gettext("Copy API key")}
           />
         </div>
 
@@ -50,7 +51,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             <AdminComponents.action_button
               id="api-key-secret-dialog-close"
               icon="hero-check"
-              label="Done"
+              label={gettext("Done")}
               phx-click="close_secret"
               variant={:primary}
             />
@@ -58,7 +59,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="close_secret">close</button>
+        <button type="button" phx-click="close_secret">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -68,6 +69,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   attr :form, :any, required: true
   attr :form_version, :integer, required: true
 
+  @spec delete_api_key_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def delete_api_key_dialog(assigns) do
     assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
 
@@ -79,13 +81,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">API key</p>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("API key")}</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
-            Delete {@api_key.display_name}?
+            {gettext("Delete %{name}?", name: @api_key.display_name)}
           </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            It stops working immediately. Request history is retained without a link to this key.
-            Deleting the key cannot be undone.
+            {gettext("It stops working immediately. Request history is retained without a link to this key. Deleting the key cannot be undone.")}
           </p>
         </div>
 
@@ -106,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@api_key.key_prefix}</span> to confirm
+              <span class="font-semibold text-base-content">{gettext("Type %{prefix} to confirm", prefix: @api_key.key_prefix)}</span>
             </:label_content>
           </.input>
         </.form>
@@ -118,14 +119,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="api-key-delete-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_api_key"
             />
             <AdminComponents.action_button
               id="api-key-delete-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="api-key-delete-form"
               variant={:danger}
@@ -134,7 +135,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_api_key">close</button>
+        <button type="button" phx-click="cancel_delete_api_key">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -149,6 +150,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   attr :unavailable_model_policy_count, :integer, required: true
   attr :can_manage_pools?, :boolean, required: true
 
+  @spec api_key_groups(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_groups(assigns) do
     ~H"""
     <div id="admin-api-keys" class="grid min-w-0 gap-4">
@@ -158,14 +160,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 pb-3 text-sm"
       >
         <span class="inline-flex min-w-0 items-center gap-2 text-base-content/70">
-          <.icon name="hero-funnel" class="size-4 shrink-0 text-primary" /> Showing <span class="font-semibold text-base-content">{@selected_pool.name}</span>
+          <.icon name="hero-funnel" class="size-4 shrink-0 text-primary" /> <span class="font-semibold text-base-content">{gettext("Showing %{pool}", pool: @selected_pool.name)}</span>
         </span>
         <.link
           id="api-key-clear-pool-filter"
           patch={api_key_filter_path(nil, @model_policy_filter)}
           class="btn btn-ghost btn-xs"
         >
-          Show all Pools
+          {gettext("Show all Pools")}
         </.link>
       </div>
 
@@ -175,14 +177,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 pb-3 text-sm text-warning"
       >
         <span class="inline-flex items-center gap-2">
-          <.icon name="hero-exclamation-triangle" class="size-4" /> Unavailable model references: {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)}
+          <.icon name="hero-exclamation-triangle" class="size-4" /> {gettext("Unavailable model references: %{count}", count: ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count))}
         </span>
         <.link
           id="api-key-clear-model-policy-filter"
           patch={api_key_filter_path(@selected_pool, nil)}
           class="btn btn-ghost btn-xs"
         >
-          Clear filter
+          {gettext("Clear filter")}
         </.link>
       </div>
 
@@ -192,26 +194,26 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 pb-3 text-sm"
       >
         <span class="inline-flex items-center gap-2 text-warning">
-          <.icon name="hero-exclamation-triangle" class="size-4" /> Model policy attention: {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)}
+          <.icon name="hero-exclamation-triangle" class="size-4" /> {gettext("Model policy attention: %{count}", count: ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count))}
         </span>
         <.link
           id="api-key-filter-unavailable-model-policies"
           patch={api_key_filter_path(@selected_pool, "unavailable")}
           class="btn btn-warning btn-outline btn-xs"
         >
-          Show affected keys
+          {gettext("Show affected keys")}
         </.link>
       </div>
 
       <AdminComponents.empty_state
         :if={@groups == []}
         id="api-key-empty-state"
-        title="No API keys"
+        title={gettext("No API keys")}
         description={
           cond do
-            @pools == [] -> "Create a Pool before adding API keys."
-            @selected_pool -> "Create the first API key for this Pool."
-            true -> "Create the first API key for an active Pool."
+            @pools == [] -> gettext("Create a Pool before adding API keys.")
+            @selected_pool -> gettext("Create the first API key for this Pool.")
+            true -> gettext("Create the first API key for an active Pool.")
           end
         }
         icon="hero-key"
@@ -221,7 +223,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             :if={@pools == [] && @can_manage_pools?}
             id="api-key-empty-create-action"
             icon="hero-server-stack"
-            label="Create Pool"
+            label={gettext("Create Pool")}
             navigate={~p"/admin/pools"}
             variant={:primary}
           />
@@ -229,7 +231,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             :if={@pools != []}
             id="api-key-empty-create-action"
             icon="hero-key"
-            label="Create API key"
+            label={gettext("Create API key")}
             phx-click="open_create_api_key"
             variant={:primary}
           />
@@ -251,7 +253,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           mid-word — "Productio / n Europe" — so there it drops below them. At
           `xl` the header is a 13rem column and it drops below again. --%>
           <div class="min-w-0 order-last basis-full sm:order-none sm:flex-1 sm:basis-auto xl:order-last xl:flex-none xl:basis-full">
-            <p class="text-xs font-medium text-base-content/55">Pool</p>
+            <p class="text-xs font-medium text-base-content/55">{gettext("Pool")}</p>
             <h2 class="break-words text-lg font-bold leading-6 text-base-content">{group.name}</h2>
           </div>
           <span
@@ -295,7 +297,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     class="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-primary/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     <.icon name="hero-sparkles" class="size-3.5" />
-                    <span>Observatory</span>
+                    <span>{gettext("Observatory")}</span>
                   </.link>
                   <.api_key_notes_popover
                     :if={ApiKeysReadModel.api_key_operator_notes(api_key)}
@@ -313,13 +315,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     id={"api-key-row-#{api_key.id}-last-used"}
                     class="min-w-0 xl:grid xl:gap-0.5"
                   >
-                    <dt class={card_vital_label_class()}>Last used</dt>
+                    <dt class={card_vital_label_class()}>{gettext("Last used")}</dt>
                     <dd class="truncate tabular-nums">
                       {last_used_label(api_key.last_used_at, @datetime_preferences)}
                     </dd>
                   </div>
                   <div class="min-w-0 xl:grid xl:gap-0.5">
-                    <dt class={card_vital_label_class()}>Prefix</dt>
+                    <dt class={card_vital_label_class()}>{gettext("Prefix")}</dt>
                     <dd class="flex min-w-0 items-center gap-1">
                       <span class="min-w-0 truncate">{api_key.key_prefix}</span>
                       <button
@@ -328,7 +330,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                         phx-hook="ClipboardCopy"
                         data-copy-text={api_key.key_prefix}
                         class="inline-grid size-5 shrink-0 place-items-center rounded text-base-content/40 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
-                        aria-label="Copy key prefix"
+                        aria-label={gettext("Copy key prefix")}
                       >
                         <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
                       </button>
@@ -340,7 +342,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     id={"api-key-row-#{api_key.id}-expires"}
                     class="min-w-0 xl:grid xl:gap-0.5"
                   >
-                    <span class={["block", card_vital_label_class()]}>Expires</span>
+                    <span class={["block", card_vital_label_class()]}>{gettext("Expires")}</span>
                     <span class={[
                       "block truncate tabular-nums",
                       expiry_label_class(api_key.expires_at)
@@ -349,7 +351,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     </span>
                   </div>
                   <div class="min-w-0 xl:grid xl:gap-1">
-                    <span class={["block", card_vital_label_class()]}>Model access</span>
+                    <span class={["block", card_vital_label_class()]}>{gettext("Model access")}</span>
                     <div
                       id={"api-key-row-#{api_key.id}-models"}
                       class="flex min-w-0 flex-wrap items-center gap-1"
@@ -381,23 +383,23 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 id={"api-key-row-#{api_key.id}-status"}
                 class={[AdminBadges.lifecycle_chip_class(api_key.status), "shrink-0"]}
               >
-                {api_key.status}
+                {ApiKeysReadModel.status_label(api_key.status)}
               </span>
               <span
                 :if={Map.get(api_key, :deletion) == :in_progress}
                 id={"api-key-row-#{api_key.id}-deletion"}
                 class={[AdminBadges.lifecycle_chip_class("paused"), "shrink-0"]}
-                title="A background job is detaching this key's request history; the key disappears when it finishes"
+                title={gettext("A background job is detaching this key's request history; the key disappears when it finishes")}
               >
-                deleting
+                {gettext("deleting")}
               </span>
               <span
                 :if={Map.get(api_key, :deletion) == :failed}
                 id={"api-key-row-#{api_key.id}-deletion"}
                 class={[AdminBadges.lifecycle_chip_class("deleted"), "shrink-0"]}
-                title="The last deletion attempt gave up; delete the key again to resume"
+                title={gettext("The last deletion attempt gave up; delete the key again to resume")}
               >
-                deletion failed
+                {gettext("deletion failed")}
               </span>
               <.api_key_actions_menu api_key={api_key} />
             </div>
@@ -444,7 +446,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{@api_key.display_name}"}
+        aria-label={gettext("Actions for %{name}", name: @api_key.display_name)}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -457,7 +459,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"edit-api-key-#{@api_key.id}"}
             icon="hero-pencil-square"
-            label="Edit"
+            label={gettext("Edit")}
             phx-click="edit_api_key"
             phx-value-id={@api_key.id}
             disabled={@api_key.status == "revoked"}
@@ -467,7 +469,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"disable-api-key-#{@api_key.id}"}
             icon="hero-pause"
-            label="Pause"
+            label={gettext("Pause")}
             variant={:warning}
             phx-click="disable_api_key"
             phx-value-id={@api_key.id}
@@ -478,7 +480,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"enable-api-key-#{@api_key.id}"}
             icon="hero-play"
-            label="Resume"
+            label={gettext("Resume")}
             variant={:positive}
             phx-click="enable_api_key"
             phx-value-id={@api_key.id}
@@ -489,7 +491,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"rotate-api-key-#{@api_key.id}"}
             icon="hero-arrow-path"
-            label="Rotate"
+            label={gettext("Rotate")}
             phx-click="rotate_api_key"
             phx-value-id={@api_key.id}
             disabled={@api_key.status == "revoked"}
@@ -499,7 +501,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"revoke-api-key-#{@api_key.id}"}
             icon="hero-no-symbol"
-            label="Revoke"
+            label={gettext("Revoke")}
             variant={:danger}
             phx-click="revoke_api_key"
             phx-value-id={@api_key.id}
@@ -510,7 +512,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <AdminComponents.dropdown_action_item
             id={"delete-api-key-#{@api_key.id}"}
             icon="hero-trash"
-            label="Delete"
+            label={gettext("Delete")}
             variant={:danger}
             phx-click="delete_api_key"
             phx-value-id={@api_key.id}
@@ -528,24 +530,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   defp card_vital_label_class,
     do: [AdminComponents.card_fact_label_class(), "text-base-content/35"]
 
-  defp last_used_label(nil, _datetime_preferences), do: "Never used"
+  defp last_used_label(nil, _datetime_preferences), do: gettext("Never used")
 
   defp last_used_label(%DateTime{} = last_used_at, datetime_preferences),
     do: DateTimeDisplay.format_datetime(last_used_at, datetime_preferences)
 
-  defp last_used_label(_last_used_at, _datetime_preferences), do: "Never used"
+  defp last_used_label(_last_used_at, _datetime_preferences), do: gettext("Never used")
 
-  defp expiry_label(nil, _datetime_preferences), do: "No expiry"
+  defp expiry_label(nil, _datetime_preferences), do: gettext("No expiry")
 
   defp expiry_label(%DateTime{} = expires_at, datetime_preferences) do
     formatted = DateTimeDisplay.format_datetime(expires_at, datetime_preferences)
 
     if DateTime.compare(expires_at, DateTime.utc_now()) == :lt,
-      do: "Expired · #{formatted}",
+      do: gettext("Expired · %{time}", time: formatted),
       else: formatted
   end
 
-  defp expiry_label(_expires_at, _datetime_preferences), do: "No expiry"
+  defp expiry_label(_expires_at, _datetime_preferences), do: gettext("No expiry")
 
   defp expiry_label_class(%DateTime{} = expires_at) do
     if DateTime.compare(expires_at, DateTime.utc_now()) == :lt,
@@ -568,17 +570,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       <summary
         id={"#{@id}-button"}
         class="inline-flex w-fit cursor-pointer list-none items-center gap-1 text-xs font-medium text-base-content/55 transition-colors hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden"
-        aria-label="Show API key notes"
+        aria-label={gettext("Show API key notes")}
       >
         <.icon name="hero-document-text" class="size-3.5" />
-        <span>Notes</span>
+        <span>{gettext("Notes")}</span>
       </summary>
       <div
         id={"#{@id}-content"}
         class="dropdown-content z-50 mt-2 w-72 overflow-hidden rounded-box border border-base-300 bg-base-100 p-3 text-left shadow-2xl"
       >
         <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-          Operator notes
+          {gettext("Operator notes")}
         </p>
         <p class="mt-2 text-xs font-normal leading-5 text-base-content/70">{@notes}</p>
       </div>
@@ -590,13 +592,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
 
   defp model_access_badges(%{models: nil} = assigns) do
     ~H"""
-    <span class="min-w-0 truncate">All models</span>
+    <span class="min-w-0 truncate">{gettext("All models")}</span>
     """
   end
 
   defp model_access_badges(%{models: []} = assigns) do
     ~H"""
-    <span class="min-w-0 truncate text-warning">No models</span>
+    <span class="min-w-0 truncate text-warning">{gettext("No models")}</span>
     """
   end
 

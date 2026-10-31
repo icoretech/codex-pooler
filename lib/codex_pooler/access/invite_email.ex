@@ -3,6 +3,8 @@ defmodule CodexPooler.Access.InviteEmail do
   Email builders and delivery helpers for Pool onboarding invites.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Swoosh.Email
 
   require Logger
@@ -13,8 +15,7 @@ defmodule CodexPooler.Access.InviteEmail do
   alias CodexPooler.Mailer
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
-
-  @subject "Codex Pooler Pool invite"
+  alias CodexPooler.SupportedLocales
 
   @type delivery_result :: {:ok, term()} | {:error, term()}
   @type pool_invite_result :: %{
@@ -26,18 +27,20 @@ defmodule CodexPooler.Access.InviteEmail do
 
   @spec pool_invite_email(Invite.t(), binary(), Pool.t(), User.t()) :: Swoosh.Email.t()
   def pool_invite_email(
-        %Invite{invited_email: invited_email},
+        %Invite{invited_email: invited_email, locale: locale},
         invite_url,
         %Pool{} = pool,
         %User{} = inviter
       )
       when is_binary(invited_email) and is_binary(invite_url) do
-    new()
-    |> from(Mailer.default_sender())
-    |> to(invited_email)
-    |> subject(@subject)
-    |> text_body(text_body(pool, inviter, invite_url))
-    |> html_body(html_body(pool, inviter, invite_url))
+    Gettext.with_locale(SupportedLocales.gettext_locale(locale), fn ->
+      new()
+      |> from(Mailer.default_sender())
+      |> to(invited_email)
+      |> subject(dgettext("emails", "Codex Pooler Pool invite"))
+      |> text_body(text_body(pool, inviter, invite_url))
+      |> html_body(html_body(pool, inviter, invite_url, locale))
+    end)
   end
 
   @spec deliver_pool_invite(Invite.t(), binary(), Pool.t(), User.t()) :: delivery_result()
@@ -99,37 +102,45 @@ defmodule CodexPooler.Access.InviteEmail do
     inviter_label = inviter_label(inviter)
 
     [
-      "#{inviter_label} invited you to connect an OpenAI account to #{pool.name}.",
+      dgettext("emails", "%{inviter} invited you to connect an OpenAI account to %{pool}.", inviter: inviter_label, pool: pool.name),
       "",
-      "Accept invite: #{invite_url}",
+      dgettext("emails", "Accept invite: %{url}", url: invite_url),
       "",
-      "What happens next:",
-      "After accepting the invite and linking an OpenAI account, that account becomes part of #{pool.name} and can be used by its routing policy.",
+      dgettext("emails", "What happens next:"),
+      dgettext("emails", "After accepting the invite and linking an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy.", pool: pool.name),
       "",
-      "If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email.",
+      dgettext("emails", "If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email."),
       "",
-      "Invited by: #{inviter.email}"
+      dgettext("emails", "Invited by: %{email}", email: inviter.email)
     ]
     |> Enum.join("\n")
   end
 
-  defp html_body(%Pool{} = pool, %User{} = inviter, invite_url) do
-    pool_name = html_escape(pool.name)
+  defp html_body(%Pool{} = pool, %User{} = inviter, invite_url, locale) do
+    locale = if locale in SupportedLocales.tags(), do: locale, else: "en"
     invite_href = html_escape(invite_url)
-    inviter_name = html_escape(inviter_label(inviter))
-    inviter_email = html_escape(inviter.email)
+    title = dgettext("emails", "Codex Pooler Pool invite") |> html_escape()
+    heading = dgettext("emails", "Pool invite for %{pool}", pool: pool.name) |> html_escape()
+    introduction = dgettext("emails", "%{inviter} invited you to connect an OpenAI account to %{pool}.", inviter: inviter_label(inviter), pool: pool.name) |> html_escape()
+    next_heading = dgettext("emails", "What happens after accepting") |> html_escape()
+    next_body = dgettext("emails", "After you accept and link an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy.", pool: pool.name) |> html_escape()
+    safety_heading = dgettext("emails", "Verify unexpected invites") |> html_escape()
+    safety_body = dgettext("emails", "If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email.") |> html_escape()
+    accept_label = dgettext("emails", "Accept invite") |> html_escape()
+    sender = dgettext("emails", "Sent by %{inviter} from %{email}.", inviter: inviter_label(inviter), email: inviter.email) |> html_escape()
+    recipient_notice = dgettext("emails", "This invite is intended only for the Codex account email that received it. Do not forward the link.") |> html_escape()
 
     """
     <!doctype html>
-    <html lang="en">
+    <html lang="#{locale}">
       <head>
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Codex Pooler Pool invite</title>
+        <title>#{title}</title>
       </head>
       <body style="margin:0;padding:0;background:#0e0e0e;color:#e7e5e5;font-family:'Roboto Condensed','Segoe UI',Arial,sans-serif;">
         <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
-          #{inviter_name} invited you to connect an OpenAI account to #{pool_name}.
+          #{introduction}
         </div>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0e0e0e;margin:0;padding:32px 16px;">
           <tr>
@@ -138,9 +149,9 @@ defmodule CodexPooler.Access.InviteEmail do
                 <tr>
                   <td style="padding:24px 28px 20px;border-bottom:1px solid #252626;">
                     <div style="color:#ff9900;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;line-height:1.2;">Codex Pooler</div>
-                    <h1 style="margin:10px 0 0;color:#e7e5e5;font-size:28px;line-height:1.15;font-weight:700;">Pool invite for #{pool_name}</h1>
+                    <h1 style="margin:10px 0 0;color:#e7e5e5;font-size:28px;line-height:1.15;font-weight:700;">#{heading}</h1>
                     <p style="margin:12px 0 0;color:#a6a3a3;font-size:16px;line-height:1.5;">
-                      #{inviter_name} invited you to connect an OpenAI account to #{pool_name}.
+                      #{introduction}
                     </p>
                   </td>
                 </tr>
@@ -149,9 +160,9 @@ defmodule CodexPooler.Access.InviteEmail do
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#1a140c;border:1px solid #4d2b0f;border-radius:6px;">
                       <tr>
                         <td style="padding:16px 18px;">
-                          <p style="margin:0 0 6px;color:#f0c08c;font-size:13px;font-weight:700;line-height:1.35;">What happens after accepting</p>
+                          <p style="margin:0 0 6px;color:#f0c08c;font-size:13px;font-weight:700;line-height:1.35;">#{next_heading}</p>
                           <p style="margin:0;color:#d8d0ca;font-size:15px;line-height:1.55;">
-                            After you accept and link an OpenAI account, that account becomes part of #{pool_name} and can be used by its routing policy.
+                            #{next_body}
                           </p>
                         </td>
                       </tr>
@@ -160,9 +171,9 @@ defmodule CodexPooler.Access.InviteEmail do
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;background:#191111;border:1px solid #5d2630;border-radius:6px;">
                       <tr>
                         <td style="padding:16px 18px;">
-                          <p style="margin:0 0 6px;color:#ff6b8a;font-size:13px;font-weight:700;line-height:1.35;">Verify unexpected invites</p>
+                          <p style="margin:0 0 6px;color:#ff6b8a;font-size:13px;font-weight:700;line-height:1.35;">#{safety_heading}</p>
                           <p style="margin:0;color:#d8d0ca;font-size:15px;line-height:1.55;">
-                            If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email.
+                            #{safety_body}
                           </p>
                         </td>
                       </tr>
@@ -171,7 +182,7 @@ defmodule CodexPooler.Access.InviteEmail do
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                       <tr>
                         <td align="center" style="padding:2px 0 30px;">
-                          <a href="#{invite_href}" style="display:inline-block;background:#ff9900;border:1px solid #e17d00;border-radius:4px;color:#111111;font-size:16px;font-weight:700;line-height:1;text-decoration:none;padding:15px 28px;">Accept invite</a>
+                          <a href="#{invite_href}" style="display:inline-block;background:#ff9900;border:1px solid #e17d00;border-radius:4px;color:#111111;font-size:16px;font-weight:700;line-height:1;text-decoration:none;padding:15px 28px;">#{accept_label}</a>
                         </td>
                       </tr>
                     </table>
@@ -179,8 +190,8 @@ defmodule CodexPooler.Access.InviteEmail do
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #252626;padding-top:18px;">
                       <tr>
                         <td style="padding-top:18px;color:#8b8787;font-size:13px;line-height:1.5;">
-                          <p style="margin:0 0 6px;">Sent by <strong style="color:#e7e5e5;">#{inviter_name}</strong> from <span style="color:#e7e5e5;">#{inviter_email}</span>.</p>
-                          <p style="margin:0;">This invite is intended only for the Codex account email that received it. Do not forward the link.</p>
+                          <p style="margin:0 0 6px;">#{sender}</p>
+                          <p style="margin:0;">#{recipient_notice}</p>
                         </td>
                       </tr>
                     </table>

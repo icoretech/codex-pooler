@@ -1,5 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Admin.UpstreamCircuitReadiness
+  alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting, as: CockpitFormatting
 
   @moduledoc """
   Shared route-path model for an upstream assignment: the four gates a
@@ -27,33 +30,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
     [
       %{
         key: "assignment",
-        label: "Assignment",
-        short_label: "Assign",
+        label: gettext("Assignment"),
+        short_label: gettext("Assign"),
         detail_label: assignment_state_label(Map.get(assignment, :status)),
         ready?: Map.get(assignment, :status) == "active",
         tone: assignment_state_tone(Map.get(assignment, :status))
       },
       %{
         key: "health",
-        label: "Health",
-        short_label: "Health",
+        label: gettext("Health"),
+        short_label: gettext("Health"),
         detail_label: assignment_health_label(Map.get(assignment, :health_status)),
         ready?: Map.get(assignment, :health_status) == "active",
         tone: assignment_health_tone(Map.get(assignment, :health_status))
       },
       %{
         key: "quota",
-        label: "Quota",
-        short_label: "Quota",
-        detail_label: Map.get(assignment, :quota_priming_label) || "Quota unknown",
+        label: gettext("Quota"),
+        short_label: gettext("Quota"),
+        detail_label: Map.get(assignment, :quota_priming_label) || gettext("Quota unknown"),
         ready?: quota_priming_ready?(Map.get(assignment, :quota_priming_status)),
         tone: quota_priming_tone(Map.get(assignment, :quota_priming_status))
       },
       %{
         key: "circuit",
-        label: "Circuit",
-        short_label: "Circuit",
-        detail_label: circuit_readiness.label,
+        label: gettext("Circuit"),
+        short_label: gettext("Circuit"),
+        detail_label: circuit_label(circuit_readiness.state),
         ready?: circuit_readiness.ready?,
         tone: circuit_readiness.tone
       }
@@ -74,7 +77,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
       |> segments()
       |> Enum.map_join(", ", & &1.detail_label)
 
-    "#{Map.get(assignment, :pool_label, "Pool")} route path: #{segment_labels}"
+    gettext("%{pool} route path: %{segments}", pool: Map.get(assignment, :pool_label, "Pool"), segments: segment_labels)
   end
 
   @spec segment_class(segment()) :: [String.t()]
@@ -89,16 +92,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
 
   defp segment_base_class, do: "route-chevron"
 
-  defp assignment_state_label("active"), do: "Assignment active"
-  defp assignment_state_label("paused"), do: "Assignment paused"
-  defp assignment_state_label("disabled"), do: "Assignment disabled"
-  defp assignment_state_label("deleted"), do: "Assignment deleted"
-  defp assignment_state_label(status), do: "Assignment #{human_status_label(status)}"
+  defp assignment_state_label("active"), do: gettext("Assignment active")
+  defp assignment_state_label("paused"), do: gettext("Assignment paused")
+  defp assignment_state_label("disabled"), do: gettext("Assignment disabled")
+  defp assignment_state_label("deleted"), do: gettext("Assignment deleted")
+  defp assignment_state_label(status), do: gettext("Assignment %{status}", status: human_status_label(status))
 
-  defp assignment_health_label("active"), do: "Health active"
-  defp assignment_health_label("degraded"), do: "Health degraded"
-  defp assignment_health_label("errored"), do: "Health errored"
-  defp assignment_health_label(status), do: "Health #{human_status_label(status)}"
+  defp assignment_health_label("active"), do: gettext("Health active")
+  defp assignment_health_label("degraded"), do: gettext("Health degraded")
+  defp assignment_health_label("errored"), do: gettext("Health errored")
+  defp assignment_health_label(status), do: gettext("Health %{status}", status: human_status_label(status))
 
   defp assignment_state_tone("active"), do: :success
   defp assignment_state_tone("paused"), do: :warning
@@ -117,11 +120,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
   defp quota_priming_tone(status) when status in ["failed", "blocked", "expired"], do: :error
   defp quota_priming_tone(_status), do: :warning
 
-  defp human_status_label(value) when is_binary(value) and value != "" do
-    value
-    |> String.replace("_", " ")
-    |> String.downcase()
-  end
+  defp human_status_label(value) when is_binary(value) and value != "",
+    do: CockpitFormatting.status_text(value)
 
-  defp human_status_label(_value), do: "unknown"
+  defp human_status_label(_value), do: gettext("unknown")
+
+  defp circuit_label(:blocked), do: gettext("Circuit protection active")
+  defp circuit_label(:recovering), do: gettext("Circuit recovery in progress")
+  defp circuit_label(_state), do: gettext("Circuit clear")
 end

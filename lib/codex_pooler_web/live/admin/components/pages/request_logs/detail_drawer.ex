@@ -12,12 +12,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
   attr :selected_request_log, :map, default: nil
   attr :datetime_preferences, :map, required: true
 
+  @spec request_log_detail_drawer(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_detail_drawer(assigns) do
     ~H"""
     <div class="drawer-side z-[70]" data-role="request-log-detail-drawer-side">
       <label
         for="request-log-detail-drawer"
-        aria-label="Close request details"
+        aria-label={gettext("Close request details")}
         class="drawer-overlay"
         phx-click="close_request_log"
       ></label>
@@ -29,14 +30,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
         status={Format.request_log_status(@selected_request_log)}
         status_class={Format.request_log_status_class(@selected_request_log)}
         close_event="close_request_log"
-        close_label="Close request details"
+        close_label={gettext("Close request details")}
         role="dialog"
         aria_modal={true}
         class="flex min-h-full w-full max-w-2xl flex-col overflow-hidden border-l border-base-300 bg-base-100 shadow-2xl"
       >
         <%= if @selected_request_log do %>
           <section id="request-log-detail-outcome" class="grid gap-3">
-            <.section_heading title="Final outcome" />
+            <.section_heading title={gettext("Final outcome")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.final_outcome_rows(@selected_request_log, @datetime_preferences)}
@@ -50,7 +51,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
             id="request-log-detail-compaction-bridge"
             class="grid gap-3"
           >
-            <.section_heading title="Compaction bridge" />
+            <.section_heading title={gettext("Compaction bridge")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.compaction_bridge_rows(@selected_request_log)}
@@ -60,12 +61,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-attempts" class="grid gap-3">
-            <.section_heading title="Attempts timeline" />
+            <.section_heading title={gettext("Attempts timeline")} />
             <div
               :if={Attempts.debug_attempts(@selected_request_log) == []}
               class="text-sm text-base-content/60"
             >
-              No upstream attempts recorded.
+              {gettext("No upstream attempts recorded.")}
             </div>
             <div
               :for={attempt <- Attempts.debug_attempts(@selected_request_log)}
@@ -75,7 +76,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
             >
               <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <span class="font-semibold text-base-content">
-                  Attempt {Format.safe_text(attempt.attempt_number)}
+                  {gettext("Attempt %{number}", number: Format.safe_text(attempt.attempt_number))}
                 </span>
                 <span class={Format.status_chip_class(attempt.status)}>
                   {Format.safe_text(Format.request_log_status(attempt))}
@@ -84,13 +85,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
                   :if={attempt.final}
                   class={AdminBadges.metadata_chip_class(:primary)}
                 >
-                  final
+                  {gettext("final")}
                 </span>
                 <span
                   :if={attempt.retryable}
                   class={AdminBadges.metadata_chip_class(:warning)}
                 >
-                  retryable
+                  {gettext("retryable")}
                 </span>
               </div>
               <dl class="grid gap-2 text-sm sm:grid-cols-2">
@@ -100,12 +101,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-transport-failures" class="grid gap-3">
-            <.section_heading title="Transport failure diagnostics" />
+            <.section_heading title={gettext("Transport failure diagnostics")} />
             <div
               :if={Attempts.transport_failure_attempts(@selected_request_log) == []}
               class="rounded-box border border-base-300 bg-base-200/35 px-3 py-3 text-sm text-base-content/60"
             >
-              No compact transport failure metadata recorded.
+              {gettext("No compact transport failure metadata recorded.")}
             </div>
             <div
               :for={attempt <- Attempts.transport_failure_attempts(@selected_request_log)}
@@ -114,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
               class="grid gap-3 rounded-box border border-error/20 bg-error/5 px-3 py-3"
             >
               <p class="text-sm font-semibold text-error">
-                Attempt {Format.safe_text(attempt.attempt_number)}
+                {gettext("Attempt %{number}", number: Format.safe_text(attempt.attempt_number))}
               </p>
               <dl class="grid gap-2 text-sm sm:grid-cols-2">
                 <.detail_row :for={row <- Attempts.transport_failure_rows(attempt)} row={row} />
@@ -123,7 +124,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-routing" class="grid gap-3">
-            <.section_heading title="Routing summary" />
+            <.section_heading title={gettext("Routing summary")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.routing_rows(@selected_request_log)}
@@ -133,7 +134,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-usage" class="grid gap-3">
-            <.section_heading title="Usage and cost" />
+            <.section_heading title={gettext("Usage and cost")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.usage_rows(@selected_request_log)}
@@ -143,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-continuity" class="grid gap-3">
-            <.section_heading title="Continuity and debug summary" />
+            <.section_heading title={gettext("Continuity and debug summary")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.continuity_rows(@selected_request_log, @datetime_preferences)}
@@ -153,7 +154,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
 
           <section id="request-log-detail-sanitized-metadata" class="grid gap-3">
-            <.section_heading title="Sanitized metadata" />
+            <.section_heading title={gettext("Sanitized metadata")} />
             <dl class="grid gap-2 text-sm sm:grid-cols-2">
               <.detail_row
                 :for={row <- Rows.sanitized_metadata_rows(@selected_request_log)}
@@ -163,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
           </section>
         <% else %>
           <div class="grid min-h-64 place-items-center text-center text-sm text-base-content/60">
-            Select a request to inspect sanitized diagnostics.
+            {gettext("Select a request to inspect sanitized diagnostics.")}
           </div>
         <% end %>
       </AdminComponents.object_inspector>

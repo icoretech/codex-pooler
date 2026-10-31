@@ -15,14 +15,15 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
   attr :tabs, :list, required: true
   attr :selected_tab, :string, required: true
 
+  @spec system_tab_picker(map()) :: Phoenix.LiveView.Rendered.t()
   def system_tab_picker(assigns) do
     ~H"""
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-base-content/45">
-          Instance system
+          {gettext("Instance system")}
         </p>
-        <h2 class="text-lg font-semibold text-base-content">Choose what to configure</h2>
+        <h2 class="text-lg font-semibold text-base-content">{gettext("Choose what to configure")}</h2>
       </div>
       <div id="system-tabs" class="tabs tabs-border" role="tablist">
         <.link
@@ -53,6 +54,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
   attr :datetime_preferences, :map, required: true
   attr :current_session_ip, :string, default: nil
 
+  @spec instance_settings_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def instance_settings_panel(assigns) do
     ~H"""
     <section id="system-settings-panel" class="grid gap-4" data-selected-tab={@selected_tab}>

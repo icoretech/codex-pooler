@@ -2,6 +2,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDeliveryTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import Swoosh.TestAssertions
 
   alias CodexPooler.Alerts.Delivery.AttemptLifecycle
   alias CodexPooler.Alerts.Delivery.EmailDelivery
@@ -146,6 +147,44 @@ defmodule CodexPooler.Alerts.Delivery.EmailDeliveryTest do
     assert attempt.failure_code == "alert_email_delivery_exception"
     assert attempt.failure_message == "ArgumentError raised during alert email delivery"
     assert Repo.aggregate(from(a in AlertDeliveryAttempt, where: a.incident_id == ^incident.id), :count) == 1
+  end
+
+  test "alert delivery renders the channel language without changing stable severity and rule identifiers" do
+    Application.put_env(:codex_pooler, Mailer, adapter: Swoosh.Adapters.Test)
+    pool = pool_fixture()
+    channel = alert_channel_fixture()
+    {:ok, channel} = channel |> Ecto.Changeset.change(locale: "zh-CN") |> Repo.update()
+    incident = alert_incident_fixture(pool: pool, occurrence_count: 3)
+    Gettext.put_locale("en")
+
+    assert {:ok, %{status: "sent"}} = EmailDelivery.deliver_incident_to_channel(incident.id, channel.id, 1)
+
+    assert_email_sent(fn email ->
+      assert email.subject == "Codex Pooler 告警: critical: pool_no_usable_assignments"
+      assert email.text_body =~ "告警事件 ID：#{incident.id}"
+      assert email.text_body =~ "发生次数：3"
+      assert email.text_body =~ "此告警仅包含元数据。"
+      true
+    end)
+
+    assert Gettext.get_locale() == "en"
+  end
+
+  test "null and unsupported stored channel languages render English without using the process locale" do
+    pool = pool_fixture()
+    channel = alert_channel_fixture()
+    incident = alert_incident_fixture(pool: pool)
+    Gettext.put_locale("zh_CN")
+
+    for locale <- [nil, "retired-locale"] do
+      email = EmailDelivery.alert_email(incident, %{channel | locale: locale})
+      assert email.subject == "Codex Pooler alert: critical: pool_no_usable_assignments"
+      assert email.text_body =~ "Codex Pooler alert notification"
+      assert email.text_body =~ "Incident id: #{incident.id}"
+    end
+
+    assert Gettext.get_locale() == "zh_CN"
+    assert_no_email_sent()
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

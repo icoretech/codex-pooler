@@ -1,8 +1,19 @@
 defmodule CodexPoolerWeb.Admin.RequestLogRegressionsTest do
   use ExUnit.Case, async: true
   alias CodexPoolerWeb.Admin.RequestLogFilterForm
+  alias CodexPoolerWeb.Admin.RequestLogsDisplay
   alias CodexPoolerWeb.Admin.RequestLogsDisplay.Errors
   alias CodexPoolerWeb.Admin.RequestLogsPresentation.Metrics
+
+  test "plural selection preserves compact tokens and grouped display counts" do
+    Gettext.with_locale("en", fn ->
+      assert RequestLogsDisplay.format_token_counts(%{total_tokens: 1}) == "1 token"
+      assert RequestLogsDisplay.format_token_counts(%{total_tokens: 2_000}) == "2k tokens"
+      assert RequestLogsDisplay.format_cached_token_breakdown(%{token_counts: %{cached_input_tokens: 2_000}}) == "2k cached"
+      composition = Metrics.token_composition(%{input_tokens: 2_000, cached_input_tokens: 1_000, output_tokens: 1_000, total_tokens: 3_000})
+      assert composition.title == "3,000 total tokens — Cached input: 1,000; Uncached input: 1,000; Output: 1,000. Output includes reasoning tokens."
+    end)
+  end
 
   test "quota labels preserve distinct failures and their reset advice" do
     errors = [%{code: "quota_exhausted", reset_at: ~U[2026-09-27 12:00:00Z]}, %{code: "stream_incomplete"}, %{code: "upstream_timeout"}, %{code: "quota_evidence_unavailable"}]

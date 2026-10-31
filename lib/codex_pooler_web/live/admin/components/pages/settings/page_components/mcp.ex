@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
   attr :delete_key, :any, default: nil
   attr :delete_form, :any, required: true
 
+  @spec panel(map()) :: Phoenix.LiveView.Rendered.t()
   def panel(assigns) do
     ~H"""
     <section
@@ -27,11 +28,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
       <div class="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
         <div class="border-base-300 lg:border-r lg:pr-5">
           <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-            MCP access
+            {gettext("MCP access")}
           </p>
-          <h3 class="mt-1 text-xl font-semibold text-base-content">Operator MCP keys</h3>
+          <h3 class="mt-1 text-xl font-semibold text-base-content">{gettext("Operator MCP keys")}</h3>
           <p class="mt-2 text-sm leading-6 text-base-content/65">
-            Enable metadata-only MCP access for this operator account and manage labeled bearer tokens.
+            {gettext("Enable metadata-only MCP access for this operator account and manage labeled bearer tokens.")}
           </p>
         </div>
 
@@ -39,7 +40,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
           <div class="grid gap-3 md:grid-cols-2">
             <div class="rounded-box border border-base-300 bg-base-200 p-4">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Global gate
+                {gettext("Global gate")}
               </p>
               <p id="settings-mcp-global-status" class={mcp_gate_status_class(@global_enabled?)}>
                 {mcp_global_status(@global_enabled?)}
@@ -53,19 +54,19 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
                 class="btn btn-secondary btn-sm mt-3 gap-2"
               >
                 <.icon name="hero-adjustments-horizontal" class="size-4" />
-                <span>Open system settings</span>
+                <span>{gettext("Open system settings")}</span>
               </.link>
             </div>
 
             <div class="rounded-box border border-base-300 bg-base-200 p-4">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Account gate
+                {gettext("Account gate")}
               </p>
               <p id="settings-mcp-account-status" class={mcp_gate_status_class(@account_enabled?)}>
                 {mcp_account_status(@account_enabled?)}
               </p>
               <p class="mt-2 text-sm leading-6 text-base-content/65">
-                Disabling this operator account gate preserves keys, but existing MCP clients fail immediately.
+                {gettext("Disabling this operator account gate preserves keys, but existing MCP clients fail immediately.")}
               </p>
             </div>
           </div>
@@ -82,12 +83,12 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               id="settings-mcp-enabled-toggle"
               field={@toggle_form[:enabled]}
               type="checkbox"
-              label="Enable MCP for my operator account"
+              label={gettext("Enable MCP for my operator account")}
             />
             <AdminComponents.action_button
               id="settings-mcp-toggle-submit"
               icon="hero-power"
-              label="Save MCP account gate"
+              label={gettext("Save MCP account gate")}
               type="submit"
               variant={:primary}
             />
@@ -100,7 +101,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             <div class="grid gap-2 md:grid-cols-3">
               <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Endpoint
+                  {gettext("Endpoint")}
                 </p>
                 <code
                   id="settings-mcp-endpoint"
@@ -111,7 +112,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </div>
               <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Preferred protocol
+                  {gettext("Preferred protocol")}
                 </p>
                 <code
                   id="settings-mcp-protocol"
@@ -122,7 +123,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </div>
               <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Authorization
+                  {gettext("Authorization")}
                 </p>
                 <code
                   id="settings-mcp-auth-shape"
@@ -133,14 +134,14 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </div>
             </div>
             <p id="settings-mcp-origin-policy" class="text-sm leading-6 text-base-content/70">
-              Absent Origin headers from CLI clients are accepted. Present browser Origin headers must be trusted by the service policy; wildcard browser access is not allowed.
+              {gettext("Absent Origin headers from CLI clients are accepted. Present browser Origin headers must be trusted by the service policy; wildcard browser access is not allowed.")}
             </p>
             <div id="settings-mcp-usage-warning" class="alert alert-warning items-start">
               <.icon name="hero-exclamation-triangle" class="size-5" />
               <div class="grid gap-1">
-                <p class="font-semibold">MCP hosts can read admin metadata.</p>
+                <p class="font-semibold">{gettext("MCP hosts can read admin metadata.")}</p>
                 <p class="text-sm">
-                  Use a separate labeled key for each trusted client. Usage is not tracked per key.
+                  {gettext("Use a separate labeled key for each trusted client. Usage is not tracked per key.")}
                 </p>
               </div>
             </div>
@@ -157,14 +158,14 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               id="settings-mcp-create-label"
               field={@key_form[:label]}
               type="text"
-              label="New key label"
-              placeholder="Desktop client"
+              label={gettext("New key label")}
+              placeholder={gettext("Desktop client")}
               required
             />
             <AdminComponents.action_button
               id="settings-mcp-create-submit"
               icon="hero-key"
-              label="Create MCP key"
+              label={gettext("Create MCP key")}
               type="submit"
               variant={:primary}
             />
@@ -174,8 +175,8 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             <AdminComponents.empty_state
               :if={@keys == []}
               id="settings-mcp-key-empty"
-              title="No MCP keys"
-              description="Create a labeled key for each trusted MCP host. Raw tokens are shown once."
+              title={gettext("No MCP keys")}
+              description={gettext("Create a labeled key for each trusted MCP host. Raw tokens are shown once.")}
               icon="hero-key"
             />
 
@@ -187,7 +188,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               <div class="grid min-w-0 gap-1">
                 <p class="truncate font-semibold text-base-content">{key.label}</p>
                 <p class="text-xs text-base-content/55">
-                  Prefix <code class="font-mono">{key.key_prefix}</code> · Created {datetime_label(key.inserted_at, @datetime_preferences)}
+                  <span>{gettext("Prefix %{prefix} · Created %{created}", prefix: key.key_prefix, created: datetime_label(key.inserted_at, @datetime_preferences))}</span>
                 </p>
               </div>
 
@@ -203,13 +204,13 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
                   id={"settings-mcp-key-#{key.id}-label"}
                   field={Map.fetch!(@rename_forms, key.id)[:label]}
                   type="text"
-                  label="Label"
+                  label={gettext("Label")}
                   required
                 />
                 <AdminComponents.action_button
                   id={"settings-mcp-key-#{key.id}-rename-submit"}
                   icon="hero-pencil-square"
-                  label="Rename"
+                  label={gettext("Rename")}
                   type="submit"
                 />
               </.form>
@@ -217,7 +218,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               <AdminComponents.action_button
                 id={"settings-mcp-key-#{key.id}-delete"}
                 icon="hero-trash"
-                label="Delete"
+                label={gettext("Delete")}
                 phx-click="open_delete_mcp_key"
                 phx-value-id={key.id}
                 variant={:danger}
@@ -235,6 +236,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
 
   attr :created_secret, :map, required: true
 
+  @spec mcp_created_token_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def mcp_created_token_dialog(assigns) do
     ~H"""
     <dialog
@@ -244,13 +246,13 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-primary">MCP token</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this token before closing</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-primary">{gettext("MCP token")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Copy this token before closing")}</h2>
           <p
             id="settings-mcp-created-token-alert"
             class="mt-2 text-sm leading-6 text-base-content/70"
           >
-            It is shown once. Afterwards only the prefix <span class="font-semibold text-base-content">{@created_secret.key.key_prefix}</span> identifies it.
+            {gettext("It is shown once. Afterwards only the prefix %{prefix} identifies it.", prefix: @created_secret.key.key_prefix)}
           </p>
         </div>
         <div class="grid gap-5 p-5 sm:p-6">
@@ -258,8 +260,8 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             value={@created_secret.raw_token}
             value_id="settings-mcp-created-token-value"
             copy_id="settings-mcp-created-token-copy"
-            copy_label="Copy token"
-            copy_aria_label="Copy MCP token"
+            copy_label={gettext("Copy token")}
+            copy_aria_label={gettext("Copy MCP token")}
           />
         </div>
 
@@ -268,7 +270,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             <AdminComponents.action_button
               id="settings-mcp-created-token-close"
               icon="hero-check"
-              label="Done"
+              label={gettext("Done")}
               phx-click="close_mcp_created_token"
               variant={:primary}
             />
@@ -276,7 +278,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="close_mcp_created_token">close</button>
+        <button type="button" phx-click="close_mcp_created_token">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -285,6 +287,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
   attr :key, :any, required: true
   attr :form, :any, required: true
 
+  @spec mcp_delete_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def mcp_delete_dialog(assigns) do
     ~H"""
     <dialog
@@ -294,10 +297,10 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">MCP key</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@key.label}?</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("MCP key")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Delete %{label}?", label: @key.label)}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Clients authenticating with prefix <span class="font-semibold text-base-content">{@key.key_prefix}</span> start failing immediately. This cannot be undone.
+            {gettext("Clients authenticating with prefix %{prefix} start failing immediately. This cannot be undone.", prefix: @key.key_prefix)}
           </p>
         </div>
         <.form
@@ -313,14 +316,14 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
           <:actions>
             <AdminComponents.action_button
               id="settings-mcp-delete-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_mcp_key"
             />
             <AdminComponents.action_button
               id="settings-mcp-delete-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="settings-mcp-delete-form"
               variant={:danger}
@@ -329,21 +332,21 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_mcp_key">close</button>
+        <button type="button" phx-click="cancel_delete_mcp_key">{gettext("close")}</button>
       </form>
     </dialog>
     """
   end
 
-  defp mcp_global_status(true), do: "Global MCP service enabled"
-  defp mcp_global_status(false), do: "Global MCP service disabled"
-  defp mcp_account_status(true), do: "Enabled for this operator"
-  defp mcp_account_status(false), do: "Disabled for this operator"
+  defp mcp_global_status(true), do: gettext("Global MCP service enabled")
+  defp mcp_global_status(false), do: gettext("Global MCP service disabled")
+  defp mcp_account_status(true), do: gettext("Enabled for this operator")
+  defp mcp_account_status(false), do: gettext("Disabled for this operator")
 
-  defp mcp_global_copy(true), do: "The instance gate currently allows authenticated MCP clients."
+  defp mcp_global_copy(true), do: gettext("The instance gate currently allows authenticated MCP clients.")
 
   defp mcp_global_copy(false) do
-    "Client requests fail until the global MCP service is enabled in system settings."
+    gettext("Client requests fail until the global MCP service is enabled in system settings.")
   end
 
   defp mcp_gate_status_class(true),
@@ -353,6 +356,6 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
     do: "mt-2 inline-flex rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning"
 
   defp datetime_label(datetime, preferences) do
-    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: "not yet")
+    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: gettext("not yet"))
   end
 end

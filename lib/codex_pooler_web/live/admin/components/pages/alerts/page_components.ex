@@ -5,12 +5,13 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents do
 
   attr :selected_tab, :string, required: true
 
+  @spec workspace_header(map()) :: Phoenix.LiveView.Rendered.t()
   def workspace_header(assigns) do
     ~H"""
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-base-content/45">
-          Alert management
+          {gettext("Alert management")}
         </p>
         <h2 class="text-lg font-semibold text-base-content">
           {workspace_title(@selected_tab)}
@@ -34,13 +35,13 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents do
 
   defp alert_tabs do
     [
-      %{id: "rules", label: "Rules"},
-      %{id: "channels", label: "Channels"},
-      %{id: "incidents", label: "Incidents"}
+      %{id: "rules", label: gettext("Rules")},
+      %{id: "channels", label: gettext("Channels")},
+      %{id: "incidents", label: gettext("Incidents")}
     ]
   end
 
-  defp workspace_title("channels"), do: "Channels"
-  defp workspace_title("incidents"), do: "Incidents"
-  defp workspace_title(_tab), do: "Rules"
+  defp workspace_title("channels"), do: gettext("Channels")
+  defp workspace_title("incidents"), do: gettext("Incidents")
+  defp workspace_title(_tab), do: gettext("Rules")
 end

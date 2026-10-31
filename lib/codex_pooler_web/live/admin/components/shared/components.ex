@@ -8,6 +8,16 @@ defmodule CodexPoolerWeb.Admin.Components do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: RelativeTime
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation
 
+  attr :flash, :map, required: true
+  attr :current_scope, :any, required: true
+  attr :active_nav, :atom, required: true
+  attr :alert_notification_center, :map, required: true
+  attr :openai_status_aggregate, :map, default: %{incidents: [], last_success_at: nil, stale?: false}
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
+  slot :inner_block, required: true
+
+  @spec admin_shell(map()) :: Phoenix.LiveView.Rendered.t()
   def admin_shell(assigns), do: Shell.admin_shell(assigns)
 
   attr :id, :string, required: true
@@ -41,14 +51,17 @@ defmodule CodexPoolerWeb.Admin.Components do
   @docs_url "https://www.codex-pooler.com/docs/operators/admin-ui/"
 
   attr :id, :string, required: true
-  attr :eyebrow, :string, default: "Admin"
+  attr :eyebrow, :string, default: nil
   attr :title, :string, required: true
   attr :description, :string, default: nil
   attr :actions_breakpoint, :atom, default: :sm
 
   slot :actions
 
+  @spec page_header(map()) :: Phoenix.LiveView.Rendered.t()
   def page_header(assigns) do
+    assigns = assign(assigns, :eyebrow, assigns.eyebrow || gettext("Admin"))
+
     ~H"""
     <header
       id={@id}
@@ -88,6 +101,7 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   slot :inner_block, required: true
 
+  @spec metric_strip(map()) :: Phoenix.LiveView.Rendered.t()
   def metric_strip(assigns) do
     ~H"""
     <section
@@ -101,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.Components do
             !@compact_mobile && "grid-cols-1"
           ]
       }
-      aria-label="Page metrics"
+      aria-label={gettext("Page metrics")}
     >
       {render_slot(@inner_block)}
     </section>
@@ -377,6 +391,7 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   slot :actions, required: true
 
+  @spec dialog_footer(map()) :: Phoenix.LiveView.Rendered.t()
   def dialog_footer(assigns) do
     assigns =
       assigns
@@ -392,7 +407,7 @@ defmodule CodexPoolerWeb.Admin.Components do
           href={@docs_url}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Open Codex Pooler documentation"
+          aria-label={gettext("Open Codex Pooler documentation")}
           class="inline-flex w-fit items-center gap-1.5 text-xs font-semibold leading-none text-base-content/55 transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
           <span
@@ -402,7 +417,7 @@ defmodule CodexPoolerWeb.Admin.Components do
           >
             <.icon name="hero-book-open" class="size-3.5" />
           </span>
-          <span class="leading-none">Docs</span>
+          <span class="leading-none">{gettext("Docs")}</span>
         </a>
         <div class="flex flex-row flex-wrap justify-end gap-2">
           {render_slot(@actions)}
@@ -419,7 +434,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :status_class, :string, default: nil
   attr :class, :string, default: nil
   attr :close_event, :string, default: nil
-  attr :close_label, :string, default: "Close details"
+  attr :close_label, :string, default: nil
   attr :role, :string, default: nil
   attr :aria_modal, :boolean, default: false
 
@@ -427,6 +442,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   slot :inner_block, required: true
   slot :quick_links
 
+  @spec object_inspector(map()) :: Phoenix.LiveView.Rendered.t()
   def object_inspector(assigns) do
     ~H"""
     <aside
@@ -460,7 +476,7 @@ defmodule CodexPoolerWeb.Admin.Components do
           id={"#{@id}-close"}
           type="button"
           class="btn btn-ghost btn-sm btn-square shrink-0"
-          aria-label={@close_label}
+          aria-label={@close_label || gettext("Close details")}
           phx-click={@close_event}
         >
           <.icon name="hero-x-mark" class="size-5" />
@@ -470,7 +486,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       <nav
         :if={@tabs != []}
         class="flex overflow-x-auto border-b border-base-300 px-4"
-        aria-label="Inspector sections"
+        aria-label={gettext("Inspector sections")}
       >
         {render_slot(@tabs)}
       </nav>
@@ -539,7 +555,7 @@ defmodule CodexPoolerWeb.Admin.Components do
         open={@advanced_open}
       >
         <summary class="cursor-pointer px-1 py-1 text-xs font-semibold uppercase tracking-wide text-base-content/55 transition-colors hover:text-base-content">
-          Advanced filters
+          {gettext("Advanced filters")}
         </summary>
         <div class={advanced_filter_fields_class(@mobile_single_column)}>
           {render_slot(@advanced)}
@@ -554,6 +570,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :inline_label, :boolean, default: true
   attr :timezone, :string, required: true
 
+  @spec cally_date_filter(map()) :: Phoenix.LiveView.Rendered.t()
   def cally_date_filter(assigns) do
     assigns =
       assigns
@@ -567,7 +584,8 @@ defmodule CodexPoolerWeb.Admin.Components do
       id={"#{@id}-picker"}
       class="fieldset mb-2"
       phx-hook="CallyDatePicker"
-      data-placeholder="dd/mm/yyyy"
+      data-placeholder={gettext("dd/mm/yyyy")}
+      data-locale={calendar_locale()}
     >
       <input type="hidden" id={@id} name={@name} value={@value} />
       <label :if={!@inline_label} class="label mb-1" for={"#{@id}-button"}>{@label}</label>
@@ -576,7 +594,7 @@ defmodule CodexPoolerWeb.Admin.Components do
         type="button"
         class="input input-sm flex w-full items-center justify-between gap-2 text-left"
         aria-label={@label}
-        title={"#{@label} (#{@timezone})"}
+        title={gettext("%{label} (%{timezone})", label: @label, timezone: @timezone)}
         popovertarget={"#{@id}-popover"}
         style={"anchor-name: #{@anchor_name};"}
       >
@@ -597,9 +615,9 @@ defmodule CodexPoolerWeb.Admin.Components do
         class="dropdown rounded-box border border-base-300 bg-base-100 p-3 text-base-content shadow-xl"
         style={"position-anchor: #{@anchor_name};"}
       >
-        <calendar-date class="cally admin-calendar" value={@value} locale="en-GB" data-role="cally-calendar">
+        <calendar-date class="cally admin-calendar" value={@value} locale={calendar_locale()} data-role="cally-calendar">
           <svg
-            aria-label="Previous"
+            aria-label={pgettext("calendar navigation", "Previous")}
             class="size-4 fill-current"
             slot="previous"
             xmlns="http://www.w3.org/2000/svg"
@@ -608,7 +626,7 @@ defmodule CodexPoolerWeb.Admin.Components do
             <path d="M15.75 19.5 8.25 12l7.5-7.5"></path>
           </svg>
           <svg
-            aria-label="Next"
+            aria-label={pgettext("calendar navigation", "Next")}
             class="size-4 fill-current"
             slot="next"
             xmlns="http://www.w3.org/2000/svg"
@@ -620,15 +638,22 @@ defmodule CodexPoolerWeb.Admin.Components do
         </calendar-date>
         <div class="mt-3 grid grid-cols-2 gap-2 border-t border-base-300 pt-3">
           <button type="button" class="btn btn-secondary btn-sm" data-role="cally-clear">
-            Clear
+            {gettext("Clear")}
           </button>
           <button type="button" class="btn btn-secondary btn-sm" data-role="cally-cancel">
-            Cancel
+            {gettext("Cancel")}
           </button>
         </div>
       </div>
     </div>
     """
+  end
+
+  defp calendar_locale do
+    case Gettext.get_locale() do
+      "zh_CN" -> "zh-CN"
+      _locale -> "en-GB"
+    end
   end
 
   attr :id, :string, required: true
@@ -664,6 +689,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :label, :string, required: true
   attr :status, :atom, required: true
 
+  @spec redacted_status_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def redacted_status_badge(assigns) do
     ~H"""
     <span id={@id} class={status_badge_class(@status)}>
@@ -730,6 +756,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :class, :any, default: nil
   attr :trigger_class, :any, default: nil
 
+  @spec model_info_popover(map()) :: Phoenix.LiveView.Rendered.t()
   def model_info_popover(assigns) do
     assigns =
       assigns
@@ -754,14 +781,14 @@ defmodule CodexPoolerWeb.Admin.Components do
           "btn btn-ghost btn-xs btn-circle size-6 min-h-6 shrink-0 text-base-content/45 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
           @trigger_class
         ]}
-        aria-label={"About #{@model_id}"}
+        aria-label={gettext("About %{model}", model: @model_id)}
         aria-controls={"#{@id}-content"}
         aria-describedby={"#{@id}-content"}
         popovertarget={"#{@id}-content"}
         style={"anchor-name: #{@anchor_name};"}
       >
         <.icon name="hero-information-circle" class="size-4" />
-        <span class="sr-only">About {@model_id}</span>
+        <span class="sr-only">{gettext("About %{model}", model: @model_id)}</span>
       </button>
 
       <button
@@ -774,7 +801,7 @@ defmodule CodexPoolerWeb.Admin.Components do
           @trigger_class
         ]}
         title={@model_id}
-        aria-label={"About #{@model_id}"}
+        aria-label={gettext("About %{model}", model: @model_id)}
         aria-controls={"#{@id}-content"}
         aria-describedby={"#{@id}-content"}
         popovertarget={"#{@id}-content"}
@@ -797,7 +824,7 @@ defmodule CodexPoolerWeb.Admin.Components do
             data-role="model-info-title"
             class="font-mono text-[0.62rem] font-semibold uppercase leading-4 tracking-[0.18em] text-primary"
           >
-            Model info
+            {gettext("Model info")}
           </p>
           <p
             data-role="model-info-model-id"
@@ -859,10 +886,10 @@ defmodule CodexPoolerWeb.Admin.Components do
        do: description
 
   defp model_info_description(%{description_state: :conflicting}),
-    do: "Descriptions differ across the current upstreams."
+    do: gettext("Descriptions differ across the current upstreams.")
 
   defp model_info_description(_info),
-    do: "No description was reported by the current upstreams."
+    do: gettext("No description was reported by the current upstreams.")
 
   defp model_info_context_rows(%{context_profiles: profiles}) when is_list(profiles) do
     profiles
@@ -884,11 +911,11 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp context_summary_row([]), do: []
 
   defp context_summary_row([{window, window}]),
-    do: [{"Context", "#{format_token_count(window)} tokens"}]
+    do: [{gettext("Context"), ngettext("%{tokens} token", "%{tokens} tokens", window, tokens: format_token_count(window))}]
 
   defp context_summary_row([{default, maximum}]),
     do: [
-      {"Context", "#{format_token_count(default)} default · up to #{format_token_count(maximum)}"}
+      {gettext("Context"), gettext("%{default} default · up to %{maximum}", default: format_token_count(default), maximum: format_token_count(maximum))}
     ]
 
   defp context_summary_row(profiles) do
@@ -898,7 +925,7 @@ defmodule CodexPoolerWeb.Admin.Components do
     default = format_token_range(defaults)
     maximum = maximums |> Enum.max() |> format_token_count()
 
-    [{"Context", "#{default} default · up to #{maximum} · varies by upstream"}]
+    [{gettext("Context"), gettext("%{default} default · up to %{maximum} · varies by upstream", default: default, maximum: maximum)}]
   end
 
   defp format_token_range(values) do
@@ -938,22 +965,22 @@ defmodule CodexPoolerWeb.Admin.Components do
     |> append_model_info_fact(
       Map.get(info, :visibility),
       :hidden,
-      {"hero-eye-slash", "Hidden upstream alias"}
+      {"hero-eye-slash", gettext("Hidden upstream alias")}
     )
     |> append_model_info_fact(
       Map.get(info, :visibility),
       :mixed,
-      {"hero-arrows-right-left", "Visibility differs across upstreams"}
+      {"hero-arrows-right-left", gettext("Visibility differs across upstreams")}
     )
     |> append_model_info_fact(
       Map.get(info, :api_support),
       :unsupported,
-      {"hero-eye-slash", "Not exposed by the public API"}
+      {"hero-eye-slash", gettext("Not exposed by the public API")}
     )
     |> append_model_info_fact(
       Map.get(info, :api_support),
       :mixed,
-      {"hero-arrows-right-left", "API support differs across upstreams"}
+      {"hero-arrows-right-left", gettext("API support differs across upstreams")}
     )
     |> append_minimal_client_version_fact(Map.get(info, :minimal_client_versions, []))
     |> append_catalog_updated_at_fact(Map.get(info, :catalog_updated_at))
@@ -967,7 +994,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp append_minimal_client_version_fact(facts, []), do: facts
 
   defp append_minimal_client_version_fact(facts, [version]),
-    do: facts ++ [%{icon: "hero-command-line", text: "Min Codex #{version}", title: nil}]
+    do: facts ++ [%{icon: "hero-command-line", text: gettext("Min Codex %{version}", version: version), title: nil}]
 
   defp append_minimal_client_version_fact(facts, versions) do
     first = hd(versions)
@@ -977,7 +1004,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       [
         %{
           icon: "hero-command-line",
-          text: "Min Codex #{first}-#{last} · varies by upstream",
+          text: gettext("Min Codex %{first}-%{last} · varies by upstream", first: first, last: last),
           title: nil
         }
       ]
@@ -990,8 +1017,8 @@ defmodule CodexPoolerWeb.Admin.Components do
       [
         %{
           icon: "hero-clock",
-          text: "Catalog checked #{RelativeTime.relative_time_label(updated_at)}",
-          title: "Catalog checked #{absolute_timestamp}"
+          text: gettext("Catalog checked %{time}", time: RelativeTime.relative_time_label(updated_at)),
+          title: gettext("Catalog checked %{time}", time: absolute_timestamp)
         }
       ]
   end
@@ -1037,6 +1064,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   Use for guidance copy that always accompanies a control. Transient state
   communication (loading, errors, stale data) belongs to `extended_notice/1`.
   """
+  @spec guidance_notice(map()) :: Phoenix.LiveView.Rendered.t()
   def guidance_notice(assigns) do
     ~H"""
     <div
@@ -1051,7 +1079,7 @@ defmodule CodexPoolerWeb.Admin.Components do
         !
       </span>
       <p class="min-w-0 text-base-content/70">
-        <strong class="font-semibold text-base-content">{@title}.</strong> {@description}
+        {gettext("%{title}. %{description}", title: @title, description: @description)}
       </p>
     </div>
     """
@@ -1116,11 +1144,14 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :id, :string, required: true
   attr :copy_text, :string, required: true
   attr :aria_label, :string, required: true
-  attr :label, :string, default: "Copy"
+  attr :label, :string, default: nil
   attr :class, :any, default: "btn btn-square size-10 shrink-0"
   attr :icon_class, :any, default: "size-4"
 
+  @spec clipboard_button(map()) :: Phoenix.LiveView.Rendered.t()
   def clipboard_button(assigns) do
+    assigns = assign(assigns, :label, assigns.label || gettext("Copy"))
+
     ~H"""
     <button
       id={@id}
@@ -1130,14 +1161,14 @@ defmodule CodexPoolerWeb.Admin.Components do
       phx-update="ignore"
       data-copy-text={@copy_text}
       data-copy-label={@label}
-      data-copied-label="Copied"
+      data-copied-label={gettext("Copied")}
       aria-label={@aria_label}
       title={@aria_label}
     >
       <.icon name="hero-clipboard-document" class={["copy-icon", @icon_class]} />
       <span
         data-copy-label
-        class={@label == "Copy" && "sr-only"}
+        class={@label == gettext("Copy") && "sr-only"}
         aria-live="polite"
         aria-atomic="true"
       >
@@ -1239,10 +1270,10 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp status_badge_class(_status),
     do: "inline-flex items-center rounded-box bg-base-200 px-2 py-1 text-xs font-semibold text-base-content/70"
 
-  defp status_badge_label(:ok), do: "ok"
-  defp status_badge_label(:warning), do: "attention needed"
-  defp status_badge_label(:error), do: "error"
-  defp status_badge_label(_status), do: "redacted"
+  defp status_badge_label(:ok), do: gettext("ok")
+  defp status_badge_label(:warning), do: gettext("attention needed")
+  defp status_badge_label(:error), do: gettext("error")
+  defp status_badge_label(_status), do: gettext("redacted")
 
   defp extended_notice_class(:success), do: "alert alert-success items-start"
   defp extended_notice_class(:warning), do: "alert alert-warning items-start"

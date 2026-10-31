@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   attr :account_label, :string, required: true
   attr :limit, :map, required: true
 
+  @spec quota_limit_row(map()) :: Phoenix.LiveView.Rendered.t()
   def quota_limit_row(assigns) do
     ~H"""
     <div
@@ -24,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         id={pending_description_id(@id)}
         class="sr-only"
       >
-        {measurement_pending_label(@limit)}. {measurement_pending_detail(@limit)}
+        {gettext("%{label}. %{detail}", label: measurement_pending_label(@limit), detail: measurement_pending_detail(@limit))}
       </span>
       <button
         :if={Map.get(@limit, :observations, []) != []}
@@ -41,7 +42,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         aria-haspopup="dialog"
         aria-controls={"#{@id}-observations-dialog"}
         phx-click={QuotaObservationsDialog.open("#{@id}-observations-dialog")}
-      ><span class="sr-only">Show quota observations</span></button>
+      ><span class="sr-only">{gettext("Show quota observations")}</span></button>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span data-role="upstream-limit-title" class="min-w-0 truncate font-medium text-base-content">
           {@limit.label}
@@ -80,6 +81,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           id={"#{@id}-reset"}
           data-countdown-at={countdown_at(@limit)}
           data-countdown-state={countdown_state(@limit)}
+          data-countdown-due-label={gettext("due")}
           phx-hook={countdown_hook(@limit)}
           class="inline-flex items-baseline gap-1"
           title={@limit.reset_title}
@@ -88,7 +90,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           box center shifts per engine, the baseline doesn't. Bottom-on-
           baseline puts the 12px icon ~2px high of the glyph ink center. --%>
           <.icon name="hero-clock" class="size-3 translate-y-0.5" />
-          <span data-role="relative-countdown-value">{strip_in_prefix(@limit.reset_label)}</span>
+          <span data-role="relative-countdown-value">{Map.get(@limit, :reset_countdown_label, @limit.reset_label)}</span>
         </span>
       </div>
       <%!-- After a reset the bar keeps the last verified value until a usage report confirms the new cycle. The card states
@@ -106,11 +108,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
     />
     """
   end
-
-  # The clock icon already says "time until"; the label's "in " prefix is
-  # redundant next to it.
-  defp strip_in_prefix("in " <> rest), do: rest
-  defp strip_in_prefix(label), do: label
 
   defp countdown_at(%{reset_semantics: :anchored, reset_at: %DateTime{} = reset_at}),
     do: DateTime.to_iso8601(reset_at)
@@ -204,13 +201,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   defp quota_limit_progress_label(limit) do
     cond do
       measurement_pending?(limit) ->
-        "#{limit.label} remaining #{limit.percent_label}; #{measurement_pending_detail(limit)}"
+        gettext("%{label} remaining %{percent}; %{detail}", label: limit.label, percent: limit.percent_label, detail: measurement_pending_detail(limit))
 
       Map.get(limit, :key) in [:primary_5h, :primary_30d, :weekly] ->
-        "#{limit.label} included Codex quota remaining #{limit.percent_label}"
+        gettext("%{label} included Codex quota remaining %{percent}", label: limit.label, percent: limit.percent_label)
 
       true ->
-        "#{limit.label} remaining #{limit.percent_label}"
+        gettext("%{label} remaining %{percent}", label: limit.label, percent: limit.percent_label)
     end
   end
 
@@ -246,9 +243,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
 
   defp quota_observations_trigger_label(limit) do
     if measurement_pending?(limit) do
-      "Show #{limit.label} quota observations; #{limit.percent_label} remaining; #{measurement_pending_detail(limit)}"
+      gettext("Show %{label} quota observations; %{percent} remaining; %{detail}", label: limit.label, percent: limit.percent_label, detail: measurement_pending_detail(limit))
     else
-      "Show #{limit.label} quota observations"
+      gettext("Show %{label} quota observations", label: limit.label)
     end
   end
 end

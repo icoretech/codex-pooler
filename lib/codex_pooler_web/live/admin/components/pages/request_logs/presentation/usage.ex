@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_token_lines(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_token_lines(assigns) do
     {amount, suffix} = token_parts(format_token_totals(assigns.request_log))
     cached = cached_input_tokens(assigns.request_log)
@@ -43,8 +44,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
           <span :if={@composition} data-role="token-bar" role="img" aria-label={@composition.title} title={@composition.title} class="hidden h-2 min-w-6 flex-1 overflow-hidden rounded-xs lg:flex">
             <span :for={segment <- @composition.segments} data-role={segment_role(segment.key)} data-token-count={segment.count} aria-hidden="true" class={["h-full min-w-0 basis-0", segment_color(segment.key)]} style={"flex-grow: #{segment.count}"}></span>
           </span>
-          <span :if={!@composition} data-role="token-breakdown-unavailable" class="hidden min-w-0 flex-1 text-[11px] text-base-content/45 lg:block" title="Token breakdown is incomplete or inconsistent; recorded totals are shown unchanged">
-            breakdown n/a
+          <span :if={!@composition} data-role="token-breakdown-unavailable" class="hidden min-w-0 flex-1 text-[11px] text-base-content/45 lg:block" title={gettext("Token breakdown is incomplete or inconsistent; recorded totals are shown unchanged")}>
+            {gettext("breakdown n/a")}
           </span>
           <span
             data-role="token-totals"
@@ -58,8 +59,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
           title={usage_cached_line_title(@request_log)}
         >
           <span class="whitespace-nowrap">{@cached_label}</span>
-          <span :if={@cache_rate} data-role="cache-rate" class="whitespace-nowrap max-lg:w-full max-lg:text-right" title="Cached input tokens divided by all input tokens">
-            <span aria-hidden="true" class="hidden lg:inline">· </span>{@cache_rate} of input
+          <span :if={@cache_rate} data-role="cache-rate" class="whitespace-nowrap max-lg:w-full max-lg:text-right" title={gettext("Cached input tokens divided by all input tokens")}>
+            <span aria-hidden="true" class="hidden lg:inline">· </span>{gettext("%{rate} of input", rate: @cache_rate)}
           </span>
         </span>
       <% else %>
@@ -74,11 +75,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
     """
   end
 
+  @spec token_composition_legend(map()) :: Phoenix.LiveView.Rendered.t()
   def token_composition_legend(assigns) do
     ~H"""
     <div id="request-log-token-legend" class="hidden flex-wrap items-center justify-end gap-x-4 gap-y-1 border-b border-base-300 bg-base-200/30 px-3 py-2 text-[11px] leading-4 text-base-content/65 lg:flex">
-      <span class="admin-control-label">Token breakdown</span>
-      <span :for={{key, label} <- [cached_input: "Cached input", uncached_input: "Uncached input", output: "Output"]} class="inline-flex min-h-4 items-center gap-1.5">
+      <span class="admin-control-label">{gettext("Token breakdown")}</span>
+      <span :for={{key, label} <- [cached_input: gettext("Cached input"), uncached_input: gettext("Uncached input"), output: gettext("Output")]} class="inline-flex min-h-4 items-center gap-1.5">
         <span aria-hidden="true" class={["size-2 rounded-xs", segment_color(key)]}></span>
         <span class="admin-control-label">{label}</span>
       </span>
@@ -97,13 +99,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
   defp cached_input_tokens(%{token_counts: %{cached_input_tokens: cached}}), do: cached
   defp cached_input_tokens(_log), do: nil
 
-  defp cached_label(_log, 0), do: "0 cached"
+  defp cached_label(_log, 0), do: ngettext("%{tokens} cached", "%{tokens} cached", 0, tokens: 0)
   defp cached_label(log, cached) when is_integer(cached) and cached > 0, do: format_cached_token_breakdown(log)
-  defp cached_label(_log, _cached), do: "cache n/a"
+  defp cached_label(_log, _cached), do: gettext("cache n/a")
 
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_cost_lines(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_cost_lines(assigns) do
     {symbol, amount} = cost_parts(format_usage_cost(assigns.request_log.cost))
     assigns = assigns |> assign(:cost_symbol, symbol) |> assign(:cost_amount, amount)

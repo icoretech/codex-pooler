@@ -1,10 +1,13 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
   import Phoenix.LiveView, only: [put_flash: 3]
 
   alias CodexPooler.Upstreams
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
 
   @reason "admin_upstream_cockpit_live"
 
@@ -46,7 +49,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
          ) do
       {:ok, _result} ->
         socket
-        |> put_flash(:info, "Upstream account renamed")
+        |> put_flash(:info, gettext("Upstream account renamed"))
         |> close_rename()
         |> reload_fun.()
 
@@ -67,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
       identity_id,
       :pause,
       &Upstreams.pause_account_for_scope/3,
-      "Upstream account paused",
+      gettext("Upstream account paused"),
       reload_fun
     )
   end
@@ -81,7 +84,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
       identity_id,
       :reactivate,
       &Upstreams.reactivate_account_for_scope/3,
-      "Upstream account reactivated",
+      gettext("Upstream account reactivated"),
       reload_fun
     )
   end
@@ -92,7 +95,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
   def refresh(socket, identity_id, reload_fun) do
     cond do
       identity_id != socket.assigns.cockpit.identity.id ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       action_available?(socket, :refresh_token, identity_id) ->
         enqueue_token_refresh(socket, identity_id, reload_fun)
@@ -142,7 +145,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
            confirmation_label: delete_params["confirmation_label"]
          }) do
       {status, _result} when status in [:ok, :deleting] ->
-        message = if status == :ok, do: "Upstream account deleted", else: "Upstream account deletion queued"
+        message = if status == :ok, do: gettext("Upstream account deleted"), else: gettext("Upstream account deletion queued")
 
         socket
         |> put_flash(:info, message)
@@ -181,7 +184,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
   defp lifecycle_action(socket, identity_id, action_key, operation, success_message, reload_fun) do
     cond do
       identity_id != socket.assigns.cockpit.identity.id ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       action_available?(socket, action_key, identity_id) ->
         case operation.(socket.assigns.current_scope, identity_id, %{reason: @reason}) do
@@ -203,7 +206,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
     case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id, trigger_kind: @reason) do
       {:ok, %{job: job}} ->
         message =
-          if job.conflict?, do: "Token refresh is already queued", else: "Token refresh queued"
+          if job.conflict?, do: gettext("Token refresh is already queued"), else: gettext("Token refresh queued")
 
         socket
         |> put_flash(:info, message)
@@ -250,24 +253,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
 
   defp put_unavailable_action_error(socket, action_key) do
     action = Map.fetch!(socket.assigns.cockpit.actions, action_key)
-    reason = action.reason || "action is unavailable"
-    put_flash(socket, :error, "#{action_label(action_key)} is not available: #{reason}")
+    reason = action.reason || gettext("action is unavailable")
+    put_flash(socket, :error, gettext("%{action} is not available: %{reason}", action: action_label(action_key), reason: reason))
   end
 
-  defp action_label(:refresh_token), do: "Refresh token"
-
-  defp action_label(action_key),
-    do: action_key |> to_string() |> String.replace("_", " ") |> String.capitalize()
+  defp action_label(:refresh_token), do: gettext("Refresh token")
+  defp action_label(:rename), do: gettext("Rename")
+  defp action_label(:pause), do: gettext("Pause")
+  defp action_label(:reactivate), do: gettext("Reactivate")
+  defp action_label(:delete), do: gettext("Delete")
 
   defp current_label(socket), do: socket.assigns.cockpit.header.title
 
-  defp error_message(%Ecto.Changeset{} = changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
-    |> Enum.join(", ")
-  end
-
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Operation failed"
+  defp error_message(reason), do: WorkflowError.message(reason)
 end

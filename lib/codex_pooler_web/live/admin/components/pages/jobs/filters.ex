@@ -44,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
 
       <.job_filter_dropdown
         id="job-attention-filter"
-        label="Attention"
+        label={gettext("Attention")}
         field_name="attention"
         hidden_id="filters_attention"
         role="attention-filter"
@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
       />
       <.job_filter_dropdown
         id="job-state-filter"
-        label="State"
+        label={gettext("State")}
         field_name="state"
         hidden_id="filters_state"
         role="state-filter"
@@ -68,7 +68,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
       />
       <.job_filter_dropdown
         id="job-worker-filter"
-        label="Worker"
+        label={gettext("Worker")}
         field_name="worker"
         hidden_id="filters_worker"
         role="worker-filter"
@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
       />
       <.job_filter_dropdown
         id="job-target-kind-filter"
-        label="Target kind"
+        label={gettext("Target kind")}
         field_name="target_kind"
         hidden_id="filters_target_kind"
         role="target-kind-filter"
@@ -92,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
       />
       <.job_filter_dropdown
         id="job-show-completed-filter"
-        label="Completed visibility"
+        label={gettext("Completed visibility")}
         field_name="show_completed"
         hidden_id="filters_show_completed"
         role="show-completed-filter"
@@ -115,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
     >
       <.icon name="hero-exclamation-triangle" class="size-5" />
       <div>
-        <p class="font-semibold">Some filters were ignored</p>
+        <p class="font-semibold">{gettext("Some filters were ignored")}</p>
         <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
           <li
             :for={error <- @filter_errors}
@@ -207,15 +207,15 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
     <div id="job-target-id-filter" class="fieldset mb-2">
       <div class="input input-sm flex w-full items-center gap-2">
         <span class="label !mb-0 min-w-20 shrink-0 truncate !px-2 !normal-case !tracking-normal leading-none text-base-content/60">
-          Target id
+          {gettext("Target id")}
         </span>
         <input
           type="text"
           id="filters_target_id"
           name="filters[target_id]"
           value={@value}
-          placeholder="UUID, date, or blank"
-          aria-label="Target id"
+          placeholder={gettext("UUID, date, or blank")}
+          aria-label={gettext("Target id")}
           class="min-w-0 grow bg-transparent p-0 font-mono text-xs font-normal outline-none placeholder:font-sans placeholder:text-base-content/45"
         />
       </div>
@@ -224,21 +224,21 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
   end
 
   defp target_kind_options(options) do
-    [%{label: "Any target", value: "", icon: "hero-tag"} | options]
+    [%{label: gettext("Any target"), value: "", icon: "hero-tag"} | options]
   end
 
   defp show_completed_options do
     [
-      %{label: "Hide completed", value: "false", icon: "hero-eye-slash"},
-      %{label: "Include completed", value: "true", icon: "hero-eye"}
+      %{label: gettext("Hide completed"), value: "false", icon: "hero-eye-slash"},
+      %{label: gettext("Include completed"), value: "true", icon: "hero-eye"}
     ]
   end
 
   defp selected_show_completed_option(true),
-    do: %{label: "Include completed", value: "true", icon: "hero-eye"}
+    do: %{label: gettext("Include completed"), value: "true", icon: "hero-eye"}
 
   defp selected_show_completed_option(_show_completed),
-    do: %{label: "Hide completed", value: "false", icon: "hero-eye-slash"}
+    do: %{label: gettext("Hide completed"), value: "false", icon: "hero-eye-slash"}
 
   defp selected_target_kind_option(options, target_kind) do
     Enum.find(options, &(&1.value == (target_kind || ""))) || hd(options)

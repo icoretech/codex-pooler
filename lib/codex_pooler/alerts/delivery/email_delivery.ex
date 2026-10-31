@@ -1,6 +1,8 @@
 defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Accounting
 
   alias CodexPooler.Alerts.Schemas.{
@@ -15,8 +17,8 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   alias CodexPooler.Mailer.Config, as: MailerConfig
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
+  alias CodexPooler.SupportedLocales
 
-  @subject_prefix "Codex Pooler alert"
   @delivery_adapter "email"
   @retry_delays_seconds %{1 => 60, 2 => 300, 3 => 900, 4 => 1800}
   @retryable_failure_codes ~w(
@@ -158,11 +160,13 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
 
   @spec alert_email(AlertIncident.t(), AlertChannel.t()) :: Swoosh.Email.t()
   def alert_email(%AlertIncident{} = incident, %AlertChannel{channel_type: "email"} = channel) do
-    Swoosh.Email.new()
-    |> Swoosh.Email.from(Mailer.default_sender())
-    |> Swoosh.Email.to(channel.email_to)
-    |> Swoosh.Email.subject(alert_subject(incident))
-    |> Swoosh.Email.text_body(text_body(incident, channel))
+    Gettext.with_locale(SupportedLocales.gettext_locale(channel.locale), fn ->
+      Swoosh.Email.new()
+      |> Swoosh.Email.from(Mailer.default_sender())
+      |> Swoosh.Email.to(channel.email_to)
+      |> Swoosh.Email.subject(alert_subject(incident))
+      |> Swoosh.Email.text_body(text_body(incident, channel))
+    end)
   end
 
   @spec retry_delay_seconds(pos_integer()) :: non_neg_integer()
@@ -269,7 +273,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   end
 
   defp alert_subject(%AlertIncident{} = incident) do
-    [@subject_prefix, incident.severity, incident.rule_kind]
+    [dgettext("emails", "Codex Pooler alert"), incident.severity, incident.rule_kind]
     |> Enum.reject(&blank?/1)
     |> Enum.join(": ")
   end
@@ -279,32 +283,32 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
     summary = Map.get(metadata, "safe_evidence_summary", %{})
 
     [
-      "Codex Pooler alert notification",
+      dgettext("emails", "Codex Pooler alert notification"),
       "",
-      "Incident id: #{incident.id}",
-      "Channel id: #{channel.id}",
-      "Scope type: #{incident.scope_type}",
-      "Rule kind: #{incident.rule_kind}",
-      "Severity: #{incident.severity}",
-      "Incident state: #{incident.state}",
-      optional_line("Pool id", incident.pool_id),
-      optional_line("Upstream identity id", incident.upstream_identity_id),
-      optional_line("Reason code", Map.get(metadata, "reason_code")),
-      "Occurrence count: #{incident.occurrence_count}",
-      "First seen at: #{DateTime.to_iso8601(incident.first_seen_at)}",
-      "Last seen at: #{DateTime.to_iso8601(incident.last_seen_at)}",
+      dgettext("emails", "Incident id: %{id}", id: incident.id),
+      dgettext("emails", "Channel id: %{id}", id: channel.id),
+      dgettext("emails", "Scope type: %{scope}", scope: incident.scope_type),
+      dgettext("emails", "Rule kind: %{kind}", kind: incident.rule_kind),
+      dgettext("emails", "Severity: %{severity}", severity: incident.severity),
+      dgettext("emails", "Incident state: %{state}", state: incident.state),
+      optional_line(:pool_id, incident.pool_id),
+      optional_line(:upstream_identity_id, incident.upstream_identity_id),
+      optional_line(:reason_code, Map.get(metadata, "reason_code")),
+      dngettext("emails", "Occurrence count: %{count}", "Occurrence count: %{count}", incident.occurrence_count, count: incident.occurrence_count),
+      dgettext("emails", "First seen at: %{time}", time: DateTime.to_iso8601(incident.first_seen_at)),
+      dgettext("emails", "Last seen at: %{time}", time: DateTime.to_iso8601(incident.last_seen_at)),
       "",
-      "Safe evidence summary:",
+      dgettext("emails", "Safe evidence summary:"),
       summary_lines(summary),
       "",
-      "This alert contains metadata only. Runtime content and credentials are never included."
+      dgettext("emails", "This alert contains metadata only. Runtime content and credentials are never included.")
     ]
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
 
-  defp summary_lines(summary) when map_size(summary) == 0, do: ["- none"]
+  defp summary_lines(summary) when map_size(summary) == 0, do: [dgettext("emails", "- none")]
 
   defp summary_lines(summary) do
     summary
@@ -401,7 +405,9 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   end
 
   defp optional_line(_label, nil), do: nil
-  defp optional_line(label, value), do: "#{label}: #{value}"
+  defp optional_line(:pool_id, value), do: dgettext("emails", "Pool id: %{id}", id: value)
+  defp optional_line(:upstream_identity_id, value), do: dgettext("emails", "Upstream identity id: %{id}", id: value)
+  defp optional_line(:reason_code, value), do: dgettext("emails", "Reason code: %{code}", code: value)
 
   defp recipient_domain(email_to) when is_binary(email_to) do
     case String.split(email_to, "@", parts: 2) do

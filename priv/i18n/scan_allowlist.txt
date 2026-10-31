@@ -1,0 +1,7 @@
+# Keep exceptions narrower than a whole page or source line. Each regex needs
+# its own tab-separated # reason; adding UI prose here requires review.
+^(?:Codex Pooler|Codex|OpenAI|ChatGPT|Pool|Lens|Full|Lite|MCP|API|OAuth|TOTP|SMTP|UTC)$	# Product names, protocol identifiers and serving-mode names remain verbatim in every locale.
+^(?:[0-9]+(?:\.[0-9]+)?\s*)?(?:ms|[kMB]|[dhms])$	# Compact dashboard duration and numeric units are locale-neutral by policy.
+^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|HTTP|HTTPS|JSON|SSE|SQL|TCP|TLS|UUID|URL|HTML|CSS|CSV)$	# Technical wire-format and protocol identifiers are not translated.
+^lib/codex_pooler_web/components/language_switcher\.ex:dropdown-content menu z-50 w-52 max-w-\[calc\(100vw-2rem\)\] rounded-box border border-base-300 bg-base-100 p-1 text-left shadow-xl$	# Exact CSS utility list for menu bounds; no human-facing copy.
+^lib/codex_pooler_web/components/layouts\.ex:, Inc\.$	# Corporate legal-name suffix remains verbatim when split for the compact mobile footer.

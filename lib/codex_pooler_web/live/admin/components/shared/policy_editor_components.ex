@@ -12,17 +12,18 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
   attr :description, :string, default: nil
   attr :steps, :list, required: true
   attr :current_step, :any, required: true
-  attr :sections_label, :string, default: "Policy sections"
+  attr :sections_label, :string, default: nil
   attr :step_event, :string, default: nil
   attr :step_form_id, :string, default: nil
   attr :backdrop_event, :string, default: nil
-  attr :backdrop_label, :string, default: "close"
+  attr :backdrop_label, :string, default: nil
   attr :docs_url, :string, default: "https://www.codex-pooler.com/docs/operators/admin-ui/"
   attr :rest, :global
 
   slot :inner_block, required: true
   slot :actions, required: true
 
+  @spec policy_editor_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def policy_editor_dialog(assigns) do
     steps = normalize_wizard_steps(assigns.steps)
     current_step_id = normalize_wizard_step_id(assigns.current_step)
@@ -59,7 +60,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
               id={"#{@id}-tabs"}
               class="policy-editor-tabs grid min-w-0 gap-2 sm:flex sm:items-stretch"
               role="tablist"
-              aria-label={@sections_label}
+              aria-label={@sections_label || gettext("Policy sections")}
             >
               <li
                 :for={{step, index} <- @wizard_steps}
@@ -155,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form id={"#{@id}-backdrop"} method="dialog" class="modal-backdrop">
-        <button type="button" phx-click={@backdrop_event}>{@backdrop_label}</button>
+        <button type="button" phx-click={@backdrop_event}>{@backdrop_label || gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -169,7 +170,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
 
   defp normalize_wizard_step(%{} = step, index) do
     id = Map.get(step, :id) || Map.get(step, "id") || index
-    label = Map.get(step, :label) || Map.get(step, "label") || "Step #{index}"
+    label = Map.get(step, :label) || Map.get(step, "label") || gettext("Step %{index}", index: index)
     description = Map.get(step, :description) || Map.get(step, "description")
 
     %{
@@ -184,7 +185,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
   end
 
   defp normalize_wizard_step(step, index) do
-    normalize_wizard_step(%{id: step, label: "Step #{index}"}, index)
+    normalize_wizard_step(%{id: step, label: gettext("Step %{index}", index: index)}, index)
   end
 
   defp normalize_wizard_step_id(step_id) do

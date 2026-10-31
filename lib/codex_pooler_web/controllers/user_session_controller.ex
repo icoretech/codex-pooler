@@ -8,24 +8,24 @@ defmodule CodexPoolerWeb.UserSessionController do
     case Accounts.bootstrap_owner(user_params, UserAuth.request_metadata(conn)) do
       {:ok, %{user: user, token: token}} ->
         conn
-        |> put_flash(:info, "Instance owner created.")
+        |> put_flash(:info, gettext("Instance owner created."))
         |> delete_session(:user_return_to)
         |> UserAuth.log_in_user(user, token)
 
       {:error, :bootstrap_already_completed} ->
         conn
-        |> put_flash(:error, "Bootstrap has already been completed.")
+        |> put_flash(:error, gettext("Bootstrap has already been completed."))
         |> redirect(to: ~p"/login")
 
       {:error, %Ecto.Changeset{} = changeset} ->
         conn
-        |> put_flash(:error, changeset_error(changeset))
+        |> put_flash(:error, localized_changeset_error(changeset))
         |> put_flash(:email, Map.get(user_params, "email"))
         |> redirect(to: ~p"/bootstrap")
 
       {:error, _reason} ->
         conn
-        |> put_flash(:error, "Bootstrap failed.")
+        |> put_flash(:error, gettext("Bootstrap failed."))
         |> redirect(to: ~p"/bootstrap")
     end
   end
@@ -45,7 +45,7 @@ defmodule CodexPoolerWeb.UserSessionController do
     case Accounts.login_user(user_params, UserAuth.request_metadata(conn)) do
       {:ok, %{user: user, token: token}} ->
         conn
-        |> put_flash(:info, "Welcome back.")
+        |> put_flash(:info, gettext("Welcome back."))
         |> UserAuth.log_in_user(user, token)
 
       {:error, :totp_required} ->
@@ -54,17 +54,17 @@ defmodule CodexPoolerWeb.UserSessionController do
         conn
         |> put_session(:pending_mfa_user_id, user.id)
         |> put_session(:pending_mfa_email, user.email)
-        |> put_flash(:info, "Enter your authenticator code to finish signing in.")
+        |> put_flash(:info, gettext("Enter your authenticator code to finish signing in."))
         |> redirect(to: ~p"/login?mfa=1")
 
       {:error, :invalid_totp_code} ->
-        redirect_login_failure(conn, user_params, "Authenticator code is invalid.", true)
+        redirect_login_failure(conn, user_params, gettext("Authenticator code is invalid."), true)
 
       {:error, :invalid_recovery_code} ->
-        redirect_login_failure(conn, user_params, "Recovery code is invalid.", true)
+        redirect_login_failure(conn, user_params, gettext("Recovery code is invalid."), true)
 
       {:error, _reason} ->
-        redirect_login_failure(conn, user_params, "Invalid email or password.", false)
+        redirect_login_failure(conn, user_params, gettext("Invalid email or password."), false)
     end
   end
 
@@ -78,29 +78,29 @@ defmodule CodexPoolerWeb.UserSessionController do
         conn
         |> delete_session(:pending_mfa_user_id)
         |> delete_session(:pending_mfa_email)
-        |> put_flash(:info, "Welcome back.")
+        |> put_flash(:info, gettext("Welcome back."))
         |> UserAuth.log_in_user(user, token)
 
       {:error, :invalid_totp_code} ->
-        redirect_mfa_failure(conn, "Authenticator code is invalid.")
+        redirect_mfa_failure(conn, gettext("Authenticator code is invalid."))
 
       {:error, :invalid_recovery_code} ->
-        redirect_mfa_failure(conn, "Recovery code is invalid.")
+        redirect_mfa_failure(conn, gettext("Recovery code is invalid."))
 
       {:error, :totp_required} ->
-        redirect_mfa_failure(conn, "Second factor required.")
+        redirect_mfa_failure(conn, gettext("Second factor required."))
 
       {:error, _reason} ->
         conn
         |> delete_session(:pending_mfa_user_id)
         |> delete_session(:pending_mfa_email)
-        |> redirect_login_failure(%{}, "Invalid email or password.", false)
+        |> redirect_login_failure(%{}, gettext("Invalid email or password."), false)
     end
   end
 
   def delete(conn, _params) do
     conn
-    |> put_flash(:info, "Logged out successfully.")
+    |> put_flash(:info, gettext("Logged out successfully."))
     |> UserAuth.log_out_user()
   end
 
@@ -201,6 +201,32 @@ defmodule CodexPoolerWeb.UserSessionController do
   defp pending_mfa_user_id(conn, user_params) do
     if to_string(user_params["password"] || "") == "" do
       get_session(conn, :pending_mfa_user_id)
+    end
+  end
+
+  defp localized_changeset_error(changeset) do
+    case List.first(changeset.errors) do
+      {field, {message, opts}} ->
+        gettext("%{field} %{message}",
+          field: localized_field_name(field),
+          message: localized_error_message(message, opts)
+        )
+
+      nil ->
+        gettext("Invalid bootstrap details.")
+    end
+  end
+
+  defp localized_field_name(:email), do: gettext("Email")
+  defp localized_field_name(:display_name), do: gettext("Display name")
+  defp localized_field_name(:password), do: gettext("Password")
+  defp localized_field_name(field), do: Phoenix.Naming.humanize(field)
+
+  defp localized_error_message(message, opts) do
+    if count = opts[:count] do
+      Gettext.dngettext(CodexPoolerWeb.Gettext, "errors", message, message, count, opts)
+    else
+      Gettext.dgettext(CodexPoolerWeb.Gettext, "errors", message, opts)
     end
   end
 

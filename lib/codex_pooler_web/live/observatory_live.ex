@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   @login_path "/observatory/login"
 
   @impl true
+  @spec mount(map(), map(), Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def mount(_params, _session, socket) do
     paused =
       connected?(socket) and
@@ -18,10 +19,11 @@ defmodule CodexPoolerWeb.ObservatoryLive do
 
     {:ok,
      socket
+     |> assign(:page_title, gettext("Observatory"))
      |> assign(:selected_window, @default_window)
      |> assign(:traffic_mode, :interval)
      |> assign(:paused, paused)
-     |> assign(:freshness, if(paused, do: "Updates paused", else: "Updating usage"))
+     |> assign(:freshness, if(paused, do: gettext("Updates paused"), else: gettext("Updating usage")))
      |> assign(:loading, not paused)
      |> assign(:observatory_state, if(paused, do: :stale, else: :loading))
      |> assign(:observatory_report, nil)
@@ -36,6 +38,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   end
 
   @impl true
+  @spec handle_event(String.t(), map(), Phoenix.LiveView.Socket.t()) :: {:noreply, Phoenix.LiveView.Socket.t()}
   def handle_event("select-window", %{"window" => window}, socket) do
     if Presentation.valid_window?(window) do
       # Show the switching indicator only when a dashboard is already on screen;
@@ -61,7 +64,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   def handle_event("select-traffic-mode", _params, socket), do: {:noreply, socket}
 
   def handle_event("pause-refresh", _params, socket) do
-    {:noreply, assign(socket, paused: true, observatory_state: :stale, freshness: "Updates paused")}
+    {:noreply, assign(socket, paused: true, observatory_state: :stale, freshness: gettext("Updates paused"))}
   end
 
   def handle_event("resume-refresh", _params, socket) do
@@ -87,12 +90,15 @@ defmodule CodexPoolerWeb.ObservatoryLive do
         principal = socket.assigns.dashboard_principal
         generation = socket.assigns.request_generation
         reader = reader_module()
+        locale = Gettext.get_locale()
 
         {:noreply,
          socket
          |> assign(loading_outcomes: true, outcomes_load_error: false)
          |> start_async({:observatory_outcomes, generation}, fn ->
-           reader.read_outcomes(principal, as_of: page.as_of, before: page.next_cursor)
+           Gettext.with_locale(locale, fn ->
+             reader.read_outcomes(principal, as_of: page.as_of, before: page.next_cursor)
+           end)
          end)}
 
       {:error, socket} ->
@@ -143,13 +149,15 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   end
 
   @impl true
+  @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} chrome={:observatory}>
+    <Layouts.app flash={@flash} locale={@locale} locale_preference={@locale_preference} chrome={:observatory}>
       <section
         id="observatory-page"
         class="min-w-0 px-4 pb-10 sm:px-5"
         phx-hook="ObservatoryRefresh"
+        data-refresh-labels={refresh_labels()}
         data-paused={to_string(@paused)}
         data-request-generation={@request_generation}
         data-freshness-generation={@freshness_generation}
@@ -157,6 +165,8 @@ defmodule CodexPoolerWeb.ObservatoryLive do
       >
         <Toolbar.toolbar
           display_name={principal_label(@dashboard_principal)}
+          locale={@locale}
+          locale_preference={@locale_preference}
           selected_window={@selected_window}
           freshness={@freshness}
           paused={@paused}
@@ -164,7 +174,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
         />
 
         <div :if={@refreshing} id="observatory-refreshing" class="sr-only" aria-live="polite">
-          Updating {@selected_window}…
+          {gettext("Updating %{window}…", window: @selected_window)}
         </div>
 
         <div
@@ -225,11 +235,12 @@ defmodule CodexPoolerWeb.ObservatoryLive do
         principal = socket.assigns.dashboard_principal
         reader = reader_module()
         window = socket.assigns.selected_window
+        locale = Gettext.get_locale()
 
         socket
         |> assign(:loading, is_nil(socket.assigns.observatory_report))
         |> start_async({:observatory_refresh, generation}, fn ->
-          reader.read(principal, window)
+          read_refresh(reader, locale, principal, window)
         end)
 
       {:error, socket} ->
@@ -243,7 +254,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
     assign(socket,
       applied_generation: generation,
       freshness_generation: generation,
-      freshness: "0s ago",
+      freshness: gettext("0s ago"),
       last_applied_at_ms: System.system_time(:millisecond),
       loading: false,
       refreshing: false,
@@ -256,7 +267,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   defp apply_refresh_result(socket, generation, _error) do
     assign(socket,
       applied_generation: generation,
-      freshness: "Update unavailable",
+      freshness: gettext("Update unavailable"),
       loading: false,
       refreshing: false,
       observatory_report: nil,
@@ -273,8 +284,30 @@ defmodule CodexPoolerWeb.ObservatoryLive do
 
   defp apply_outcomes_result(socket, _error), do: assign(socket, loading_outcomes: false, outcomes_load_error: true)
 
+  defp refresh_labels do
+    CodexPooler.JSON.encode!(%{
+      disconnectedAria: gettext("Refresh disconnected"),
+      disconnectedLabel: gettext("Connection interrupted"),
+      disconnectedSpoken: gettext("Disconnected"),
+      pausedAria: gettext("Refresh paused"),
+      pausedLabel: gettext("Updates paused"),
+      pausedSpoken: gettext("Paused"),
+      hiddenAria: gettext("Refresh paused while tab hidden"),
+      hiddenLabel: gettext("Updates paused while hidden"),
+      hiddenSpoken: gettext("Paused while hidden"),
+      liveAria: gettext("Refresh live"),
+      updatingLabel: gettext("Updating usage"),
+      liveSpoken: gettext("Live"),
+      secondsAgo: gettext("%{seconds}s ago", seconds: "%{seconds}")
+    })
+  end
+
   defp reader_module,
     do: Application.get_env(:codex_pooler, :observatory_reader, UsageObservatory)
+
+  defp read_refresh(reader, locale, principal, window) do
+    Gettext.with_locale(locale, fn -> reader.read(principal, window) end)
+  end
 
   defp principal_label(principal), do: principal.display_name
 end

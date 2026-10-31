@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   Presentation read model for the admin jobs dashboard.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.Schedule
   alias CodexPoolerWeb.Admin.AvatarComponents
@@ -14,6 +16,77 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   @visible_open_marker_limit 8
   @visible_failure_marker_limit 3
+
+  defp worker_groups do
+    Schedule.worker_groups()
+    |> Enum.map(&translate_worker_group/1)
+  end
+
+  defp translate_worker_group(%{key: :catalog_sync} = group),
+    do:
+      translated_worker_group(
+        group,
+        gettext("Catalog sync"),
+        gettext("Model catalog refresh"),
+        gettext("Every 30 min")
+      )
+
+  defp translate_worker_group(%{key: :pricing_import} = group),
+    do: translated_worker_group(group, gettext("Pricing import"), gettext("Pricing data refresh"), gettext("Hourly"))
+
+  defp translate_worker_group(%{key: :account_reconciliation} = group),
+    do:
+      translated_worker_group(
+        group,
+        gettext("Account reconciliation"),
+        gettext("Upstream account checks"),
+        gettext("Every minute")
+      )
+
+  defp translate_worker_group(%{key: :alert_evaluation} = group),
+    do: translated_worker_group(group, gettext("Alert evaluation"), gettext("Alert rule checks"), gettext("Every 5 min"))
+
+  defp translate_worker_group(%{key: :token_refresh} = group),
+    do: translated_worker_group(group, gettext("Token refresh"), gettext("Access-token renewal"), gettext("Every 15 min"))
+
+  defp translate_worker_group(%{key: :daily_rollup_rebuild} = group),
+    do:
+      translated_worker_group(
+        group,
+        gettext("Daily rollup rebuild"),
+        gettext("Usage rollup rebuild"),
+        gettext("Hourly at :17")
+      )
+
+  defp translate_worker_group(%{key: :runtime_cleanup} = group),
+    do: translated_worker_group(group, gettext("Runtime cleanup"), gettext("Expired state cleanup"), gettext("Every 15 min"))
+
+  defp translate_worker_group(%{key: :request_replay_cleanup} = group),
+    do: translated_worker_group(group, gettext("Request replay cleanup"), gettext("Expired replay cleanup"), gettext("Every minute"))
+
+  defp translate_worker_group(%{key: :openai_status_sync} = group),
+    do:
+      translated_worker_group(
+        group,
+        gettext("OpenAI status polling"),
+        gettext("OpenAI incident feed refresh"),
+        gettext("Every 5 min")
+      )
+
+  defp translate_worker_group(%{key: :openai_status_cleanup} = group),
+    do:
+      translated_worker_group(
+        group,
+        gettext("OpenAI status retention"),
+        gettext("Retired incident cleanup"),
+        gettext("Daily at 00:00 UTC")
+      )
+
+  defp translate_worker_group(group), do: group
+
+  defp translated_worker_group(group, title, description, cadence_label) do
+    %{group | title: title, description: description, cadence: %{group.cadence | label: cadence_label}}
+  end
 
   @spec worker_cards(map(), DateTimeDisplay.preferences(), DateTime.t()) :: [map()]
   def worker_cards(jobs_by_group, datetime_preferences, now \\ DateTime.utc_now()) do
@@ -35,7 +108,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   @spec job_failure_summary(map()) :: map() | nil
   def job_failure_summary(%{failure_summary: %{title: title, message: message}})
       when is_binary(title) and is_binary(message) do
-    %{title: title, message: message}
+    %{title: translate_failure_title(title), message: translate_failure_message(message)}
   end
 
   def job_failure_summary(%{errors: errors}) when is_list(errors) do
@@ -48,8 +121,8 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp failure_summary_from_error(error) do
     %{
-      title: failure_title(error),
-      message: error |> Map.get("error") |> safe_failure_message()
+      title: translate_failure_title(failure_title(error)),
+      message: error |> Map.get("error") |> safe_failure_message() |> translate_failure_message()
     }
   end
 
@@ -74,18 +147,22 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   defdelegate job_target(job), to: Targets
 
   @spec format_job_timestamp(DateTime.t() | nil, DateTimeDisplay.preferences()) :: String.t()
-  def format_job_timestamp(nil, _datetime_preferences), do: "No observed run"
+  def format_job_timestamp(nil, _datetime_preferences), do: gettext("No observed run")
 
   def format_job_timestamp(%DateTime{} = datetime, datetime_preferences) do
-    DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "No observed run")
+    DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: gettext("No observed run"))
   end
 
   @spec timestamp_line(String.t(), DateTime.t() | nil, DateTimeDisplay.preferences()) ::
           String.t()
-  def timestamp_line(label, nil, _datetime_preferences), do: "#{label} -"
+  def timestamp_line(label, nil, _datetime_preferences),
+    do: gettext("%{label} -", label: label)
 
   def timestamp_line(label, %DateTime{} = datetime, datetime_preferences) do
-    "#{label} #{format_job_timestamp(datetime, datetime_preferences)}"
+    gettext("%{label} %{timestamp}",
+      label: label,
+      timestamp: format_job_timestamp(datetime, datetime_preferences)
+    )
   end
 
   @spec job_state_icon(String.t() | nil) :: String.t()
@@ -135,9 +212,28 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
     |> List.last()
     |> String.replace_suffix("Worker", "")
     |> humanize_module_segment()
+    |> translate_worker_label()
   end
 
-  def job_worker_label(_worker), do: "Unnamed job"
+  def job_worker_label(_worker), do: gettext("Unnamed job")
+
+  defp translate_worker_label("Account reconciliation"), do: gettext("Account reconciliation")
+  defp translate_worker_label("Catalog sync"), do: gettext("Catalog sync")
+  defp translate_worker_label("Catalog sync enqueue"), do: gettext("Catalog sync enqueue")
+  defp translate_worker_label("Pricing import"), do: gettext("Pricing import")
+  defp translate_worker_label("Token refresh"), do: gettext("Token refresh")
+  defp translate_worker_label("Token refresh enqueue"), do: gettext("Token refresh enqueue")
+  defp translate_worker_label("Runtime state cleanup"), do: gettext("Runtime state cleanup")
+  defp translate_worker_label("Request replay cleanup"), do: gettext("Request replay cleanup")
+  defp translate_worker_label("Alert evaluation"), do: gettext("Alert evaluation")
+  defp translate_worker_label("Alert evaluation enqueue"), do: gettext("Alert evaluation enqueue")
+  defp translate_worker_label("Daily rollup rebuild"), do: gettext("Daily rollup rebuild")
+  defp translate_worker_label("Daily rollup rebuild enqueue"), do: gettext("Daily rollup rebuild enqueue")
+  defp translate_worker_label("Open AI status sync"), do: gettext("OpenAI status sync")
+  defp translate_worker_label("Open AI status cleanup"), do: gettext("OpenAI status cleanup")
+  defp translate_worker_label("API key deletion"), do: gettext("API key deletion")
+  defp translate_worker_label("Pool deletion"), do: gettext("Pool deletion")
+  defp translate_worker_label(label), do: label
 
   defp humanize_module_segment(segment) do
     case Regex.scan(~r/[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+/, segment) do
@@ -148,8 +244,6 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
         Enum.map_join([first | Enum.map(rest, fn [word] -> String.downcase(word) end)], " ", & &1)
     end
   end
-
-  defp worker_groups, do: Schedule.worker_groups()
 
   defp worker_card(group, summary, datetime_preferences, now) do
     latest_job = summary.latest
@@ -201,6 +295,8 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
     worker
     |> String.replace_prefix("CodexPooler.Jobs.", "")
     |> String.replace_suffix("Worker", "")
+    |> humanize_module_segment()
+    |> translate_worker_label()
   end
 
   defp manual_enqueue_worker_group?(worker_group),
@@ -211,10 +307,10 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   defp worker_card_state(group, _summary, _latest_job), do: empty_worker_state(group)
 
   defp activity_label(open, failures) when open != [] and failures != [],
-    do: "Open targets and failures"
+    do: gettext("Open targets and failures")
 
-  defp activity_label(open, _failures) when open != [], do: "Open targets"
-  defp activity_label(_open, failures) when failures != [], do: "Needs attention"
+  defp activity_label(open, _failures) when open != [], do: gettext("Open targets")
+  defp activity_label(_open, failures) when failures != [], do: gettext("Needs attention")
   defp activity_label(_open, _failures), do: nil
 
   defp empty_worker_state(%{cadence: %{cron: cron}}) when is_binary(cron),
@@ -234,7 +330,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
       true ->
         %{
-          label: "On demand",
+          label: gettext("On demand"),
           title: cadence.label,
           cadence_label: cadence.label
         }
@@ -243,7 +339,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp pending_job_next_run(%{state: "executing"} = job, cadence, datetime_preferences, _now) do
     %{
-      label: "Running now",
+      label: gettext("Running now"),
       title:
         timestamp_title(
           job.attempted_at || job.scheduled_at || job.inserted_at,
@@ -255,14 +351,14 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp pending_job_next_run(%{state: "available"} = job, cadence, datetime_preferences, _now) do
     %{
-      label: "Queued now",
+      label: gettext("Queued now"),
       title: timestamp_title(job.scheduled_at || job.inserted_at, datetime_preferences),
       cadence_label: cadence.label
     }
   end
 
   defp pending_job_next_run(%{state: "retryable"} = job, cadence, datetime_preferences, now) do
-    label = if job.scheduled_at, do: relative_time(job.scheduled_at, now), else: "Retry pending"
+    label = if job.scheduled_at, do: relative_time(job.scheduled_at, now), else: gettext("Retry pending")
 
     %{
       label: label,
@@ -370,7 +466,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   end
 
   defp marker_target_label(%{primary: primary}) when is_binary(primary), do: primary
-  defp marker_target_label(_target), do: "System job"
+  defp marker_target_label(_target), do: gettext("System job")
 
   defp marker_glyph(%{primary: primary}) when is_binary(primary) do
     primary
@@ -436,14 +532,26 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   end
 
   defp marker_title(job, target) do
+    technical_worker = technical_worker_label(job.worker || "not recorded")
+
     [
       job_state_label(job.state),
       worker_label(job.worker || "not recorded"),
+      technical_worker,
       if(target, do: target.primary_title || target.primary)
     ]
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
     |> Enum.join(" · ")
   end
+
+  defp technical_worker_label(worker) when is_binary(worker) and worker != "" do
+    worker
+    |> String.replace_prefix("CodexPooler.Jobs.", "")
+    |> String.replace_suffix("Worker", "")
+  end
+
+  defp technical_worker_label(_worker), do: "not recorded"
 
   defp failure_title(%{"error" => message} = error) when is_binary(message) do
     [failure_attempt(error), operator_failure_title(message) || failure_kind(error)]
@@ -469,6 +577,57 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp failure_kind(%{"kind" => kind}) when is_binary(kind) and kind != "", do: kind
   defp failure_kind(_error), do: nil
+  defp translate_failure_title("Failure detail"), do: gettext("Failure detail")
+  defp translate_failure_title("Run discarded"), do: gettext("Run discarded")
+  defp translate_failure_title("Invalid catalog sync trigger"), do: gettext("Invalid catalog sync trigger")
+  defp translate_failure_title("Catalog sync already running"), do: gettext("Catalog sync already running")
+  defp translate_failure_title("Quota refresh blocked"), do: gettext("Quota refresh blocked")
+  defp translate_failure_title("Quota unavailable"), do: gettext("Quota unavailable")
+  defp translate_failure_title("Quota refresh failed"), do: gettext("Quota refresh failed")
+
+  defp translate_failure_title(title) do
+    case Regex.run(~r/\AAttempt (\d+)(?: · (.+))?\z/, title) do
+      [_, attempt, detail] -> gettext("Attempt %{attempt} · %{detail}", attempt: attempt, detail: translate_failure_code(detail))
+      [_, attempt] -> gettext("Attempt %{attempt}", attempt: attempt)
+      _other -> title
+    end
+  end
+
+  defp translate_failure_message("No diagnostic message recorded."),
+    do: gettext("No diagnostic message recorded.")
+
+  defp translate_failure_message("The job stopped without additional diagnostics."),
+    do: gettext("The job stopped without additional diagnostics.")
+
+  defp translate_failure_message("Manual catalog sync could not start because the enqueue action used an unsupported trigger kind."),
+    do: gettext("Manual catalog sync could not start because the enqueue action used an unsupported trigger kind.")
+
+  defp translate_failure_message("Catalog sync could not start because this pool already has a sync run marked as running."),
+    do: gettext("Catalog sync could not start because this pool already has a sync run marked as running.")
+
+  defp translate_failure_message("Quota refresh needs account reauthentication."),
+    do: gettext("Quota refresh needs account reauthentication.")
+
+  defp translate_failure_message("Quota data was not available from the upstream account."),
+    do: gettext("Quota data was not available from the upstream account.")
+
+  defp translate_failure_message("Quota refresh failed for the upstream account."),
+    do: gettext("Quota refresh failed for the upstream account.")
+
+  defp translate_failure_message("Account reconciliation needs attention: " <> code),
+    do: gettext("Account reconciliation needs attention: %{code}.", code: translate_failure_code(String.trim_trailing(code, ".")))
+
+  defp translate_failure_message(message), do: message
+
+  defp translate_failure_code("quota_refresh_auth_unavailable"),
+    do: gettext("Quota refresh authentication unavailable")
+
+  defp translate_failure_code("quota_refresh_unavailable"), do: gettext("Quota refresh unavailable")
+  defp translate_failure_code("quota_refresh_failed"), do: gettext("Quota refresh failed")
+  defp translate_failure_code("pool_account_not_reconcilable"), do: gettext("Pool account not reconcilable")
+  defp translate_failure_code("catalog_sync_failed"), do: gettext("Catalog sync failed")
+  defp translate_failure_code("catalog_sync_in_progress"), do: gettext("Catalog sync in progress")
+  defp translate_failure_code(code), do: code
 
   defp safe_failure_message(message) when is_binary(message) do
     message
@@ -479,12 +638,12 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
     |> String.trim()
     |> truncate_failure_message()
     |> case do
-      "" -> "No diagnostic message recorded."
+      "" -> gettext("No diagnostic message recorded.")
       message -> message
     end
   end
 
-  defp safe_failure_message(_message), do: "No diagnostic message recorded."
+  defp safe_failure_message(_message), do: gettext("No diagnostic message recorded.")
 
   defp redact_failure_secrets(message) do
     message
@@ -613,26 +772,26 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   defp timestamp_title(%DateTime{} = datetime, datetime_preferences),
     do: format_job_timestamp(datetime, datetime_preferences)
 
-  defp relative_time(nil, _now), do: "Unknown"
+  defp relative_time(nil, _now), do: gettext("Unknown")
 
   defp relative_time(%DateTime{} = datetime, %DateTime{} = now) do
     diff_seconds = RelativeTime.seconds_until(datetime, now)
 
     cond do
       DateTime.compare(datetime, now) != :gt ->
-        "Due now"
+        gettext("Due now")
 
       diff_seconds < 60 ->
-        "in <1m"
+        gettext("in <1m")
 
       diff_seconds < 3_600 ->
-        "in #{ceil(diff_seconds / 60)}m"
+        gettext("in %{count}m", count: ceil(diff_seconds / 60))
 
       diff_seconds < 86_400 ->
-        "in #{ceil(diff_seconds / 3_600)}h"
+        gettext("in %{count}h", count: ceil(diff_seconds / 3_600))
 
       true ->
-        "in #{ceil(diff_seconds / 86_400)}d"
+        gettext("in %{count}d", count: ceil(diff_seconds / 86_400))
     end
   end
 

@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   attr :saved_reset_policy, :map, required: true
   attr :disabled, :boolean, default: false
 
+  @spec saved_reset_count_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_count_badge(%{saved_resets: %{reported?: true, available_count: count}} = assigns)
       when is_integer(count) and count > 0 do
     assigns =
@@ -53,6 +54,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
 
   # The latest reset receipt lives in the bank dialog and the cockpit (`SavedResetOperation`); the meter
   # shows inventory and policy only.
+  @spec saved_reset_meter(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_meter(assigns) do
     now = assigns.now || DateTime.utc_now()
 
@@ -80,14 +82,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
         phx-click="open_saved_reset_policy"
         phx-value-id={@identity_id}
       >
-        <span class="sr-only">Open saved reset bank</span>
+        <span class="sr-only">{gettext("Open saved reset bank")}</span>
       </button>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span
           data-role="upstream-saved-reset-meter-title"
           class="min-w-0 truncate font-medium text-base-content"
         >
-          Banked Resets
+          {gettext("Banked Resets")}
         </span>
         <span
           data-role="upstream-saved-reset-meter-count"
@@ -119,11 +121,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
           data-role="upstream-saved-reset-meter-policy"
           class="min-w-0 truncate"
         >
-          Auto redeem
-          <span :if={@meter_policy_active} class="font-medium text-(--color-reset-bank)">
-            active
-          </span>
-          <span :if={!@meter_policy_active}>inactive</span>
+          <span :if={@meter_policy_active} class="font-medium text-(--color-reset-bank)">{gettext("Auto redeem active")}</span>
+          <span :if={!@meter_policy_active}>{gettext("Auto redeem inactive")}</span>
         </span>
         <span
           :if={@meter_reset_label}
@@ -168,7 +167,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   end
 
   defp saved_reset_count_badge_aria_label(saved_resets),
-    do: "Open saved reset bank: #{saved_resets.label}"
+    do: gettext("Open saved reset bank: %{label}", label: saved_resets.label)
 
   defp saved_reset_meter_segments(saved_resets) do
     filled_count = min(saved_reset_meter_value(saved_resets), 5)
@@ -189,7 +188,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
     do: label
 
   defp saved_reset_meter_label(saved_resets),
-    do: "#{saved_reset_meter_value(saved_resets)} saved resets"
+    do: ngettext("%{count} saved reset", "%{count} saved resets", saved_reset_meter_value(saved_resets))
 
   defp saved_reset_meter_count_label(%{available_count: count})
        when is_integer(count) and count >= 0,
@@ -213,7 +212,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
     if DateTime.compare(expires_at, now) == :gt do
       ResetFormatting.format_reset_duration(seconds_until_expiration)
     else
-      "expired"
+      gettext("expired")
     end
   end
 

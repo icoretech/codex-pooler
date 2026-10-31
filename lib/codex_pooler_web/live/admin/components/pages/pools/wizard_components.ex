@@ -11,104 +11,112 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.PoolModelServingComponents
 
-  @pool_wizard_steps [
-    %{id: :details, label: "Details", description: "Name and lifecycle"},
-    %{id: :routing, label: "Routing", description: "Strategy"},
-    %{id: :upstreams, label: "Upstreams", description: "Linked accounts"},
-    %{id: "api-keys", label: "API keys", description: "Linked keys"},
-    %{id: :models, label: "Models", description: "Serving mode"}
-  ]
+  defp pool_wizard_steps do
+    [
+      %{id: :details, label: gettext("Details"), description: gettext("Name and lifecycle")},
+      %{id: :routing, label: gettext("Routing"), description: gettext("Strategy")},
+      %{id: :upstreams, label: gettext("Upstreams"), description: gettext("Linked accounts")},
+      %{id: "api-keys", label: gettext("API keys"), description: gettext("Linked keys")},
+      %{id: :models, label: gettext("Models"), description: gettext("Serving mode")}
+    ]
+  end
 
   @pool_docs_url "https://www.codex-pooler.com/docs/operators/pools/"
 
-  @pool_wizard_step_ids Enum.map(@pool_wizard_steps, &to_string(&1.id))
+  @pool_wizard_step_ids ~w(details routing upstreams api-keys models)
 
-  @pool_wizard_modes %{
-    create: %{
-      id: "pool-create-dialog",
-      title: "Create Pool",
-      description: "Create the operational boundary used by API keys, upstream assignments, routing policy, and audit filters.",
-      form_id: "pool-create-form",
-      form_submit: "create_pool",
-      cancel_event: "cancel_create",
-      cancel_id: "pool-create-cancel",
-      submit_id: "pool-create-submit",
-      submit_label: "Create Pool",
-      submit_icon: "hero-plus",
-      routing_controls_id: "pool-create-routing-controls",
-      upstream_field: :upstream_identity_ids,
-      upstream_options_id: "pool-create-upstream-identity-options",
-      upstream_count_id: "pool-create-upstream-identity-count",
-      upstream_empty_label: "No active upstream accounts are available yet.",
-      access_options_id: "pool-create-api-key-options",
-      access_count_id: "pool-create-api-key-count"
-    },
-    edit: %{
-      id: "pool-edit-dialog",
-      title: "Edit Pool",
-      description: "Update lifecycle details, routing, upstream assignments, and related API key context.",
-      form_id: "pool-edit-form",
-      form_submit: "save_pool",
-      cancel_event: "cancel_edit",
-      cancel_id: "pool-edit-cancel",
-      submit_id: "pool-edit-submit",
-      submit_label: "Save Pool",
-      submit_icon: "hero-check",
-      routing_controls_id: "pool-edit-routing-controls",
-      upstream_field: :upstream_identity_ids,
-      upstream_options_id: "pool-edit-upstream-assignment-options",
-      upstream_count_id: "pool-edit-upstream-assignment-count",
-      upstream_empty_label: "No active upstream accounts are available yet.",
-      access_options_id: "pool-edit-api-key-options",
-      access_count_id: "pool-edit-api-key-count"
-    },
-    models: %{
-      id: "pool-model-serving-dialog",
-      title: "Model serving modes",
-      description: "Choose serving modes for this assigned Pool. Other Pool settings remain instance-owner only.",
-      form_id: "pool-model-serving-edit-form",
-      form_submit: "save_pool_model_serving",
-      cancel_event: "cancel_edit",
-      cancel_id: "pool-model-serving-cancel",
-      submit_id: "pool-model-serving-submit",
-      submit_label: "Save model modes",
-      submit_icon: "hero-check",
-      routing_controls_id: "pool-model-serving-routing-controls",
-      upstream_field: :upstream_identity_ids,
-      upstream_options_id: "pool-model-serving-upstream-options",
-      upstream_count_id: "pool-model-serving-upstream-count",
-      upstream_empty_label: "No active upstream accounts are available yet.",
-      access_options_id: "pool-model-serving-api-key-options",
-      access_count_id: "pool-model-serving-api-key-count"
+  defp pool_wizard_modes do
+    %{
+      create: %{
+        id: "pool-create-dialog",
+        title: gettext("Create Pool"),
+        description: gettext("Create the operational boundary used by API keys, upstream assignments, routing policy, and audit filters."),
+        form_id: "pool-create-form",
+        form_submit: "create_pool",
+        cancel_event: "cancel_create",
+        cancel_id: "pool-create-cancel",
+        submit_id: "pool-create-submit",
+        submit_label: gettext("Create Pool"),
+        submit_icon: "hero-plus",
+        routing_controls_id: "pool-create-routing-controls",
+        upstream_field: :upstream_identity_ids,
+        upstream_options_id: "pool-create-upstream-identity-options",
+        upstream_count_id: "pool-create-upstream-identity-count",
+        upstream_empty_label: gettext("No active upstream accounts are available yet."),
+        access_options_id: "pool-create-api-key-options",
+        access_count_id: "pool-create-api-key-count"
+      },
+      edit: %{
+        id: "pool-edit-dialog",
+        title: gettext("Edit Pool"),
+        description: gettext("Update lifecycle details, routing, upstream assignments, and related API key context."),
+        form_id: "pool-edit-form",
+        form_submit: "save_pool",
+        cancel_event: "cancel_edit",
+        cancel_id: "pool-edit-cancel",
+        submit_id: "pool-edit-submit",
+        submit_label: gettext("Save Pool"),
+        submit_icon: "hero-check",
+        routing_controls_id: "pool-edit-routing-controls",
+        upstream_field: :upstream_identity_ids,
+        upstream_options_id: "pool-edit-upstream-assignment-options",
+        upstream_count_id: "pool-edit-upstream-assignment-count",
+        upstream_empty_label: gettext("No active upstream accounts are available yet."),
+        access_options_id: "pool-edit-api-key-options",
+        access_count_id: "pool-edit-api-key-count"
+      },
+      models: %{
+        id: "pool-model-serving-dialog",
+        title: gettext("Model serving modes"),
+        description: gettext("Choose serving modes for this assigned Pool. Other Pool settings remain instance-owner only."),
+        form_id: "pool-model-serving-edit-form",
+        form_submit: "save_pool_model_serving",
+        cancel_event: "cancel_edit",
+        cancel_id: "pool-model-serving-cancel",
+        submit_id: "pool-model-serving-submit",
+        submit_label: gettext("Save model modes"),
+        submit_icon: "hero-check",
+        routing_controls_id: "pool-model-serving-routing-controls",
+        upstream_field: :upstream_identity_ids,
+        upstream_options_id: "pool-model-serving-upstream-options",
+        upstream_count_id: "pool-model-serving-upstream-count",
+        upstream_empty_label: gettext("No active upstream accounts are available yet."),
+        access_options_id: "pool-model-serving-api-key-options",
+        access_count_id: "pool-model-serving-api-key-count"
+      }
     }
-  }
+  end
 
-  @pool_step_headings %{
-    "details" => %{
-      title: "Pool details",
-      description: "Set the operator-facing name and lifecycle state for this Pool."
-    },
-    "routing" => %{
-      title: "Routing strategy",
-      description: "Choose how this Pool selects upstream accounts for runtime requests."
-    },
-    "upstreams" => %{
-      title: "Pool upstream assignments",
-      description: "Select the upstream accounts available to this Pool."
-    },
-    "api-keys" => %{
-      title: "API Keys",
-      description: "Select the API keys assigned to this Pool."
-    },
-    "models" => %{
-      title: "Model serving modes",
-      description: "Choose the Responses serving path for each model currently known to this Pool."
+  defp pool_step_headings do
+    %{
+      "details" => %{
+        title: gettext("Pool details"),
+        description: gettext("Set the operator-facing name and lifecycle state for this Pool.")
+      },
+      "routing" => %{
+        title: gettext("Routing strategy"),
+        description: gettext("Choose how this Pool selects upstream accounts for runtime requests.")
+      },
+      "upstreams" => %{
+        title: gettext("Pool upstream assignments"),
+        description: gettext("Select the upstream accounts available to this Pool.")
+      },
+      "api-keys" => %{
+        title: gettext("API Keys"),
+        description: gettext("Select the API keys assigned to this Pool.")
+      },
+      "models" => %{
+        title: gettext("Model serving modes"),
+        description: gettext("Choose the Responses serving path for each model currently known to this Pool.")
+      }
     }
-  }
+  end
 
+  @spec normalize_step(term()) :: String.t()
   def normalize_step(step) when step in @pool_wizard_step_ids, do: step
   def normalize_step(_step), do: "details"
 
+  @spec normalize_step(term(), :create | :edit | :models) :: String.t()
   def normalize_step("models", :create), do: "details"
 
   def normalize_step(step, mode) when mode in [:create, :edit, :models],
@@ -124,6 +132,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   attr :model_serving_dirty?, :boolean, default: false
   attr :model_serving_sync_pending?, :boolean, default: false
 
+  @spec pool_wizard(map()) :: Phoenix.LiveView.Rendered.t()
   def pool_wizard(assigns) do
     config = pool_wizard_config(assigns.mode)
 
@@ -145,7 +154,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         description={@step_heading.description}
         steps={@steps}
         current_step={@current_step}
-        sections_label="Pool sections"
+        sections_label={gettext("Pool sections")}
         step_event="pool_wizard_step"
         step_form_id={(@mode != :models && @form_id) || nil}
         backdrop_event={@cancel_event}
@@ -175,15 +184,15 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 <.input
                   field={@form[:name]}
                   type="text"
-                  label="Name"
-                  placeholder="Production Pool"
+                  label={gettext("Name")}
+                  placeholder={gettext("Production Pool")}
                   required
                 />
                 <.input
                   :if={@mode == :edit}
                   field={@form[:status]}
                   type="select"
-                  label="Status"
+                  label={gettext("Status")}
                   options={PoolForm.status_options()}
                 />
               </div>
@@ -201,9 +210,9 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 <div class="group/selpolicy grid min-w-0 gap-2">
                   <div class="flex min-w-0 flex-wrap items-center gap-2">
                     <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                      Selection policy
+                      {gettext("Selection policy")}
                       <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
-                        How eligible upstreams are ordered
+                        {gettext("How eligible upstreams are ordered")}
                       </span>
                     </p>
                     <span class="ml-auto flex items-center gap-2">
@@ -211,7 +220,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         for={@form[:bridge_ring_size].id}
                         class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/55"
                       >
-                        Ring size
+                        {gettext("Ring size")}
                       </label>
                       <input
                         id={@form[:bridge_ring_size].id}
@@ -227,7 +236,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                   <div
                     id={@form[:routing_strategy].id}
                     role="radiogroup"
-                    aria-label="Routing strategy"
+                    aria-label={gettext("Routing strategy")}
                     class="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4"
                   >
                     <div
@@ -243,7 +252,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                           :if={value == "bridge_ring"}
                           class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70"
                         >
-                          Default
+                          {gettext("Default")}
                         </span>
                       </span>
                       <label class="flex min-w-0 cursor-pointer items-start gap-2.5 p-2.5">
@@ -273,7 +282,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 </div>
 
                 <p id={"#{@form[:bridge_ring_size].id}_help"} class="text-xs text-base-content/55">
-                  Ring size limits the candidate shortlist. Credit and saved-reset recovery may try additional accounts.
+                  {gettext("Ring size limits the candidate shortlist. Credit and saved-reset recovery may try additional accounts.")}
                 </p>
                 <div class="grid min-w-0 items-start gap-4 md:grid-cols-2">
                   <section
@@ -284,41 +293,41 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                     class="pool-routing-profile min-w-0 content-start gap-2"
                   >
                     <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                      How it routes
+                      {gettext("How it routes")}
                       <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
                         {AdminBadges.routing_strategy_label(value)}
                       </span>
                     </p>
                     <ul class="grid gap-3 py-1">
                       <.routing_feature icon={AdminBadges.routing_strategy_icon(value)} title={AdminBadges.routing_strategy_presentation(value).feature} description={AdminBadges.routing_strategy_presentation(value).detail} />
-                      <.routing_feature icon="hero-link" title="Keep sessions together" description="Related turns prefer the session's current upstream." />
-                      <.routing_feature icon="hero-shield-check" title="Respect routing safeguards" description="Quota, health and required continuity always apply." />
+                      <.routing_feature icon="hero-link" title={gettext("Keep sessions together")} description={gettext("Related turns prefer the session's current upstream.")} />
+                      <.routing_feature icon="hero-shield-check" title={gettext("Respect routing safeguards")} description={gettext("Quota, health and required continuity always apply.")} />
                       <.routing_feature icon="hero-information-circle" title={AdminBadges.routing_strategy_presentation(value).cache_title} description={AdminBadges.routing_strategy_presentation(value).cache_description} />
                     </ul>
                   </section>
 
                   <div class="grid min-w-0 content-start gap-2">
                     <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                      Compatibility
+                      {gettext("Compatibility")}
                       <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
-                        Optional client surfaces
+                        {gettext("Optional client surfaces")}
                       </span>
                     </p>
                     <div class="overflow-hidden rounded-box border border-base-300 bg-base-100">
                       <.routing_toggle_row
                         field={@form[:v1_compatibility_enabled]}
-                        label="Allow /v1 compatibility"
-                        help="OpenAI-style /v1 compatibility routes."
+                        label={gettext("Allow /v1 compatibility")}
+                        help={gettext("OpenAI-style /v1 compatibility routes.")}
                       />
                       <.routing_toggle_row
                         field={@form[:allow_image_generation]}
-                        label="Allow Image Generation"
-                        help="Permits image generation and edits for requests using this Pool."
+                        label={gettext("Allow Image Generation")}
+                        help={gettext("Permits image generation and edits for requests using this Pool.")}
                       />
                       <.routing_toggle_row
                         field={@form[:allow_audio_transcription]}
-                        label="Allow Audio Transcription"
-                        help="Permits speech-to-text transcription for requests using this Pool."
+                        label={gettext("Allow Audio Transcription")}
+                        help={gettext("Permits speech-to-text transcription for requests using this Pool.")}
                       />
                     </div>
                   </div>
@@ -339,7 +348,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 field={@form[@upstream_field]}
                 options={@upstream_options}
                 empty_label={@upstream_empty_label}
-                filter_placeholder="Filter accounts…"
+                filter_placeholder={gettext("Filter accounts…")}
                 count_id={@upstream_count_id}
               />
             </section>
@@ -356,8 +365,8 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 id={@access_options_id}
                 field={@form[:api_key_ids]}
                 options={@api_key_options}
-                empty_label="No API keys are available yet."
-                filter_placeholder="Filter keys…"
+                empty_label={gettext("No API keys are available yet.")}
+                filter_placeholder={gettext("Filter keys…")}
                 count_id={@access_count_id}
               />
             </section>
@@ -385,11 +394,11 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             id="pool-model-serving-dirty-status"
             class={[AdminBadges.metadata_chip_class(:warning), "self-center"]}
           >
-            Unsaved changes
+            {gettext("Unsaved changes")}
           </span>
           <AdminComponents.action_button
             id={@cancel_id}
-            label="Cancel"
+            label={gettext("Cancel")}
             variant={:ghost}
             phx-click={@cancel_event}
           />
@@ -400,7 +409,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             }
             id="pool-model-serving-submit"
             icon="hero-check"
-            label="Save model modes"
+            label={gettext("Save model modes")}
             type="submit"
             form="pool-model-serving-form"
             variant={:primary}
@@ -448,11 +457,14 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   attr :field, Phoenix.HTML.FormField, required: true
   attr :options, :list, required: true
   attr :empty_label, :string, required: true
-  attr :filter_placeholder, :string, default: "Filter…"
+  attr :filter_placeholder, :string, default: nil
   attr :count_id, :string, required: true
 
   defp assignment_checkbox_cards(assigns) do
-    assigns = assign(assigns, :options, sort_selected_first(assigns.options, assigns.field))
+    assigns =
+      assigns
+      |> assign(:options, sort_selected_first(assigns.options, assigns.field))
+      |> assign(:filter_placeholder, assigns.filter_placeholder || gettext("Filter…"))
 
     ~H"""
     <section id={@id} class="grid gap-2" phx-hook="AssignmentTools">
@@ -469,7 +481,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
           class="input input-sm w-52 max-w-full"
         />
         <span id={@count_id} class="text-xs font-semibold tabular-nums text-base-content/60">
-          {length(@options)} available
+          {ngettext("%{count} available", "%{count} available", length(@options))}
         </span>
         <div :if={@options != []} class="ml-auto flex items-center gap-1">
           <button
@@ -478,7 +490,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             data-assignment-action="select-all"
             class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
           >
-            Select all
+            {gettext("Select all")}
           </button>
           <button
             id={"#{@id}-clear"}
@@ -486,7 +498,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             data-assignment-action="clear"
             class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
           >
-            Clear
+            {gettext("Clear")}
           </button>
         </div>
       </div>
@@ -525,7 +537,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 {PoolForm.option_plan_label(option)}
               </span>
               <span class={AdminBadges.lifecycle_chip_class(PoolForm.option_status(option))}>
-                {PoolForm.option_status(option)}
+                {PoolForm.status_label(PoolForm.option_status(option))}
               </span>
             </span>
           </span>
@@ -544,7 +556,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     ]
   end
 
-  defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
+  defp pool_wizard_config(mode), do: Map.fetch!(pool_wizard_modes(), mode)
 
   # The step headings change as you move through the wizard, so the eyebrow is
   # the only line that can say which Pool you are editing the whole time. A Pool
@@ -552,7 +564,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   defp pool_wizard_eyebrow(title, form) do
     case pool_wizard_pool_name(form) do
       nil -> title
-      name -> "#{title} · #{name}"
+      name -> gettext("%{title} · %{name}", title: title, name: name)
     end
   end
 
@@ -565,7 +577,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
 
   defp pool_wizard_pool_name(_form), do: nil
 
-  defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
+  defp pool_step_heading(step), do: Map.fetch!(pool_step_headings(), normalize_step(step))
 
   attr :icon, :string, required: true
   attr :title, :string, required: true
@@ -590,7 +602,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     end)
   end
 
-  defp pool_wizard_steps(:edit), do: @pool_wizard_steps
-  defp pool_wizard_steps(:create), do: Enum.reject(@pool_wizard_steps, &(&1.id == :models))
-  defp pool_wizard_steps(:models), do: Enum.filter(@pool_wizard_steps, &(&1.id == :models))
+  defp pool_wizard_steps(:edit), do: pool_wizard_steps()
+  defp pool_wizard_steps(:create), do: Enum.reject(pool_wizard_steps(), &(&1.id == :models))
+  defp pool_wizard_steps(:models), do: Enum.filter(pool_wizard_steps(), &(&1.id == :models))
 end

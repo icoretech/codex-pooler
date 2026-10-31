@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
   attr :channel_form, :any, required: true
   attr :editing_channel, :any, default: nil
 
+  @spec channels_section(map()) :: Phoenix.LiveView.Rendered.t()
   def channels_section(assigns) do
     ~H"""
     <div
@@ -23,16 +24,16 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
     >
       <AdminComponents.admin_surface
         id="alerts-channels-list"
-        title="Channels"
-        description="Email and webhook delivery targets with write-only endpoint secrets."
+        title={gettext("Channels")}
+        description={gettext("Email and webhook delivery targets with write-only endpoint secrets.")}
         count={channel_count_label(@channels)}
         overflow={:visible}
       >
         <AdminComponents.empty_state
           :if={@channels == []}
           id="alerts-channels-empty-state"
-          title="No alert channels"
-          description="Create an email or webhook channel before linking alerts to delivery targets."
+          title={gettext("No alert channels")}
+          description={gettext("Create an email or webhook channel before linking alerts to delivery targets.")}
           icon="hero-paper-airplane"
         />
 
@@ -44,11 +45,11 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
           <table id="alerts-channel-table" class="table min-w-[56rem]">
             <thead>
               <tr>
-                <th>Channel</th>
-                <th>Endpoint</th>
-                <th class="text-center">State</th>
-                <th>Secret</th>
-                <th class="text-right">Actions</th>
+                <th>{gettext("Channel")}</th>
+                <th>{gettext("Endpoint")}</th>
+                <th class="text-center">{gettext("State")}</th>
+                <th>{gettext("Secret")}</th>
+                <th class="text-right">{gettext("Actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -68,6 +69,13 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                     >
                       {AlertChannelForm.channel_type_label(channel.channel_type)}
                     </span>
+                    <span
+                      :if={channel.channel_type == "email"}
+                      id={"alert-channel-row-#{channel.id}-locale"}
+                      class="text-xs text-base-content/60"
+                    >
+                      {gettext("Email language: %{language}", language: AlertChannelForm.locale_label(channel.locale))}
+                    </span>
                   </div>
                 </td>
                 <td id={"alert-channel-row-#{channel.id}-endpoint"} class="min-w-64">
@@ -80,7 +88,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                       id={"alert-channel-row-#{channel.id}-fingerprint"}
                       class="font-mono text-xs text-base-content/45"
                     >
-                      Fingerprint {channel.endpoint_fingerprint}
+                      {gettext("Fingerprint %{fingerprint}", fingerprint: channel.endpoint_fingerprint)}
                     </span>
                   </div>
                 </td>
@@ -96,14 +104,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                   id={"alert-channel-row-#{channel.id}-secret"}
                   class="text-xs text-base-content/70"
                 >
-                  Signing secret {AlertChannelForm.secret_status_label(channel.webhook_signing_secret_key_version)}
+                  {gettext("Signing secret %{status}", status: AlertChannelForm.secret_status_label(channel.webhook_signing_secret_key_version))}
                 </td>
                 <td class="text-right">
                   <div class="flex justify-end gap-2">
                     <AdminComponents.action_button
                       id={"alert-channel-edit-#{channel.id}"}
                       icon="hero-pencil-square"
-                      label="Edit"
+                      label={gettext("Edit")}
                       phx-click="open_edit_channel"
                       phx-value-id={channel.id}
                     />
@@ -111,14 +119,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                       :if={channel.state == AlertChannel.active_state()}
                       id={"alert-channel-disable-#{channel.id}"}
                       icon="hero-pause"
-                      label="Disable"
+                      label={gettext("Disable")}
                       phx-click="disable_channel"
                       phx-value-id={channel.id}
                     />
                     <AdminComponents.action_button
                       id={"alert-channel-delete-#{channel.id}"}
                       icon="hero-trash"
-                      label="Delete"
+                      label={gettext("Delete")}
                       phx-click="open_delete_channel"
                       phx-value-id={channel.id}
                       variant={:danger}
@@ -134,7 +142,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
       <AdminComponents.admin_surface
         id="alerts-channel-form-panel"
         title={channel_form_title(@channel_form_mode)}
-        description="Store delivery endpoints without revealing full webhook URLs or signing secrets after save."
+        description={gettext("Store delivery endpoints without revealing full webhook URLs or signing secrets after save.")}
         overflow={:visible}
       >
         <.form
@@ -156,15 +164,15 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
               id="alert-channel-display-name"
               field={@channel_form[:display_name]}
               type="text"
-              label="Channel name"
-              placeholder="Operations alerts"
+              label={gettext("Channel name")}
+              placeholder={gettext("Operations alerts")}
               required
             />
             <.input
               id="alert-channel-type"
               field={@channel_form[:channel_type]}
               type="select"
-              label="Channel type"
+              label={gettext("Channel type")}
               options={AlertChannelForm.channel_type_options()}
               disabled={@channel_form_mode == :edit}
               required
@@ -173,7 +181,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
               id="alert-channel-state"
               field={@channel_form[:state]}
               type="select"
-              label="Channel state"
+              label={gettext("Channel state")}
               options={AlertChannelForm.state_options()}
             />
           </div>
@@ -183,7 +191,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
             class="grid gap-4 rounded-box border border-base-300 bg-base-200 p-4"
           >
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Delivery endpoint
+              {gettext("Delivery endpoint")}
             </p>
 
             <.input
@@ -191,9 +199,17 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
               id="alert-channel-email-to"
               field={@channel_form[:email_to]}
               type="email"
-              label="Email recipient"
+              label={gettext("Email recipient")}
               placeholder="alerts@example.com"
               required
+            />
+            <.input
+              :if={AlertChannelForm.value(@channel_form[:channel_type]) == "email"}
+              id="alert-channel-locale"
+              field={@channel_form[:locale]}
+              type="select"
+              label={gettext("Email language")}
+              options={AlertChannelForm.locale_options()}
             />
 
             <div
@@ -204,7 +220,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                 id="alert-channel-webhook-url"
                 field={@channel_form[:endpoint_url]}
                 type="url"
-                label="Webhook URL"
+                label={gettext("Webhook URL")}
                 placeholder={webhook_url_placeholder(@channel_form_mode)}
                 required={@channel_form_mode == :create}
               />
@@ -213,8 +229,8 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                   id="alert-channel-webhook-signing-secret"
                   field={@channel_form[:webhook_signing_secret]}
                   type="password"
-                  label="Signing secret"
-                  placeholder="Leave blank to preserve"
+                  label={gettext("Signing secret")}
+                  placeholder={gettext("Leave blank to preserve")}
                   autocomplete="new-password"
                 />
                 <div class="flex flex-wrap items-center justify-between gap-3">
@@ -222,10 +238,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                     id="alert-channel-webhook-signing-secret-status"
                     class="text-xs leading-5 text-base-content/60"
                   >
-                    Stored signing secret:
-                    <span class="font-semibold text-base-content/70">
-                      {channel_form_secret_status(@editing_channel)}
-                    </span>
+                    {gettext("Stored signing secret: %{status}", status: channel_form_secret_status(@editing_channel))}
                   </p>
                   <input
                     type="hidden"
@@ -243,7 +256,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                           "clear"
                       }
                       class="checkbox checkbox-primary checkbox-sm"
-                    /> Clear stored signing secret
+                    /> {gettext("Clear stored signing secret")}
                   </label>
                 </div>
               </div>
@@ -251,7 +264,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                 id="alert-channel-webhook-url-help"
                 class="text-xs leading-5 text-base-content/55"
               >
-                After save, only scheme, host, masked path prefix, fingerprint, and key-version metadata are shown.
+                {gettext("After save, only scheme, host, masked path prefix, fingerprint, and key-version metadata are shown.")}
               </p>
             </div>
           </div>
@@ -259,7 +272,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
           <div class="flex flex-wrap justify-end gap-2">
             <AdminComponents.action_button
               id="alert-channel-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               phx-click="cancel_channel_form"
             />
             <AdminComponents.action_button
@@ -276,18 +289,19 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
     """
   end
 
-  defp channel_form_title(:edit), do: "Edit channel"
-  defp channel_form_title(_mode), do: "Create channel"
+  defp channel_form_title(:edit), do: gettext("Edit channel")
+  defp channel_form_title(_mode), do: gettext("Create channel")
 
-  defp channel_form_submit_label(:edit), do: "Save channel"
-  defp channel_form_submit_label(_mode), do: "Create channel"
+  defp channel_form_submit_label(:edit), do: gettext("Save channel")
+  defp channel_form_submit_label(_mode), do: gettext("Create channel")
 
-  defp webhook_url_placeholder(:edit), do: "Leave blank to preserve stored webhook URL"
+  defp webhook_url_placeholder(:edit), do: gettext("Leave blank to preserve stored webhook URL")
   defp webhook_url_placeholder(_mode), do: "https://hooks.example.com/alerts"
 
-  defp channel_count_label([]), do: "0 channels"
-  defp channel_count_label([_channel]), do: "1 channel"
-  defp channel_count_label(channels), do: "#{length(channels)} channels"
+  defp channel_count_label(channels) do
+    count = length(channels)
+    ngettext("%{count} channel", "%{count} channels", count)
+  end
 
   defp channel_endpoint_label(%{channel_type: "email", email_to: email_to}), do: email_to
 
@@ -296,10 +310,10 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
     scheme <> "://" <> host <> (channel.endpoint_path_prefix || "")
   end
 
-  defp channel_endpoint_label(_channel), do: "not configured"
+  defp channel_endpoint_label(_channel), do: gettext("not configured")
 
   defp channel_form_secret_status(%{webhook_signing_secret_key_version: key_version}),
     do: AlertChannelForm.secret_status_label(key_version)
 
-  defp channel_form_secret_status(_channel), do: "not configured"
+  defp channel_form_secret_status(_channel), do: gettext("not configured")
 end

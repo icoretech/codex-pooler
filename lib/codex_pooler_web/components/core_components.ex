@@ -253,6 +253,7 @@ defmodule CodexPoolerWeb.CoreComponents do
 
   attr :rest, :global, include: ~w(autocomplete disabled form inputmode maxlength pattern placeholder readonly required)
 
+  @spec otp_input(map()) :: Phoenix.LiveView.Rendered.t()
   def otp_input(%{field: %FormField{} = field} = assigns) do
     errors = if Phoenix.Component.used_input?(field), do: field.errors, else: []
 
@@ -317,7 +318,7 @@ defmodule CodexPoolerWeb.CoreComponents do
                 autocomplete={if index == 0, do: @rest[:autocomplete] || "one-time-code", else: "off"}
                 autofocus={@autofocus && index == 0}
                 placeholder=" "
-                aria-label={"Digit #{index + 1} of #{@length}"}
+                aria-label={gettext("Digit %{index} of %{total}", index: index + 1, total: @length)}
                 data-otp-slot={index}
                 disabled={@rest[:disabled]}
                 readonly={@rest[:readonly]}
@@ -422,6 +423,7 @@ defmodule CodexPoolerWeb.CoreComponents do
     )
   end
 
+  @spec translate_error({String.t(), keyword()}) :: String.t()
   def translate_error({msg, opts}) do
     if count = opts[:count] do
       Gettext.dngettext(CodexPoolerWeb.Gettext, "errors", msg, msg, count, opts)
@@ -430,6 +432,7 @@ defmodule CodexPoolerWeb.CoreComponents do
     end
   end
 
+  @spec translate_errors(keyword(), atom()) :: [String.t()]
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end

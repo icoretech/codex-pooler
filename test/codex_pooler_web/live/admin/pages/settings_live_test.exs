@@ -47,6 +47,47 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     refute has_element?(view, "#instance-settings-gateway")
   end
 
+  test "Chinese settings localize shell navigation and every self-service tab", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/settings")
+
+    assert has_element?(view, "#admin-nav-upstreams", "上游")
+    assert has_element?(view, "#admin-nav-api-keys", "API 密钥")
+    assert has_element?(view, "#admin-nav-settings[aria-current='page']", "设置")
+    assert has_element?(view, "#settings-page-header h1", "设置")
+    assert has_element?(view, "#settings-tab-appearance", "外观")
+    assert has_element?(view, "#settings-tab-account", "账号")
+    assert has_element?(view, "#settings-tab-security", "安全")
+    assert has_element?(view, "#settings-language-row", "用于此账号的所有设备")
+    assert has_element?(view, "#settings-language-switcher-form[action='/locale'][method='post']")
+    assert has_element?(view, "#settings-language-switcher button[name='locale'][value='auto']", "浏览器默认")
+    refute has_element?(view, "form form")
+
+    view |> element("#settings-tab-account") |> render_click()
+    assert has_element?(view, "#settings-account-profile-panel", "运营者资料")
+    assert has_element?(view, "#settings-account-submit", "保存账号")
+    assert has_element?(view, "#settings-mcp-key-empty", "无 MCP 密钥")
+
+    view |> element("#settings-tab-security") |> render_click()
+    assert has_element?(view, "#settings-totp-status", "尚未设置 TOTP")
+    assert has_element?(view, "#settings-password-submit", "更新密码")
+    assert has_element?(view, "#settings-current-session-badge", "当前会话")
+  end
+
+  test "Appearance chooser POST persists the operator language and remounts settings", %{conn: conn, user: user} do
+    {:ok, view, _html} = live(conn, ~p"/admin/settings")
+    assert has_element?(view, "#settings-language-switcher-form button[name='locale'][value='zh-CN']", "简体中文")
+
+    conn = post(conn, ~p"/locale", %{"locale" => "zh-CN", "return_to" => "/admin/settings"})
+
+    assert redirected_to(conn) == ~p"/admin/settings"
+    assert Accounts.get_user!(user.id).locale == "zh-CN"
+
+    {:ok, remounted, _html} = live(recycle(conn), ~p"/admin/settings")
+    assert has_element?(remounted, "#settings-page-header h1", "设置")
+    assert has_element?(remounted, "#settings-language-switcher button[value='zh-CN'][aria-current='true']")
+    assert has_element?(remounted, "#admin-language-switcher button[value='zh-CN'][aria-current='true']")
+  end
+
   test "instance admins keep self-service settings access", %{scope: scope} do
     %{user: admin, temporary_password: temporary_password} =
       operator_fixture(scope, %{

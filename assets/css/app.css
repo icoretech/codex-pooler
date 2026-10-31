@@ -532,7 +532,7 @@
 }
 
 @theme {
-  --font-sans: "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Roboto Condensed", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
 }
 
 :root,
@@ -572,7 +572,7 @@
 }
 
 body {
-  font-family: "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* The upstream inventory changes column count with the page frame, while each

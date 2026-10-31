@@ -1,17 +1,11 @@
 defmodule CodexPoolerWeb.Observatory.Presentation.Safety do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   @max_text_length 80
   @forbidden_terms ["pool", "upstream", "operator"]
-  @failure_labels %{
-    "rate_limited" => "Rate limited",
-    "authentication" => "Authentication issue",
-    "timeout" => "Timed out",
-    "service_unavailable" => "Service unavailable",
-    "invalid_request" => "Invalid request",
-    "request_failed" => "Request failed"
-  }
-  @unavailable_trend %{label: "not available", tone: :neutral, direction: :unavailable}
+  @failure_codes ~w(rate_limited authentication timeout service_unavailable invalid_request request_failed)
 
   @spec sanitize_text(term(), term()) :: term()
   def sanitize_text(value, fallback) when is_binary(value) do
@@ -27,7 +21,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation.Safety do
   def sanitize_code(value) do
     case bounded_text(value, nil) do
       code when is_binary(code) ->
-        if code in Map.keys(@failure_labels) and not forbidden?(code),
+        if code in @failure_codes and not forbidden?(code),
           do: code,
           else: "request_failed"
 
@@ -38,20 +32,27 @@ defmodule CodexPoolerWeb.Observatory.Presentation.Safety do
 
   @spec failure_label(term()) :: binary()
   def failure_label(value) do
-    value
-    |> sanitize_code()
-    |> then(&Map.get(@failure_labels, &1, "Request failed"))
+    case sanitize_code(value) do
+      "rate_limited" -> gettext("Rate limited")
+      "authentication" -> gettext("Authentication issue")
+      "timeout" -> gettext("Timed out")
+      "service_unavailable" -> gettext("Service unavailable")
+      "invalid_request" -> gettext("Invalid request")
+      _code -> gettext("Request failed")
+    end
   end
 
   @spec trend(term(), atom()) :: map()
   def trend(value, unit) when is_map(value) do
     case finite_number(Map.get(value, :delta)) do
-      nil -> @unavailable_trend
+      nil -> unavailable_trend()
       delta -> trend_map(Float.round(delta, 1), unit)
     end
   end
 
-  def trend(_value, _unit), do: @unavailable_trend
+  def trend(_value, _unit), do: unavailable_trend()
+
+  defp unavailable_trend, do: %{label: gettext("not available"), tone: :neutral, direction: :unavailable}
 
   defp bounded_text(value, fallback) when is_binary(value) do
     if String.valid?(value) do

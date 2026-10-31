@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.StatsPresentation.BucketLabel
 
@@ -26,27 +28,33 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
     cost_values = Enum.map(points, & &1.cost_usd)
     token_total = points |> Enum.map(& &1.total_tokens) |> Enum.sum()
     cost_total = points |> Enum.map(& &1.cost_micros) |> Enum.sum()
+    input_label = gettext("Input")
+    cached_input_label = gettext("Cached input")
+    output_label = gettext("Output (standard)")
+    reasoning_label = gettext("Reasoning")
+    cost_label = gettext("Cost")
 
     %{
       categories: CodexPooler.JSON.encode!(labels),
       series:
         CodexPooler.JSON.encode!([
-          %{name: "Input", type: "column", data: input_values},
-          %{name: "Cached input", type: "column", data: cached_input_values},
-          %{name: "Output (standard)", type: "column", data: standard_output_values},
-          %{name: "Reasoning", type: "column", data: reasoning_values},
-          %{name: "Cost", type: "line", data: cost_values}
+          %{name: input_label, type: "column", data: input_values},
+          %{name: cached_input_label, type: "column", data: cached_input_values},
+          %{name: output_label, type: "column", data: standard_output_values},
+          %{name: reasoning_label, type: "column", data: reasoning_values},
+          %{name: cost_label, type: "line", data: cost_values}
         ]),
       units: CodexPooler.JSON.encode!(["tokens", "tokens", "tokens", "tokens", "USD"]),
+      unit_labels: CodexPooler.JSON.encode!([gettext("tokens"), gettext("tokens"), gettext("tokens"), gettext("tokens"), "USD"]),
       value_kinds: CodexPooler.JSON.encode!(["tokens", "tokens", "tokens", "tokens", "usd"]),
       yaxis:
         CodexPooler.JSON.encode!([
           %{
-            seriesName: ["Input", "Cached input", "Output (standard)", "Reasoning"],
-            title: "tokens",
+            seriesName: [input_label, cached_input_label, output_label, reasoning_label],
+            title: gettext("tokens"),
             valueKind: "tokens"
           },
-          %{seriesName: "Cost", title: "cost", opposite: true, valueKind: "usd"}
+          %{seriesName: cost_label, title: gettext("cost"), opposite: true, valueKind: "usd"}
         ]),
       colors:
         CodexPooler.JSON.encode!([
@@ -57,7 +65,11 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
           "var(--color-success)"
         ]),
       points: points,
-      total_label: "#{Format.token_count(token_total)} tokens / #{Format.money_from_micros(cost_total)}"
+      total_label:
+        gettext("%{tokens} / %{cost}",
+          tokens: ngettext("%{tokens} token", "%{tokens} tokens", token_total, tokens: Format.token_count(token_total)),
+          cost: Format.money_from_micros(cost_total)
+        )
     }
   end
 
@@ -66,7 +78,12 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
     token_total = Enum.reduce(points, 0, &(&1.total_tokens + &2))
     cost_total = Enum.reduce(points, 0, &(&1.cost_micros + &2))
 
-    "#{length(points)} time buckets with #{token_total} total tokens and #{Format.money_from_micros(cost_total)} total cost."
+    tokens = ngettext("%{count} total token", "%{count} total tokens", token_total)
+
+    ngettext("%{count} time bucket with %{tokens} and %{cost} total cost.", "%{count} time buckets with %{tokens} and %{cost} total cost.", length(points),
+      tokens: tokens,
+      cost: Format.money_from_micros(cost_total)
+    )
   end
 
   defp point(label, tokens_by_label, cost_by_label) do

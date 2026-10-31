@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.ProviderCreditsWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2]
   import Phoenix.LiveView, only: [put_flash: 3]
 
@@ -29,11 +31,11 @@ defmodule CodexPoolerWeb.Admin.ProviderCreditsWorkflow do
         provider_credits_policy_form: ProviderCreditsPolicyForm.form(policy)
       )
     else
-      _unavailable -> socket |> close() |> put_flash(:error, "You must have access to every Pool using this upstream to change provider credits")
+      _unavailable -> socket |> close() |> put_flash(:error, gettext("You must have access to every Pool using this upstream to change provider credits"))
     end
   end
 
-  def open(socket, _account), do: socket |> close() |> put_flash(:error, "Upstream account was not found")
+  def open(socket, _account), do: socket |> close() |> put_flash(:error, gettext("Upstream account was not found"))
 
   @spec close(socket()) :: socket()
   def close(socket), do: assign(socket, initial_assigns())
@@ -43,23 +45,23 @@ defmodule CodexPoolerWeb.Admin.ProviderCreditsWorkflow do
     assign(socket, provider_credits_policy_form: ProviderCreditsPolicyForm.form(policy, params, :validate))
   end
 
-  def validate(socket, _params), do: put_flash(socket, :error, "Open an authorized provider credits policy before saving")
+  def validate(socket, _params), do: put_flash(socket, :error, gettext("Open an authorized provider credits policy before saving"))
 
   @spec save(socket(), term(), (socket() -> socket())) :: socket()
   def save(%{assigns: %{editing_provider_credits_policy: %{identity: %{id: identity_id}}}} = socket, params, reload) do
     with {:ok, attrs} <- ProviderCreditsPolicyForm.parse(params),
          {:ok, _result} <- Upstreams.update_provider_credits_policy_for_scope(socket.assigns.current_scope, identity_id, attrs) do
-      socket |> close() |> reload.() |> put_flash(:info, "Provider credits policy updated")
+      socket |> close() |> reload.() |> put_flash(:info, gettext("Provider credits policy updated"))
     else
       {:error, %Ecto.Changeset{} = changeset} ->
         assign(socket, provider_credits_policy_form: ProviderCreditsPolicyForm.form_for_changeset(changeset))
 
       {:error, _reason} ->
-        socket |> close() |> reload.() |> put_flash(:error, "Provider credits policy could not be changed; access to every Pool is required")
+        socket |> close() |> reload.() |> put_flash(:error, gettext("Provider credits policy could not be changed; access to every Pool is required"))
     end
   end
 
-  def save(socket, _params, _reload), do: put_flash(socket, :error, "Open an authorized provider credits policy before saving")
+  def save(socket, _params, _reload), do: put_flash(socket, :error, gettext("Open an authorized provider credits policy before saving"))
 
   @spec refresh(socket(), [account()]) :: socket()
   def refresh(%{assigns: %{editing_provider_credits_policy: %{identity: %{id: identity_id}} = previous}} = socket, accounts) do

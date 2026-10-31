@@ -74,6 +74,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:post, "/backend-api/files/:file_id/uploaded"},
                {:post, "/backend-api/transcribe"},
                {:post, "/bootstrap"},
+               {:post, "/locale"},
                {:post, "/login"},
                {:post, "/mcp"},
                {:post, "/observatory/login"},

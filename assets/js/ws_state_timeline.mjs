@@ -1,23 +1,27 @@
-export const wsRelativeTime = (timestamp, now = Date.now()) => {
+import {hookLabel} from "./hook_labels.mjs"
+
+export const wsRelativeTime = (timestamp, now = Date.now(), labels = {}) => {
   if (!timestamp) return ""
 
   const seconds = Math.max(0, Math.round((now - timestamp) / 1000))
-  if (seconds < 5) return "now"
-  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 5) return hookLabel(labels, "now", "now")
 
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-
   const hours = Math.floor(minutes / 60)
-  const restMinutes = minutes % 60
+  const days = Math.floor(hours / 24)
+  let duration
 
-  if (hours < 24) {
-    return restMinutes > 0 ? `${hours}h ${restMinutes}m ago` : `${hours}h ago`
+  if (seconds < 60) duration = `${seconds}s`
+  else if (minutes < 60) duration = `${minutes}m`
+  else if (hours < 24) {
+    const restMinutes = minutes % 60
+    duration = restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`
+  } else {
+    const restHours = hours % 24
+    duration = restHours > 0 ? `${days}d ${restHours}h` : `${days}d`
   }
 
-  const days = Math.floor(hours / 24)
-  const restHours = hours % 24
-  return restHours > 0 ? `${days}d ${restHours}h ago` : `${days}d ago`
+  return hookLabel(labels, "ago", "%{duration} ago", {duration})
 }
 
 export const initialConnectionHistory = () => ({
@@ -81,15 +85,17 @@ export const recordRoundTrip = (history, rttMs, now = Date.now()) => ({
   lastRttAt: now,
 })
 
-const closureText = (closedKind) =>
-  closedKind === "longpoll" ? "Long polling dropped" : "WebSocket closed"
+const closureText = (closedKind, labels) =>
+  closedKind === "longpoll"
+    ? hookLabel(labels, "longPollingDropped", "Long polling dropped")
+    : hookLabel(labels, "websocketClosed", "WebSocket closed")
 
-const retriesText = (count) =>
-  `${count} ${count === 1 ? "retry" : "retries"} failed`
+const retriesText = (count, labels) =>
+  hookLabel(labels, count === 1 ? "retriesOne" : "retriesOther",
+    count === 1 ? "%{retries} retry failed" : "%{retries} retries failed", {retries: count})
 
-export const connectionTimelineSteps = (visual, history, now = Date.now()) => {
+export const connectionTimelineSteps = (visual, history, now = Date.now(), labels = {}) => {
   const {lastConnectedAt, lastClosedAt, closedKind, attempts, lastRttMs, lastRttAt} = history
-  const rttLabel = lastRttMs ? ` · ${lastRttMs}ms` : ""
   const steps = []
 
   switch (visual) {
@@ -97,14 +103,14 @@ export const connectionTimelineSteps = (visual, history, now = Date.now()) => {
       steps.push({
         tone: "ok",
         emphasis: true,
-        text: "WebSocket connected",
-        time: wsRelativeTime(lastConnectedAt, now) || "now",
+        text: hookLabel(labels, "websocketConnected", "WebSocket connected"),
+        time: wsRelativeTime(lastConnectedAt, now, labels) || hookLabel(labels, "now", "now"),
       })
       if (lastRttMs) {
         steps.push({
           tone: "ok",
-          text: `Heartbeat healthy · ${lastRttMs}ms`,
-          time: wsRelativeTime(lastRttAt, now),
+          text: hookLabel(labels, "heartbeatHealthy", "Heartbeat healthy · %{milliseconds}ms", {milliseconds: lastRttMs}),
+          time: wsRelativeTime(lastRttAt, now, labels),
         })
       }
       break
@@ -115,14 +121,16 @@ export const connectionTimelineSteps = (visual, history, now = Date.now()) => {
       // failure predates this page's timers it happened.
       steps.push({
         tone: "bad",
-        text: "WebSocket failed",
-        time: wsRelativeTime(lastClosedAt, now),
+        text: hookLabel(labels, "websocketFailed", "WebSocket failed"),
+        time: wsRelativeTime(lastClosedAt, now, labels),
       })
       steps.push({
         tone: "now",
         emphasis: true,
-        text: `Long polling active${rttLabel}`,
-        time: "now",
+        text: lastRttMs
+          ? hookLabel(labels, "longPollingActiveRtt", "Long polling active · %{milliseconds}ms", {milliseconds: lastRttMs})
+          : hookLabel(labels, "longPollingActive", "Long polling active"),
+        time: hookLabel(labels, "now", "now"),
       })
       break
 
@@ -130,20 +138,20 @@ export const connectionTimelineSteps = (visual, history, now = Date.now()) => {
       if (lastClosedAt) {
         steps.push({
           tone: "done",
-          text: closureText(closedKind),
-          time: wsRelativeTime(lastClosedAt, now),
+          text: closureText(closedKind, labels),
+          time: wsRelativeTime(lastClosedAt, now, labels),
         })
       }
       if (attempts > 0) {
-        steps.push({tone: "done", text: retriesText(attempts), time: ""})
+        steps.push({tone: "done", text: retriesText(attempts, labels), time: ""})
       }
       steps.push({
         tone: "now",
         emphasis: true,
         text: lastClosedAt
-          ? `Reconnecting · attempt ${attempts + 1}`
-          : "Connecting to live updates",
-        time: "now",
+          ? hookLabel(labels, "reconnecting", "Reconnecting · attempt %{attempt}", {attempt: attempts + 1})
+          : hookLabel(labels, "connecting", "Connecting to live updates"),
+        time: hookLabel(labels, "now", "now"),
       })
       break
 
@@ -151,30 +159,30 @@ export const connectionTimelineSteps = (visual, history, now = Date.now()) => {
       if (lastClosedAt) {
         steps.push({
           tone: "done",
-          text: closureText(closedKind),
-          time: wsRelativeTime(lastClosedAt, now),
+          text: closureText(closedKind, labels),
+          time: wsRelativeTime(lastClosedAt, now, labels),
         })
       }
       if (attempts > 0) {
-        steps.push({tone: "bad", text: retriesText(attempts), time: ""})
+        steps.push({tone: "bad", text: retriesText(attempts, labels), time: ""})
       }
       steps.push({
         tone: "bad",
         emphasis: true,
-        text: "Offline · data may be stale",
-        time: "now",
+        text: hookLabel(labels, "offlineStale", "Offline · data may be stale"),
+        time: hookLabel(labels, "now", "now"),
       })
   }
 
   return steps
 }
 
-export const connectionHint = (visual) => {
+export const connectionHint = (visual, labels = {}) => {
   switch (visual) {
     case "longPollFallback":
-      return "Updates arrive by polling — slightly slower but complete."
+      return hookLabel(labels, "fallbackHint", "Updates arrive by polling — slightly slower but complete.")
     case "connecting":
-      return "Page data is still shown; refreshes resume once the socket is back."
+      return hookLabel(labels, "connectingHint", "Page data is still shown; refreshes resume once the socket is back.")
     default:
       return null
   }
@@ -183,29 +191,44 @@ export const connectionHint = (visual) => {
 export const displayEndpoint = (endPoint) =>
   (endPoint || "/live").replace(/\/(websocket|longpoll)$/, "")
 
-export const connectionFooterParts = (visual, {endPoint, heartbeatIntervalMs, online}) => {
+export const connectionFooterParts = (visual, {endPoint, heartbeatIntervalMs, online}, labels = {}) => {
   if (connectedVisual(visual)) {
     // "keepalive", not "heartbeat": this is Phoenix's idle keepalive
     // interval, distinct from the measured heartbeat RTT in the timeline.
     return {
       meta: displayEndpoint(endPoint),
       detail: heartbeatIntervalMs
-        ? `keepalive ${Math.round(heartbeatIntervalMs / 1000)}s`
-        : "keepalive default",
+        ? hookLabel(labels, "keepalive", "keepalive %{seconds}s", {seconds: Math.round(heartbeatIntervalMs / 1000)})
+        : hookLabel(labels, "keepaliveDefault", "keepalive default"),
     }
   }
 
-  return {meta: `network: ${online ? "online" : "offline"}`, detail: null}
+  return {meta: online
+    ? hookLabel(labels, "networkOnline", "network: online")
+    : hookLabel(labels, "networkOffline", "network: offline"), detail: null}
 }
 
-export const connectionActionLabel = (visual) => {
+export const connectionActionLabel = (visual, labels = {}) => {
   switch (visual) {
     case "longPollFallback":
-      return "Retry WebSocket"
+      return hookLabel(labels, "retryWebsocket", "Retry WebSocket")
     case "connecting":
     case "disconnected":
-      return "Reconnect now"
+      return hookLabel(labels, "reconnectNow", "Reconnect now")
     default:
       return null
+  }
+}
+
+export const connectionVisualLabel = (visual, labels = {}) => {
+  switch (visual) {
+    case "websocketConnected":
+      return hookLabel(labels, "connectedLabel", "Live updates: live")
+    case "longPollFallback":
+      return hookLabel(labels, "fallbackLabel", "Live updates: fallback connection")
+    case "disconnected":
+      return hookLabel(labels, "disconnectedLabel", "Live updates: offline")
+    default:
+      return hookLabel(labels, "connectingLabel", "Live updates: syncing")
   }
 }

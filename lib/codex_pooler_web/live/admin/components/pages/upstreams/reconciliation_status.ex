@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
   attr :reauth_required?, :boolean, required: true
   attr :lifecycle_warning, :map, default: nil
 
+  @spec reconciliation_status(map()) :: Phoenix.LiveView.Rendered.t()
   def reconciliation_status(assigns) do
     assigns =
       assign(
@@ -38,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
           id={"#{@id_prefix}-reconciliation-attempt-age"}
           class="shrink-0 text-xs text-base-content/55"
         >
-          latest attempt {@state.attempt_age}
+          {gettext("latest attempt %{age}", age: @state.attempt_age)}
         </span>
         <.icon
           name="hero-chevron-right"
@@ -58,15 +59,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
         </p>
         <dl class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-base-content/55">
           <div>
-            <dt class="sr-only">Last successful refresh</dt>
+            <dt class="sr-only">{gettext("Last successful refresh")}</dt>
             <dd id={"#{@id_prefix}-last-successful-refresh"}>
-              {age_label("Last successful quota refresh", @state.last_successful_refresh_age)}
+              {age_label(:last_successful_refresh, @state.last_successful_refresh_age)}
             </dd>
           </div>
           <div>
-            <dt class="sr-only">Quota evidence age</dt>
+            <dt class="sr-only">{gettext("Quota evidence age")}</dt>
             <dd id={"#{@id_prefix}-quota-evidence-age"}>
-              {age_label("Quota evidence", @state.quota_evidence_age)}
+              {age_label(:quota_evidence, @state.quota_evidence_age)}
             </dd>
           </div>
         </dl>
@@ -86,10 +87,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
           {:error, Map.fetch!(lifecycle_warning, :title), Map.fetch!(lifecycle_warning, :body), Map.get(lifecycle_warning, :reason) || reconciliation_reason}
 
         reauth_required? ->
-          {:error, "Reauthentication required", "Credentials need recovery before this account can route.", reconciliation_reason}
+          {:error, gettext("Reauthentication required"), gettext("Credentials need recovery before this account can route."), reconciliation_reason}
 
         reconciliation_status in ["failed", "partial", "blocked"] ->
-          {:error, "Quota reconciliation needs attention", reconciliation_reason || "The latest reconciliation did not complete successfully.", nil}
+          {:error, gettext("Quota reconciliation needs attention"), reconciliation_reason || gettext("The latest reconciliation did not complete successfully."), nil}
 
         true ->
           {:neutral, nil, nil, nil}
@@ -108,8 +109,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
     }
   end
 
-  defp age_label(label, age) when is_binary(age) and age != "", do: "#{label} #{age}"
-  defp age_label(label, _age), do: "#{label} not reported"
+  defp age_label(:last_successful_refresh, age) when is_binary(age) and age != "",
+    do: gettext("Last successful quota refresh %{age}", age: age)
+
+  defp age_label(:last_successful_refresh, _age), do: gettext("Last successful quota refresh not reported")
+
+  defp age_label(:quota_evidence, age) when is_binary(age) and age != "",
+    do: gettext("Quota evidence %{age}", age: age)
+
+  defp age_label(:quota_evidence, _age), do: gettext("Quota evidence not reported")
 
   defp tone_dot_class(:error),
     do: "size-2 shrink-0 rounded-full bg-error ring-[3px] ring-error/15"

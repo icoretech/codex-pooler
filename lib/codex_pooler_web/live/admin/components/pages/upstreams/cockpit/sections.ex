@@ -22,23 +22,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   attr :request_metrics_loading?, :boolean, default: false
   attr :request_metrics_running?, :boolean, default: false
 
+  @spec readiness_section(map()) :: Phoenix.LiveView.Rendered.t()
   def readiness_section(assigns) do
     ~H"""
     <section
       id="upstream-assignments"
-      aria-label="Routing lanes"
+      aria-label={gettext("Routing lanes")}
       aria-busy={to_string(@request_metrics_loading? || @request_metrics_running?)}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
-          <h2 class="text-base font-semibold leading-5 text-base-content">Routing lanes</h2>
+          <h2 class="text-base font-semibold leading-5 text-base-content">{gettext("Routing lanes")}</h2>
           <p class="text-xs leading-5 text-base-content/60">
-            Each Pool assignment must pass assignment → health → quota to receive traffic
+            {gettext("Each Pool assignment must pass assignment → health → quota to receive traffic")}
           </p>
         </div>
         <span class={AdminBadges.count_chip_class()}>
-          {Formatting.pluralize_count(@cockpit.assignments.count, "lane", "lanes")}
+          {ngettext("%{count} lane", "%{count} lanes", @cockpit.assignments.count)}
         </span>
       </header>
 
@@ -86,8 +87,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       <div :if={@cockpit.assignments.empty?} class="p-4">
         <AdminComponents.empty_state
           id="upstream-assignments-empty"
-          title="No Pool assignments"
-          description="Assign this account to a Pool before it can receive traffic."
+          title={gettext("No Pool assignments")}
+          description={gettext("Assign this account to a Pool before it can receive traffic.")}
           icon="hero-link-slash"
         />
       </div>
@@ -187,21 +188,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   attr :cockpit, :map, required: true
   attr :confirming_saved_reset_redemption, :map, default: nil
 
+  @spec actions_rail(map()) :: Phoenix.LiveView.Rendered.t()
   def actions_rail(assigns) do
     ~H"""
     <section
       id="upstream-actions"
-      aria-label="Account actions"
+      aria-label={gettext("Account actions")}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="border-b border-base-300 bg-base-200/35 px-4 py-3">
-        <h2 class="text-base font-semibold leading-5 text-base-content">Actions</h2>
+        <h2 class="text-base font-semibold leading-5 text-base-content">{gettext("Actions")}</h2>
       </header>
       <div class="grid">
         <.rail_action
           id={"cockpit-refresh-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-arrow-path"
-          label="Refresh token"
+          label={gettext("Refresh token")}
           action={@cockpit.actions.refresh_token}
           phx-click="refresh_account"
           phx-value-id={@cockpit.identity.id}
@@ -209,7 +211,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-oauth-relink-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-link"
-          label="OAuth relink"
+          label={gettext("OAuth relink")}
           action={@cockpit.actions.oauth_relink}
           phx-click="open_oauth_relink"
           phx-value-id={@cockpit.identity.id}
@@ -217,7 +219,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-replace-auth-json-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-document-arrow-up"
-          label="Replace auth.json"
+          label={gettext("Replace auth.json")}
           action={@cockpit.actions.replace_auth_json}
           phx-click="open_import_auth_json"
           phx-value-id={@cockpit.identity.id}
@@ -226,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-pause-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-pause"
-          label="Pause"
+          label={gettext("Pause")}
           action={@cockpit.actions.pause}
           phx-click="pause_account"
           phx-value-id={@cockpit.identity.id}
@@ -234,7 +236,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-reactivate-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-play"
-          label="Reactivate"
+          label={gettext("Reactivate")}
           action={@cockpit.actions.reactivate}
           phx-click="reactivate_account"
           phx-value-id={@cockpit.identity.id}
@@ -242,7 +244,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-redeem-saved-reset-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-bolt"
-          label="Redeem saved reset"
+          label={gettext("Redeem saved reset")}
           data-saved-reset-action="open-redemption"
           data-server-disabled={to_string(!@cockpit.actions.redeem_saved_reset.available?)}
           action={@cockpit.actions.redeem_saved_reset}
@@ -271,14 +273,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-download-reset-calendar-#{@cockpit.identity.id}"}
           icon="hero-calendar-days"
-          label="Download reset calendar"
+          label={gettext("Download reset calendar")}
           action={@cockpit.actions.download_reset_calendar}
           href={~p"/admin/upstreams/#{@cockpit.identity.id}/saved-reset-expirations.ics"}
         />
         <.rail_action
           id={"cockpit-rename-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-pencil-square"
-          label="Rename"
+          label={gettext("Rename")}
           action={@cockpit.actions.rename}
           phx-click="open_rename_account"
           phx-value-id={@cockpit.identity.id}
@@ -287,7 +289,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         <.rail_action
           id={"cockpit-delete-upstream-account-#{@cockpit.identity.id}"}
           icon="hero-trash"
-          label="Delete account…"
+          label={gettext("Delete account…")}
           action={@cockpit.actions.delete}
           variant={:danger}
           phx-click="open_delete_account"
@@ -336,7 +338,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           :if={!@action.available?}
           class="ml-auto shrink-0 text-[10px] font-normal text-base-content/35"
         >
-          unavailable
+          {gettext("unavailable")}
         </span>
       </button>
       <%!-- A tooltip cannot be reached on touch, so below `sm` the reason also shows as text under the action. From `sm` it stays in the title only. --%>
@@ -378,7 +380,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       :if={@path}
       id={"cockpit-reinvite-upstream-account-#{@cockpit.identity.id}"}
       icon="hero-user-plus"
-      label="Reinvite account"
+      label={gettext("Reinvite account")}
       action={@cockpit.actions.reinvite}
       navigate={@path}
     />
@@ -386,7 +388,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       :if={!@path}
       id={"cockpit-reinvite-upstream-account-#{@cockpit.identity.id}"}
       icon="hero-user-plus"
-      label="Reinvite account"
+      label={gettext("Reinvite account")}
       action={%{@cockpit.actions.reinvite | available?: false}}
     />
     """
@@ -401,18 +403,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   attr :request_data_loaded?, :boolean, default: true
   attr :request_data_loading?, :boolean, default: false
 
+  @spec recent_events_section(map()) :: Phoenix.LiveView.Rendered.t()
   def recent_events_section(assigns) do
     ~H"""
     <section
       id="upstream-event-summary"
-      aria-label="Recent activity"
+      aria-label={gettext("Recent activity")}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
-          <h2 class="text-base font-semibold leading-5 text-base-content">Recent activity</h2>
+          <h2 class="text-base font-semibold leading-5 text-base-content">{gettext("Recent activity")}</h2>
           <p class="text-xs leading-5 text-base-content/60">
-            Failed requests and account changes
+            {gettext("Failed requests and account changes")}
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -423,14 +426,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             role="status"
           >
             <.icon name="hero-arrow-path" class="admin-loading-icon size-3.5" />
-            <span>Loading recent activity</span>
+            <span>{gettext("Loading recent activity")}</span>
           </span>
           <.link
             id="upstream-event-summary-request-logs-link"
             href={Formatting.request_logs_path(@cockpit)}
             class="btn btn-ghost btn-xs gap-1.5 text-base-content/65"
           >
-            <span class="admin-control-label">Request logs</span>
+            <span class="admin-control-label">{gettext("Request logs")}</span>
             <.icon name="hero-arrow-right" class="size-3" />
           </.link>
           <.link
@@ -438,7 +441,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             href={Formatting.audit_logs_path(@cockpit)}
             class="btn btn-ghost btn-xs gap-1.5 text-base-content/65"
           >
-            <span class="admin-control-label">Audit logs</span>
+            <span class="admin-control-label">{gettext("Audit logs")}</span>
             <.icon name="hero-arrow-right" class="size-3" />
           </.link>
           <.link
@@ -446,7 +449,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             href={Formatting.jobs_path(@cockpit)}
             class="btn btn-ghost btn-xs gap-1.5 text-base-content/65"
           >
-            <span class="admin-control-label">Jobs</span>
+            <span class="admin-control-label">{gettext("Jobs")}</span>
             <.icon name="hero-arrow-right" class="size-3" />
           </.link>
         </div>
@@ -496,8 +499,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             type="button"
             phx-click="open_request_log"
             phx-value-request-id={event_row.event.request_id}
-            title="Open request evidence"
-            aria-label="Open request evidence"
+            title={gettext("Open request evidence")}
+            aria-label={gettext("Open request evidence")}
             class="btn btn-ghost btn-xs btn-square justify-self-end text-base-content/45 hover:text-primary"
           >
             <.icon name="hero-magnifying-glass" class="size-3.5" />
@@ -506,8 +509,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             :if={!event_row.event.request_id && event_row.event.link}
             data-role="recent-event-link"
             href={event_row.event.link}
-            title="Open in audit logs"
-            aria-label="Open in audit logs"
+            title={gettext("Open in audit logs")}
+            aria-label={gettext("Open in audit logs")}
             class="btn btn-ghost btn-xs btn-square justify-self-end text-base-content/45 hover:text-primary"
           >
             <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
@@ -526,8 +529,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       >
         <AdminComponents.empty_state
           id="upstream-event-summary-loading-state"
-          title="Loading recent activity"
-          description="Request and account events will appear here when the current snapshot is ready."
+          title={gettext("Loading recent activity")}
+          description={gettext("Request and account events will appear here when the current snapshot is ready.")}
           icon="hero-arrow-path"
           loading?={true}
         />
@@ -539,8 +542,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       >
         <AdminComponents.empty_state
           id="upstream-event-summary-error-state"
-          title="Recent activity is not available"
-          description="Refresh the account data to try again."
+          title={gettext("Recent activity is not available")}
+          description={gettext("Refresh the account data to try again.")}
           icon="hero-clipboard-document-list"
         />
       </div>
@@ -548,7 +551,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
       <div :if={@request_data_loaded? && @cockpit.recent_events.items == []} class="p-4">
         <AdminComponents.empty_state
           id="upstream-event-summary-empty"
-          title="No recent upstream events"
+          title={gettext("No recent upstream events")}
           description={recent_events_empty_description(@cockpit.recent_events.searched_attempt_limit)}
           icon="hero-clipboard-document-list"
         />
@@ -559,7 +562,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         id="upstream-event-summary-request-window"
         class="border-t border-base-300/50 px-4 py-2 text-xs leading-5 text-base-content/55"
       >
-        {searched_attempts_label(@cockpit.recent_events.searched_attempt_limit)}; older request history is in Request logs.
+        {searched_attempts_label(@cockpit.recent_events.searched_attempt_limit)}
       </p>
     </section>
     """
@@ -569,14 +572,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   # attempts; when older attempts were left unread the page says what was
   # searched instead of implying the whole history is clean.
   defp recent_events_empty_description(nil),
-    do: "Request failures and audit activity for this account will appear here."
+    do: gettext("Request failures and audit activity for this account will appear here.")
 
   defp recent_events_empty_description(limit),
-    do: "No failed or retried requests in the #{searched_attempts_scope(limit)} and no account changes; older request history is in Request logs."
+    do: ngettext("No failed or retried requests in the latest %{attempts} attempt of each Pool assignment and no account changes; older request history is in Request logs.", "No failed or retried requests in the latest %{attempts} attempts of each Pool assignment and no account changes; older request history is in Request logs.", limit, attempts: AccountFormatting.format_integer(limit))
 
-  defp searched_attempts_label(limit), do: "Failed and retried requests are searched in the #{searched_attempts_scope(limit)}"
-
-  defp searched_attempts_scope(limit), do: "latest #{AccountFormatting.format_integer(limit)} attempts of each Pool assignment"
+  defp searched_attempts_label(limit),
+    do: ngettext("Failed and retried requests are searched in the latest %{attempts} attempt of each Pool assignment; older request history is in Request logs.", "Failed and retried requests are searched in the latest %{attempts} attempts of each Pool assignment; older request history is in Request logs.", limit, attempts: AccountFormatting.format_integer(limit))
 
   defp routing_readiness(%{header: %{routing_readiness: readiness}}) when is_map(readiness),
     do: readiness
@@ -584,9 +586,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   defp routing_readiness(_cockpit) do
     %{
       state: "unavailable",
-      label: "Routing unavailable",
+      label: gettext("Routing unavailable"),
       tone: :warning,
-      reason: "Routing readiness is unavailable for this upstream account."
+      reason: gettext("Routing readiness is unavailable for this upstream account.")
     }
   end
 
@@ -620,28 +622,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   # the cancellations it left out.
   defp request_note(%{state: state, kpis: %{total_requests_24h: total, client_cancelled_requests_24h: total}})
        when state in ["healthy", "degraded", "failed"],
-       do: "All #{total} requests in the last 24h were cancelled by the client"
+       do: ngettext("All %{count} request in the last 24h was cancelled by the client", "All %{count} requests in the last 24h were cancelled by the client", total)
 
   defp request_note(%{state: state, kpis: kpis})
        when state in ["healthy", "degraded", "failed"] do
     cancelled = kpis.client_cancelled_requests_24h
+    count = kpis.total_requests_24h - cancelled
+    bindings = [failed: kpis.failed_requests_24h, rate: format_rate(kpis.failure_rate_24h), cancelled: cancelled]
 
-    base =
-      "#{kpis.failed_requests_24h} of #{kpis.total_requests_24h - cancelled} requests failed in the last 24h (#{format_rate(kpis.failure_rate_24h)})"
+    cond do
+      state == "healthy" and cancelled > 0 ->
+        ngettext("%{failed} of %{count} request failed in the last 24h (%{rate}), within the expected range for upstream calls; %{cancelled} cancelled by the client not counted", "%{failed} of %{count} requests failed in the last 24h (%{rate}), within the expected range for upstream calls; %{cancelled} cancelled by the client not counted", count, bindings)
 
-    note =
-      case state do
-        "healthy" -> base <> ", within the expected range for upstream calls"
-        _degraded -> base
-      end
+      state == "healthy" ->
+        ngettext("%{failed} of %{count} request failed in the last 24h (%{rate}), within the expected range for upstream calls", "%{failed} of %{count} requests failed in the last 24h (%{rate}), within the expected range for upstream calls", count, bindings)
 
-    note <> client_cancelled_note(cancelled)
+      cancelled > 0 ->
+        ngettext("%{failed} of %{count} request failed in the last 24h (%{rate}); %{cancelled} cancelled by the client not counted", "%{failed} of %{count} requests failed in the last 24h (%{rate}); %{cancelled} cancelled by the client not counted", count, bindings)
+
+      true ->
+        ngettext("%{failed} of %{count} request failed in the last 24h (%{rate})", "%{failed} of %{count} requests failed in the last 24h (%{rate})", count, bindings)
+    end
   end
 
   defp request_note(_request_health), do: nil
-
-  defp client_cancelled_note(0), do: ""
-  defp client_cancelled_note(count), do: "; #{count} cancelled by the client not counted"
 
   defp format_rate(rate) when is_float(rate),
     do: :erlang.float_to_binary(rate, decimals: 1) <> "%"
@@ -668,7 +672,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
          %{last_successful_refresh_at: %DateTime{} = reconciled_at},
          datetime_preferences
        ),
-       do: "reconciled #{DateTimeDisplay.format_datetime(reconciled_at, datetime_preferences)}"
+       do: gettext("reconciled %{time}", time: DateTimeDisplay.format_datetime(reconciled_at, datetime_preferences))
 
   defp reconciled_label(_assignment, _datetime_preferences), do: nil
 
@@ -682,16 +686,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
     end
   end
 
-  defp lane_share_detail(_cockpit, _assignment, false, true), do: "Loading request metrics"
-  defp lane_share_detail(_cockpit, _assignment, false, false), do: "Request metrics unavailable"
+  defp lane_share_detail(_cockpit, _assignment, false, true), do: gettext("Loading request metrics")
+  defp lane_share_detail(_cockpit, _assignment, false, false), do: gettext("Request metrics unavailable")
 
   defp lane_share_detail(cockpit, assignment, true, _loading?) do
     case contribution_item(cockpit, assignment) do
       %{successful_request_count_7d: count} ->
-        "#{Formatting.pluralize_count(count, "success", "successes")} · 7d"
+        ngettext("%{count} success · 7d", "%{count} successes · 7d", count || 0)
 
       _item ->
-        "no settled successes yet"
+        gettext("no settled successes yet")
     end
   end
 
@@ -707,8 +711,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
     end)
   end
 
-  defp event_source_label("request_log"), do: "request"
-  defp event_source_label("audit_log"), do: "audit"
+  defp event_source_label("request_log"), do: gettext("request")
+  defp event_source_label("audit_log"), do: gettext("audit")
   defp event_source_label("oauth_flow"), do: "oauth"
   defp event_source_label(source), do: source |> Formatting.status_text() |> String.downcase()
 

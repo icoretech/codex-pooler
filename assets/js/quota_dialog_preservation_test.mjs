@@ -190,3 +190,18 @@ test("removed preservation opt-in cannot be copied back and unaffected disclosur
 	f.callbacks.onBeforeElUpdated(generic, nextGeneric);
 	assert.equal(nextGeneric.hasAttribute("open"), true);
 });
+
+test("quota dialog patch preservation leaves translated headings and source labels server-owned", () => {
+	const f = fixture();
+	f.heading.textContent = "配额证据";
+	f.summary.textContent = "Usage API 剩余 68%";
+	f.close.setAttribute("aria-label", "关闭配额证据");
+	f.callbacks.onPatchStart(f.root);
+	f.summary.textContent = "Usage API 剩余 65%";
+	f.callbacks.onPatchEnd(f.root);
+	assert.equal(f.heading.textContent, "配额证据");
+	assert.equal(f.summary.textContent, "Usage API 剩余 65%");
+	assert.equal(f.close.getAttribute("aria-label"), "关闭配额证据");
+	assert.equal(f.document.activeElement, f.summary);
+	assert.equal(f.scroll.scrollTop, 137);
+});

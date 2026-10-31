@@ -3,129 +3,138 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   use CodexPoolerWeb, :html
 
+  import CodexPoolerWeb.Components.LanguageSwitcher, only: [language_switcher: 1]
+
   alias CodexPooler.Pools
   alias CodexPooler.Status.Freshness
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: RelativeTime
 
-  @admin_nav_items [
-    %{
-      key: :pools,
-      id: "admin-nav-pools",
-      label: "Pools",
-      path: "/admin/pools",
-      icon: "hero-server-stack"
-    },
-    %{
-      key: :upstreams,
-      id: "admin-nav-upstreams",
-      label: "Upstreams",
-      path: "/admin/upstreams",
-      icon: "hero-cloud-arrow-up"
-    },
-    %{
-      key: :api_keys,
-      id: "admin-nav-api-keys",
-      label: "API keys",
-      path: "/admin/api-keys",
-      icon: "hero-key"
-    },
-    %{
-      key: :stats,
-      id: "admin-nav-stats",
-      label: "Stats",
-      path: "/admin/stats",
-      icon: "hero-chart-pie"
-    },
-    %{
-      key: :operators,
-      id: "admin-nav-operators",
-      label: "Operators",
-      path: "/admin/operators",
-      icon: "hero-users"
-    },
-    %{
-      key: :invites,
-      id: "admin-nav-invites",
-      label: "Invites",
-      path: "/admin/invites",
-      icon: "hero-envelope"
-    },
-    %{
-      key: :request_logs,
-      id: "admin-nav-request-logs",
-      label: "Request logs",
-      path: "/admin/request-logs",
-      icon: "hero-chat-bubble-bottom-center-text"
-    },
-    %{
-      key: :audit_logs,
-      id: "admin-nav-audit-logs",
-      label: "Audit logs",
-      path: "/admin/audit-logs",
-      icon: "hero-finger-print"
-    },
-    %{
-      key: :lens,
-      id: "admin-nav-lens",
-      label: "Lens",
-      path: "/admin/lens",
-      icon: "hero-magnifying-glass"
-    },
-    %{
-      key: :jobs,
-      id: "admin-nav-jobs",
-      label: "System Jobs",
-      path: "/admin/jobs",
-      icon: "hero-clock"
-    },
-    %{
-      key: :system,
-      id: "admin-nav-system",
-      label: "System Settings",
-      path: "/admin/system",
-      icon: "hero-adjustments-horizontal"
-    }
-  ]
+  defp navigation_items do
+    [
+      %{
+        key: :pools,
+        id: "admin-nav-pools",
+        label: gettext("Pools"),
+        path: "/admin/pools",
+        icon: "hero-server-stack"
+      },
+      %{
+        key: :upstreams,
+        id: "admin-nav-upstreams",
+        label: gettext("Upstreams"),
+        path: "/admin/upstreams",
+        icon: "hero-cloud-arrow-up"
+      },
+      %{
+        key: :api_keys,
+        id: "admin-nav-api-keys",
+        label: gettext("API keys"),
+        path: "/admin/api-keys",
+        icon: "hero-key"
+      },
+      %{
+        key: :stats,
+        id: "admin-nav-stats",
+        label: gettext("Stats"),
+        path: "/admin/stats",
+        icon: "hero-chart-pie"
+      },
+      %{
+        key: :operators,
+        id: "admin-nav-operators",
+        label: gettext("Operators"),
+        path: "/admin/operators",
+        icon: "hero-users"
+      },
+      %{
+        key: :invites,
+        id: "admin-nav-invites",
+        label: gettext("Invites"),
+        path: "/admin/invites",
+        icon: "hero-envelope"
+      },
+      %{
+        key: :request_logs,
+        id: "admin-nav-request-logs",
+        label: gettext("Request logs"),
+        path: "/admin/request-logs",
+        icon: "hero-chat-bubble-bottom-center-text"
+      },
+      %{
+        key: :audit_logs,
+        id: "admin-nav-audit-logs",
+        label: gettext("Audit logs"),
+        path: "/admin/audit-logs",
+        icon: "hero-finger-print"
+      },
+      %{
+        key: :lens,
+        id: "admin-nav-lens",
+        label: gettext("Lens"),
+        path: "/admin/lens",
+        icon: "hero-magnifying-glass"
+      },
+      %{
+        key: :jobs,
+        id: "admin-nav-jobs",
+        label: gettext("System Jobs"),
+        path: "/admin/jobs",
+        icon: "hero-clock"
+      },
+      %{
+        key: :system,
+        id: "admin-nav-system",
+        label: gettext("System Settings"),
+        path: "/admin/system",
+        icon: "hero-adjustments-horizontal"
+      }
+    ]
+  end
 
-  @admin_footer_nav_items [
-    %{
-      key: :incidents,
-      id: "admin-nav-incidents",
-      label: "OpenAI incidents",
-      path: "/admin/incidents",
-      icon: "hero-exclamation-triangle"
-    },
-    %{
-      key: :alerts,
-      id: "admin-nav-alerts",
-      label: "Alerts",
-      path: "/admin/alerts",
-      icon: "hero-bell-alert"
-    },
-    %{
-      key: :settings,
-      id: "admin-nav-settings",
-      label: "Settings",
-      path: "/admin/settings",
-      icon: "hero-cog-6-tooth"
-    }
-  ]
+  defp footer_navigation_items do
+    [
+      %{
+        key: :incidents,
+        id: "admin-nav-incidents",
+        label: gettext("OpenAI incidents"),
+        path: "/admin/incidents",
+        icon: "hero-exclamation-triangle"
+      },
+      %{
+        key: :alerts,
+        id: "admin-nav-alerts",
+        label: gettext("Alerts"),
+        path: "/admin/alerts",
+        icon: "hero-bell-alert"
+      },
+      %{
+        key: :settings,
+        id: "admin-nav-settings",
+        label: gettext("Settings"),
+        path: "/admin/settings",
+        icon: "hero-cog-6-tooth"
+      }
+    ]
+  end
 
   attr :flash, :map, required: true
   attr :current_scope, :any, required: true
   attr :active_nav, :atom, required: true
   attr :alert_notification_center, :map, required: true
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
 
   attr :openai_status_aggregate, :map, default: %{incidents: [], last_success_at: nil, stale?: false}
 
   slot :inner_block, required: true
 
+  @spec admin_shell(map()) :: Phoenix.LiveView.Rendered.t()
   def admin_shell(assigns) do
     assigns =
       assigns
       |> assign(:admin_nav_items, admin_nav_items(assigns.current_scope))
-      |> assign(:admin_footer_nav_items, @admin_footer_nav_items)
+      |> assign(:admin_footer_nav_items, footer_navigation_items())
       |> assign(:admin_identity, admin_identity(assigns.current_scope))
       |> assign(:app_version, app_version())
       |> assign(:release_notes_url, release_notes_url(app_version()))
@@ -134,7 +143,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       |> assign(:x_profile_url, x_profile_url())
 
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} auth_surface chrome={:admin}>
+    <Layouts.app flash={@flash} current_scope={@current_scope} auth_surface chrome={:admin} locale={@locale} locale_preference={@locale_preference}>
       <div id="admin-shell-root" class="h-svh overflow-hidden bg-base-200 text-base-content">
         <header class="fixed inset-x-0 top-0 z-50 border-b border-base-300/70 bg-base-100">
           <div class="flex h-12 items-center justify-between gap-4 px-4">
@@ -155,11 +164,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               />
               <.alert_notification_dropdown center={@alert_notification_center} />
               <.live_updates_toggle />
+              <.language_switcher id="admin-language-switcher" locale={@locale} preference={@locale_preference} />
               <details
                 id="topbar-connection-indicator"
                 class="dropdown dropdown-end"
                 data-state="connecting"
                 data-transport="pending"
+                data-ws-labels={Jason.encode!(connection_labels())}
                 data-preserve-open
                 phx-click-away={JS.remove_attribute("open", to: "#topbar-connection-indicator")}
               >
@@ -167,14 +178,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   id="admin-websocket-state-button"
                   class="btn btn-ghost btn-sm btn-square relative list-none text-base-content/60 [&::-webkit-details-marker]:hidden"
                   role="button"
-                  aria-label="Live updates: syncing"
+                  aria-label={gettext("Live updates: syncing")}
                   data-ws-button
                   phx-update="ignore"
                 >
                   <span data-ws-icon>
                     <.icon name="hero-wifi" class="size-5 text-base-content/45" />
                   </span>
-                  <span class="sr-only" data-ws-label>Live updates: syncing</span>
+                  <span class="sr-only" data-ws-label>{gettext("Live updates: syncing")}</span>
                 </summary>
                 <section
                   id="admin-websocket-state-popover"
@@ -182,23 +193,23 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   data-state="connecting"
                   data-transport="pending"
                   phx-update="ignore"
-                  aria-label="Live updates connection"
+                  aria-label={gettext("Live updates connection")}
                 >
                   <div class="grid gap-2 px-4 pb-3 pt-3.5">
                     <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-                      Live Updates
+                      {gettext("Live Updates")}
                     </p>
                     <ol data-ws-timeline role="list" class="grid list-none">
                       <li class="ws-step" data-tone="pending">
                         <span class="ws-step-dot" aria-hidden="true"></span>
-                        <span class="ws-step-text">Connecting to live updates</span>
-                        <span class="ws-step-time">now</span>
+                        <span class="ws-step-text">{gettext("Connecting to live updates")}</span>
+                        <span class="ws-step-time">{gettext("now")}</span>
                       </li>
                     </ol>
                     <p data-ws-hint class="text-xs leading-5 text-base-content/60" hidden></p>
                   </div>
                   <footer class="flex min-h-9 items-center justify-between gap-3 border-t border-base-300 bg-base-200/60 py-1.5 pl-4 pr-2 text-[11px] text-base-content/55">
-                    <span data-ws-meta>connecting…</span>
+                    <span data-ws-meta>{gettext("connecting…")}</span>
                     <span class="flex shrink-0 items-center">
                       <span data-ws-detail class="pr-2" hidden></span>
                       <button
@@ -217,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
         <aside
           class="admin-rail fixed left-0 top-12 z-40 flex h-[calc(100svh-3rem)] w-16 flex-col border-r border-base-300/70 bg-base-100 py-4 xl:w-64"
-          aria-label="Admin navigation"
+          aria-label={gettext("Admin navigation")}
         >
           <div class="mb-6 flex min-w-0 shrink-0 justify-center px-3 text-center rail-open:flex-col rail-open:items-start rail-open:gap-1 rail-open:px-4 rail-open:text-left">
             <Identity.operator_avatar
@@ -228,7 +239,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             />
             <div id="admin-sidebar-operator-label" class="hidden w-full min-w-0 rail-open:block">
               <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-                operator
+                {gettext("operator")}
               </p>
               <p
                 class="mt-1 block w-full min-w-0 truncate text-xs font-medium uppercase tracking-wide text-base-content/50"
@@ -241,7 +252,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
           <nav
             id="admin-nav"
-            aria-label="Admin workflow navigation"
+            aria-label={gettext("Admin workflow navigation")}
             class="scrollbar-none flex min-h-0 flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto overscroll-contain"
           >
             <.link
@@ -268,9 +279,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               href={~p"/observatory/login"}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Observatory — hold to open in a new tab"
+              aria-label={gettext("Observatory — hold to open in a new tab")}
               class={[admin_nav_item_class(false), "admin-nav-hold select-none touch-none"]}
-              title="Observatory — hold to open in a new tab"
+              title={gettext("Observatory — hold to open in a new tab")}
               phx-hook="HoldToLaunch"
             >
               <span data-role="admin-nav-hold-ring" class="relative size-5 shrink-0">
@@ -293,7 +304,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   class="size-5 shrink-0 transition-colors group-hover:text-primary"
                 />
               </span>
-              <span class="hidden rail-open:block">Observatory</span>
+              <span class="hidden rail-open:block">{gettext("Observatory")}</span>
             </.link>
           </nav>
 
@@ -321,15 +332,15 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               id="admin-sidebar-logout"
               href={~p"/logout"}
               method="delete"
-              aria-label="Log out"
+              aria-label={gettext("Log out")}
               class={admin_nav_item_class(false)}
-              title="Log out"
+              title={gettext("Log out")}
             >
               <.icon
                 name="hero-arrow-left-on-rectangle"
                 class="size-5 shrink-0 transition-colors group-hover:text-primary"
               />
-              <span class="hidden rail-open:block">Log out</span>
+              <span class="hidden rail-open:block">{gettext("Log out")}</span>
             </.link>
           </div>
         </aside>
@@ -375,11 +386,11 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         </span>
         <div class="grid min-w-0 flex-1 gap-0.5" title={Enum.join(@titles, " · ")}>
           <p class="truncate text-sm font-semibold leading-5">
-            OpenAI is reporting {if @total == 1, do: "an incident", else: "#{@total} incidents"}
+            {ngettext("OpenAI is reporting an incident", "OpenAI is reporting %{count} incidents", @total)}
           </p>
           <p class="flex min-w-0 gap-1 text-xs leading-5 text-base-content/60">
             <span class="truncate">{Enum.join(@shown, " · ")}</span>
-            <span :if={@more > 0} class="shrink-0 text-base-content/45">+{@more} more</span>
+            <span :if={@more > 0} class="shrink-0 text-base-content/45">{ngettext("+%{count} more", "+%{count} more", @more)}</span>
           </p>
           <p
             :if={@aggregate.stale? || !Map.get(@aggregate, :polling_enabled?, true)}
@@ -387,27 +398,27 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             class="text-xs leading-5 text-base-content/45"
           >
             {if Map.get(@aggregate, :polling_enabled?, true),
-              do: "The feed may be out of date. Automatic refresh continues every five minutes.",
-              else: "Status polling is disabled in System settings. Showing the last known incidents."}
+              do: gettext("The feed may be out of date. Automatic refresh continues every five minutes."),
+              else: gettext("Status polling is disabled in System settings. Showing the last known incidents.")}
           </p>
         </div>
-        <span class="hidden shrink-0 items-center gap-1.5 text-xs text-base-content/50 md:inline-flex" title="Reported on the OpenAI status page, not detected by Codex Pooler">
+        <span class="hidden shrink-0 items-center gap-1.5 text-xs text-base-content/50 md:inline-flex" title={gettext("Reported on the OpenAI status page, not detected by Codex Pooler")}>
           <span aria-hidden="true" class="size-3.5 bg-current" style={openai_mark_style()}></span>status.openai.com
         </span>
         <.link
           id="admin-openai-status-link"
           navigate={~p"/admin/incidents"}
-          aria-label="View OpenAI incidents"
+          aria-label={gettext("View OpenAI incidents")}
           class="inline-flex shrink-0 items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-3 py-1 text-xs font-semibold text-base-content transition-colors hover:bg-warning/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warning"
         >
-          View <.icon name="hero-arrow-right" class="size-3.5" />
+          {gettext("View")} <.icon name="hero-arrow-right" class="size-3.5" />
         </.link>
         <button
           id="admin-openai-status-dismiss"
           type="button"
           phx-click="dismiss_openai_status"
           class="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/60 hover:text-base-content"
-          aria-label="Dismiss current status incidents"
+          aria-label={gettext("Dismiss current status incidents")}
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
@@ -457,8 +468,8 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       data-paused="false"
       class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
       aria-pressed="false"
-      aria-label="Pause live updates"
-      title="Pause live updates"
+      aria-label={gettext("Pause live updates")}
+      title={gettext("Pause live updates")}
     >
       <span data-role="live-updates-live">
         <.icon name="hero-pause" class="size-5" />
@@ -488,50 +499,50 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         id="admin-github-button"
         class="btn btn-ghost btn-sm btn-square relative list-none text-base-content/60 [&::-webkit-details-marker]:hidden"
         role="button"
-        aria-label="Codex Pooler project links"
+        aria-label={gettext("Codex Pooler project links")}
         data-role="admin-github-trigger"
       >
         <.github_icon class="size-5 fill-current" />
-        <span class="sr-only">Project links</span>
+        <span class="sr-only">{gettext("Project links")}</span>
       </summary>
 
       <section
         id="admin-github-popover"
         class="dropdown-content z-50 mt-3 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 p-4 text-left shadow-2xl"
-        aria-label="Codex Pooler project links"
+        aria-label={gettext("Codex Pooler project links")}
       >
         <div class="grid gap-3">
           <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
             Codex Pooler
           </p>
 
-          <nav class="grid" aria-label="Codex Pooler project resources">
+          <nav class="grid" aria-label={gettext("Codex Pooler project resources")}>
             <.github_resource_row
               id="admin-github-release-notes"
               href={@release_notes_url}
               icon="hero-sparkles"
-              title="Release notes"
+              title={gettext("Release notes")}
               subtitle={"v#{@app_version}"}
             />
             <.github_resource_row
               id="admin-github-repository"
               href={@repository_url}
               github_mark
-              title="Repository"
+              title={gettext("Repository")}
               subtitle="icoretech/codex-pooler"
             />
             <.github_resource_row
               id="admin-github-docs"
               href={@docs_url}
               icon="hero-book-open"
-              title="Documentation"
+              title={gettext("Documentation")}
               subtitle="www.codex-pooler.com/docs"
             />
             <.github_resource_row
               id="admin-github-x-profile"
               href={@x_profile_url}
               icon="hero-at-symbol"
-              title="iCoreTech on X"
+              title={gettext("iCoreTech on X")}
               subtitle="@icoretech_inc"
             />
           </nav>
@@ -548,7 +559,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               name="hero-star-solid"
               class="hidden size-3.5 shrink-0 text-primary group-hover:inline-block"
             />
-            <span>Star the repository to follow updates.</span>
+            <span>{gettext("Star the repository to follow updates.")}</span>
           </a>
         </div>
       </section>
@@ -606,12 +617,12 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         data-role="admin-notifications-trigger"
       >
         <.icon name="hero-bell" class="size-5" />
-        <span class="sr-only">Notifications</span>
+        <span class="sr-only">{gettext("Notifications")}</span>
         <span
           :if={notification_badge_visible?(@center)}
           id="admin-notifications-badge"
           class="badge badge-error badge-xs absolute -right-1 -top-1 h-5 min-w-5 border-base-100 px-1 text-[0.62rem] font-semibold tabular-nums"
-          aria-label={"#{notification_badge_label(@center)} unread notifications"}
+          aria-label={ngettext("%{unread} unread notification", "%{unread} unread notifications", notification_badge_count(@center), unread: notification_badge_label(@center))}
         >
           {notification_badge_label(@center)}
         </span>
@@ -620,11 +631,11 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       <section
         id="admin-notifications-popover"
         class="dropdown-content z-50 mt-3 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 text-left shadow-2xl"
-        aria-label="Admin notifications"
+        aria-label={gettext("Admin notifications")}
       >
         <div class="grid gap-2 px-4 pb-2 pt-3.5">
           <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-            Alert Notifications
+            {gettext("Alert Notifications")}
           </p>
 
           <ul
@@ -639,7 +650,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               <span data-role="admin-notifications-empty-icon">
                 <.icon name="hero-check-circle" class="size-8 text-base-content/35" />
               </span>
-              No active notifications
+              {gettext("No active notifications")}
             </li>
             <li :for={row <- notification_rows(@center)}>
               <article
@@ -648,7 +659,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 data-role="admin-notification-row"
                 data-severity={notification_severity(row)}
                 data-alert-anchor-id={notification_anchor_id(row)}
-                aria-label={"#{notification_severity_label(row)} alert: #{notification_title(row)}"}
+                aria-label={gettext("%{severity} alert: %{title}", severity: notification_severity_label(row), title: notification_title(row))}
               >
                 <span
                   class={[
@@ -663,7 +674,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                     :if={notification_row_unread?(row)}
                     data-role="admin-notification-unread-indicator"
                     class="size-1.5 shrink-0 rounded-full bg-primary"
-                    aria-label="Unread"
+                    aria-label={gettext("Unread")}
                   ></span>
                   <h2 class={[
                     "min-w-0 truncate text-[13px] leading-5 text-base-content",
@@ -694,8 +705,8 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                       type="button"
                       class="btn btn-ghost btn-xs btn-square text-base-content/50 hover:text-primary"
                       data-role="admin-notification-primary-action"
-                      title="View incident"
-                      aria-label="View incident"
+                      title={gettext("View incident")}
+                      aria-label={gettext("View incident")}
                       phx-click="open_alert_notification_incident"
                       phx-value-id={notification_row_value(row, :id)}
                     >
@@ -707,8 +718,8 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                       type="button"
                       class="btn btn-ghost btn-xs btn-square text-base-content/50 hover:text-base-content"
                       data-role="admin-notification-mark-read"
-                      title="Mark read"
-                      aria-label="Mark read"
+                      title={gettext("Mark read")}
+                      aria-label={gettext("Mark read")}
                       phx-click="mark_alert_notification_read"
                       phx-value-id={notification_row_value(row, :id)}
                     >
@@ -719,8 +730,8 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                       type="button"
                       class="btn btn-ghost btn-xs btn-square text-base-content/50 hover:text-error"
                       data-role="admin-notification-dismiss"
-                      title="Dismiss notification"
-                      aria-label="Dismiss notification"
+                      title={gettext("Dismiss notification")}
+                      aria-label={gettext("Dismiss notification")}
                       phx-click="dismiss_alert_notification"
                       phx-value-id={notification_row_value(row, :id)}
                     >
@@ -741,10 +752,10 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             type="button"
             class="btn btn-ghost btn-xs text-base-content/55 hover:text-error"
             data-role="admin-notifications-dismiss-all"
-            aria-label="Dismiss all notifications"
+            aria-label={gettext("Dismiss all notifications")}
             phx-click="dismiss_all_alert_notifications"
           >
-            Dismiss all
+            {gettext("Dismiss all")}
           </button>
         </footer>
       </section>
@@ -754,8 +765,8 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   defp notification_button_label(center) do
     case notification_badge_count(center) do
-      0 -> "Notifications: no unread notifications"
-      _count -> "Notifications: #{notification_badge_label(center)} unread"
+      0 -> gettext("Notifications: no unread notifications")
+      count -> ngettext("Notifications: %{unread} unread", "Notifications: %{unread} unread", count, unread: notification_badge_label(center))
     end
   end
 
@@ -819,29 +830,32 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   defp notification_relative_time(%{last_seen_at: %DateTime{} = datetime}),
     do: RelativeTime.relative_time_label(datetime)
 
-  defp notification_relative_time(_row), do: "not recorded"
+  defp notification_relative_time(_row), do: gettext("not recorded")
 
   defp notification_header_summary(center) do
     cond do
-      notification_badge_count(center) > 0 -> "#{notification_badge_label(center)} unread"
-      notification_has_rows?(center) -> "All visible alerts are read"
-      true -> "No active alerts"
+      notification_badge_count(center) > 0 -> ngettext("%{unread} unread", "%{unread} unread", notification_badge_count(center), unread: notification_badge_label(center))
+      notification_has_rows?(center) -> gettext("All visible alerts are read")
+      true -> gettext("No active alerts")
     end
   end
 
   defp notification_severity_label(%{severity_label: label}) when is_binary(label), do: label
-  defp notification_severity_label(_row), do: "Unknown severity"
+  defp notification_severity_label(_row), do: gettext("Unknown severity")
 
+  defp notification_state(%{state: "open"}), do: pgettext("notification state", "open")
+  defp notification_state(%{state: "acknowledged"}), do: pgettext("notification state", "acknowledged")
+  defp notification_state(%{state: "resolved"}), do: pgettext("notification state", "resolved")
   defp notification_state(%{state: state}) when is_binary(state), do: state
   defp notification_state(_row), do: nil
 
   defp notification_title(%{reason_title: title}) when is_binary(title), do: title
-  defp notification_title(_row), do: "Alert condition matched"
+  defp notification_title(_row), do: gettext("Alert condition matched")
 
   defp notification_timestamp(%{last_seen_at: %DateTime{} = datetime}),
     do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
 
-  defp notification_timestamp(_row), do: "not recorded"
+  defp notification_timestamp(_row), do: gettext("not recorded")
 
   defp notification_impacted_pools(%{impacted_pools: pools}) when is_list(pools), do: pools
   defp notification_impacted_pools(_row), do: []
@@ -873,9 +887,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   defp admin_nav_items(current_scope) do
     if Pools.owner?(current_scope) do
-      @admin_nav_items
+      navigation_items()
     else
-      Enum.reject(@admin_nav_items, &(&1.key in [:jobs, :system, :operators]))
+      Enum.reject(navigation_items(), &(&1.key in [:jobs, :system, :operators]))
     end
   end
 
@@ -885,11 +899,11 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     cond do
       is_binary(display_name) && display_name != "" -> display_name
       is_binary(email) && email != "" -> email
-      true -> "operator"
+      true -> gettext("operator")
     end
   end
 
-  defp admin_identity(_current_scope), do: "operator"
+  defp admin_identity(_current_scope), do: gettext("operator")
 
   defp app_version do
     :codex_pooler
@@ -899,6 +913,37 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   defp release_notes_url(version) when is_binary(version) do
     "https://github.com/icoretech/codex-pooler/releases/tag/codex-pooler-v#{version}"
+  end
+
+  defp connection_labels do
+    %{
+      connectingLabel: gettext("Live updates: syncing"),
+      connectedLabel: gettext("Live updates: live"),
+      fallbackLabel: gettext("Live updates: fallback connection"),
+      disconnectedLabel: gettext("Live updates: offline"),
+      now: gettext("now"),
+      ago: gettext("%{duration} ago", duration: "%{duration}"),
+      longPollingDropped: gettext("Long polling dropped"),
+      websocketClosed: gettext("WebSocket closed"),
+      websocketConnected: gettext("WebSocket connected"),
+      heartbeatHealthy: gettext("Heartbeat healthy · %{milliseconds}ms", milliseconds: "%{milliseconds}"),
+      websocketFailed: gettext("WebSocket failed"),
+      longPollingActive: gettext("Long polling active"),
+      longPollingActiveRtt: gettext("Long polling active · %{milliseconds}ms", milliseconds: "%{milliseconds}"),
+      reconnecting: gettext("Reconnecting · attempt %{attempt}", attempt: "%{attempt}"),
+      connecting: gettext("Connecting to live updates"),
+      offlineStale: gettext("Offline · data may be stale"),
+      fallbackHint: gettext("Updates arrive by polling — slightly slower but complete."),
+      connectingHint: gettext("Page data is still shown; refreshes resume once the socket is back."),
+      keepalive: gettext("keepalive %{seconds}s", seconds: "%{seconds}"),
+      keepaliveDefault: gettext("keepalive default"),
+      networkOnline: gettext("network: online"),
+      networkOffline: gettext("network: offline"),
+      retryWebsocket: gettext("Retry WebSocket"),
+      reconnectNow: gettext("Reconnect now"),
+      retriesOne: ngettext("%{retries} retry failed", "%{retries} retries failed", 1, retries: "%{retries}"),
+      retriesOther: ngettext("%{retries} retry failed", "%{retries} retries failed", 2, retries: "%{retries}")
+    }
   end
 
   defp repository_url, do: "https://github.com/icoretech/codex-pooler"

@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.PoolInviteForm
 
   @invite_docs_url "https://www.codex-pooler.com/docs/operators/invites/#create-pool-invite"
 
@@ -13,7 +14,9 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
   attr :last_invite, :any, required: true
   attr :mailer_configured?, :boolean, required: true
   attr :pool_options, :list, required: true
+  attr :invite_locale_source, :atom, default: :default
 
+  @spec pool_invite_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def pool_invite_dialog(assigns) do
     assigns = assign(assigns, :invite_docs_url, @invite_docs_url)
 
@@ -27,7 +30,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Pool invite
+            {gettext("Pool invite")}
           </p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
             {invite_dialog_title(@last_invite)}
@@ -46,19 +49,19 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
             <div class="flex items-start gap-3 rounded-box border border-success/25 bg-success/10 p-4">
               <.icon name="hero-check-circle" class="mt-0.5 size-5 shrink-0 text-success" />
               <div class="grid min-w-0 gap-1">
-                <p class="font-semibold">Not stored in admin history</p>
+                <p class="font-semibold">{gettext("Not stored in admin history")}</p>
                 <p class="text-sm leading-6 text-base-content/70">
-                  This is the only place the URL appears. Nothing here can show it again.
+                  {gettext("This is the only place the URL appears. Nothing here can show it again.")}
                 </p>
                 <p :if={@last_invite.emailed?} id="pool-invite-email-status" class="text-sm">
-                  Email sent to {@last_invite.invited_email}.
+                  {gettext("Email sent to %{email}.", email: @last_invite.invited_email)}
                 </p>
                 <p
                   :if={@last_invite.email_error?}
                   id="pool-invite-email-status"
                   class="text-sm text-warning"
                 >
-                  Email could not be sent. Share the URL manually.
+                  {gettext("Email could not be sent. Share the URL manually.")}
                 </p>
               </div>
             </div>
@@ -66,7 +69,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
             <dl class="grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Target Pool
+                  {gettext("Target Pool")}
                 </dt>
                 <dd id="pool-invite-target" class="mt-1 text-base-content">
                   {@last_invite.pool_name}
@@ -74,15 +77,23 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
               </div>
               <div :if={@last_invite.invited_email}>
                 <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Codex Account Email
+                  {gettext("Codex Account Email")}
                 </dt>
                 <dd class="mt-1 break-all text-base-content">{@last_invite.invited_email}</dd>
+              </div>
+              <div>
+                <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
+                  {gettext("Invitation email language")}
+                </dt>
+                <dd id="pool-invite-created-locale" class="mt-1 text-base-content">
+                  {PoolInviteForm.locale_label(@last_invite.locale)}
+                </dd>
               </div>
             </dl>
 
             <div class="min-w-0">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Invite URL
+                {gettext("Invite URL")}
               </p>
               <div id="pool-invite-url-control" class="join mt-1 flex w-full min-w-0 max-w-full">
                 <code
@@ -99,12 +110,12 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
                   phx-hook="ClipboardCopy"
                   phx-update="ignore"
                   data-copy-text={@last_invite.url}
-                  data-copy-label="Copy"
-                  data-copied-label="Copied"
-                  aria-label="Copy invite URL"
+                  data-copy-label={gettext("Copy")}
+                  data-copied-label={gettext("Copied")}
+                  aria-label={gettext("Copy invite URL")}
                 >
                   <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-                  <span data-copy-label>Copy</span>
+                  <span data-copy-label>{gettext("Copy")}</span>
                 </button>
               </div>
             </div>
@@ -120,7 +131,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
             <AdminComponents.action_button
               id="pool-invite-dialog-close"
               icon="hero-check"
-              label="Done"
+              label={gettext("Done")}
               phx-click="cancel_create_invite"
               variant={:primary}
             />
@@ -140,21 +151,32 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
             <.input
               field={@invite_form[:pool_id]}
               type="select"
-              label="Target Pool"
+              label={gettext("Target Pool")}
               options={@pool_options}
             />
             <.input
               field={@invite_form[:invited_email]}
               type="email"
-              label="Codex Account Email"
+              label={gettext("Codex Account Email")}
               placeholder="codex-user@example.com"
               required
             />
             <div class="md:col-span-2">
               <.input
+                field={@invite_form[:locale]}
+                type="select"
+                label={gettext("Invitation email language")}
+                options={PoolInviteForm.locale_options()}
+              />
+              <p id="pool-invite-locale-default" class="-mt-1 text-xs text-base-content/60">
+                {PoolInviteForm.locale_hint(@invite_locale_source)}
+              </p>
+            </div>
+            <div class="md:col-span-2">
+              <.input
                 field={@invite_form[:send_email]}
                 type="checkbox"
-                label="Send invite email"
+                label={gettext("Send invite email")}
                 disabled={!@mailer_configured?}
               />
               <p
@@ -162,7 +184,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
                 id="pool-invite-email-unavailable"
                 class="-mt-1 text-xs text-base-content/60"
               >
-                Email delivery is unavailable until SMTP is configured.
+                {gettext("Email delivery is unavailable until SMTP is configured.")}
               </p>
             </div>
           </div>
@@ -176,14 +198,14 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
           <:actions>
             <AdminComponents.action_button
               id="pool-invite-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_create_invite"
             />
             <AdminComponents.action_button
               id="pool-invite-submit"
               icon="hero-user-plus"
-              label="Create Pool invite"
+              label={gettext("Create Pool invite")}
               type="submit"
               form="pool-invite-form"
               variant={:primary}
@@ -193,7 +215,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
         </AdminComponents.dialog_footer>
       </div>
       <form id="pool-invite-dialog-backdrop" method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_create_invite">close</button>
+        <button type="button" phx-click="cancel_create_invite">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -201,12 +223,12 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
 
   # The header follows the flow: once `last_invite` exists the invite does too,
   # and "create a one-time invite link" describes a step already taken.
-  defp invite_dialog_title(nil), do: "Create Pool invite"
-  defp invite_dialog_title(_invite), do: "Share this link before closing"
+  defp invite_dialog_title(nil), do: gettext("Create Pool invite")
+  defp invite_dialog_title(_invite), do: gettext("Share this link before closing")
 
   defp invite_dialog_description(nil),
-    do: "Create a one-time invite link for a Codex account and assign it to a Pool."
+    do: gettext("Create a one-time invite link for a Codex account and assign it to a Pool.")
 
   defp invite_dialog_description(invite),
-    do: "It is shown once, and joins #{invite.pool_name}."
+    do: gettext("It is shown once, and joins %{pool}.", pool: invite.pool_name)
 end

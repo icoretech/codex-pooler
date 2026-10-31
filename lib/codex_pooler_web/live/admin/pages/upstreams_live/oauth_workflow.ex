@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
   import Phoenix.LiveView, only: [put_flash: 3]
 
@@ -43,7 +45,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
   def open_relink(socket, identity_id, close_workflows_fun) do
     case find_account(socket.assigns.upstream_accounts, identity_id) do
       nil ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       account ->
         case relink_pool_id(account) do
@@ -192,12 +194,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
        ) do
     socket
     |> cancel_poll_timer()
-    |> assign_pending(pool.id, flow, "Browser authorization pending", authorization_url)
+    |> assign_pending(pool.id, flow, gettext("Browser authorization pending"), authorization_url)
   end
 
   defp assign_device_started(socket, pool, %{flow: %OAuthFlow{} = flow}) do
     socket
-    |> assign_pending(pool.id, flow, "Device authorization pending", nil)
+    |> assign_pending(pool.id, flow, gettext("Device authorization pending"), nil)
     |> schedule_device_poll(flow)
   end
 
@@ -211,7 +213,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
         |> assign_pending(
           socket.assigns.oauth_link_pool_id,
           flow,
-          "Device authorization pending",
+          gettext("Device authorization pending"),
           nil
         )
         |> schedule_device_poll(flow)
@@ -256,7 +258,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
   end
 
   defp complete_message(socket) do
-    if relink_mode?(socket), do: "OpenAI account relinked", else: "OpenAI account linked"
+    if relink_mode?(socket), do: gettext("OpenAI account relinked"), else: gettext("OpenAI account linked")
   end
 
   defp schedule_device_poll(
@@ -306,14 +308,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.OAuthWorkflow do
   end
 
   defp relink_pool_id(%{identity: %{status: "deleted"}}),
-    do: {:error, "OAuth relink is not available: deleted accounts cannot be relinked"}
+    do: {:error, gettext("OAuth relink is not available: deleted accounts cannot be relinked")}
 
   defp relink_pool_id(%{assignments: [%{pool_id: pool_id} | _assignments]})
        when is_binary(pool_id),
        do: {:ok, pool_id}
 
   defp relink_pool_id(_account),
-    do: {:error, "OAuth relink is not available: assign this account to a visible Pool first"}
+    do: {:error, gettext("OAuth relink is not available: assign this account to a visible Pool first")}
 
   defp relink_mode?(%{assigns: %{oauth_link_mode: :relink}}), do: true
   defp relink_mode?(_socket), do: false

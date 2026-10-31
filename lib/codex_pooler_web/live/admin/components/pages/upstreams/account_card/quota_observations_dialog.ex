@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
   attr :account_label, :string, required: true
   attr :limit, :map, required: true
 
+  @spec dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def dialog(assigns) do
     ~H"""
     <dialog
@@ -26,20 +27,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
         <header class="shrink-0 border-b border-base-300 px-5 py-4">
           <p id={"#{@id}-eyebrow"} class="break-words text-xs font-semibold uppercase tracking-wide text-primary">{@limit.label} · {@account_label}</p>
           <h2 id={"#{@id}-title"} tabindex="-1" data-dialog-focus-fallback class="mt-1 text-xl font-bold text-base-content">
-            Quota evidence
+            {gettext("Quota evidence")}
           </h2>
           <p id={"#{@id}-description"} class="mt-1 text-xs leading-5 text-base-content/60">
-            Retained quota state, not a history of provider responses. Values may be reconciled across multiple reports.
+            {gettext("Retained quota state, not a history of provider responses. Values may be reconciled across multiple reports.")}
           </p>
         </header>
         <div id={"#{@id}-scroll"} data-preserve-scroll class="grid min-h-0 gap-4 overflow-y-auto px-5 py-4">
           <div>
             <p class="mb-3 flex justify-between gap-2 text-[11px] text-base-content/60">
-              <span class="font-semibold uppercase tracking-wide">{length(@limit.observations)} retained records</span><span>Selected first, then newest</span>
+              <span class="font-semibold uppercase tracking-wide">{ngettext("%{count} retained record", "%{count} retained records", length(@limit.observations))}</span><span>{gettext("Selected first, then newest")}</span>
             </p>
             <ul
               class="grid divide-y divide-base-300"
-              aria-label="Retained quota evidence, selected first then newest"
+              aria-label={gettext("Retained quota evidence, selected first then newest")}
             >
               <li
                 :for={{observation, index} <- Enum.with_index(@limit.observations)}
@@ -62,7 +63,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                         {observation.source}
                         <span
                           class="ml-0.5 text-xs font-normal text-base-content/55"
-                          title="Original provider window slot, not selection priority"
+                          title={gettext("Original provider window slot, not selection priority")}
                         >{observation.slot}</span>
                       </p>
                       <span
@@ -70,8 +71,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                           "shrink-0 text-xs font-medium leading-4 tabular-nums",
                           observation_percent_tone(observation)
                         ]}
-                        title="Remaining quota"
-                      ><span :if={observation.freshness == "stale"} class="font-normal">last known </span>{observation.remaining}</span>
+                        title={gettext("Remaining quota")}
+                      >{if observation.freshness == "stale", do: gettext("last known %{remaining}", remaining: observation.remaining), else: observation.remaining}</span>
                     </div>
                     <div :if={context = Map.get(observation, :saved_reset_context)} class="grid gap-1 text-[11px] leading-5 text-base-content/70">
                       <span data-role="last-verified-quota">{context.label}</span>
@@ -82,17 +83,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                       class={["progress -mt-px h-1.5 w-full", observation_tone(observation)]}
                       value={observation.remaining_value}
                       max="100"
-                      aria-label={"#{observation.source}: #{observation.remaining} remaining, #{observation.freshness}#{if observation.selected?, do: ", selected for display", else: ", not selected"}"}
+                      aria-label={observation_aria_label(observation)}
                     >{observation.remaining}</progress>
                     <div class="flex flex-wrap justify-between gap-x-3 gap-y-0.5 text-[11px] leading-4 text-base-content/60">
                       <span
                         class="min-w-0 truncate"
-                        title="Timestamp of the retained evidence; values may include earlier reports"
+                        title={gettext("Timestamp of the retained evidence; values may include earlier reports")}
                       >
-                        evidence as of {observation.observed_at}
+                        {gettext("evidence as of %{time}", time: observation.observed_at)}
                       </span>
                       <span>
-                        {observation.freshness}<span :if={observation_measurement_pending?(observation)}> · retained measurement</span>
+                        {if observation_measurement_pending?(observation), do: gettext("%{freshness} · retained measurement", freshness: freshness_label(observation.freshness)), else: freshness_label(observation.freshness)}
                       </span>
                     </div>
                   </summary>
@@ -114,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                 JS.remove_class("hidden", to: "##{@id} [data-extra-evidence='true']")
                 |> JS.hide(to: "##{@id}-show-all")
               }
-            >Show all {length(@limit.observations)} records</button>
+            >{ngettext("Show all %{count} record", "Show all %{count} records", length(@limit.observations))}</button>
           </div>
         </div>
         <footer class="flex shrink-0 justify-end border-t border-base-300 px-5 py-2">
@@ -124,11 +125,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
             class="btn btn-ghost btn-sm"
             data-role="dialog-dismiss"
             phx-click={close(@id)}
-          >Close</button>
+          >{gettext("Close")}</button>
         </footer>
       </.focus_wrap>
       <form method="dialog" class="modal-backdrop">
-        <button id={"#{@id}-backdrop"} type="button" phx-click={close(@id)}>Close quota observations</button>
+        <button id={"#{@id}-backdrop"} type="button" phx-click={close(@id)}>{gettext("Close quota observations")}</button>
       </form>
     </dialog>
     """
@@ -169,6 +170,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
       _neutral -> "text-base-content/50"
     end
   end
+
+  defp observation_aria_label(%{selected?: true} = observation),
+    do: gettext("%{source}: %{remaining} remaining, %{freshness}, selected for display", source: observation.source, remaining: observation.remaining, freshness: freshness_label(observation.freshness))
+
+  defp observation_aria_label(observation),
+    do: gettext("%{source}: %{remaining} remaining, %{freshness}, not selected", source: observation.source, remaining: observation.remaining, freshness: freshness_label(observation.freshness))
+
+  defp freshness_label("fresh"), do: gettext("fresh")
+  defp freshness_label("stale"), do: gettext("stale")
+  defp freshness_label(_state), do: gettext("unknown")
 
   defp observation_measurement_pending?(%{measurement_pending?: true}), do: true
   defp observation_measurement_pending?(_observation), do: false

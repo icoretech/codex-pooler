@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.InstanceSettings.Settings
@@ -120,10 +122,10 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     Map.new(settings_groups(), fn group ->
       cond do
         group == saved_group ->
-          {group, %{tone: :success, message: "Saved"}}
+          {group, %{tone: :success, message: gettext("Saved")}}
 
         dirty_group?(form_params, group_snapshots, group) ->
-          {group, %{tone: :warning, message: "Unsaved changes, not saved by this action"}}
+          {group, %{tone: :warning, message: gettext("Unsaved changes, not saved by this action")}}
 
         true ->
           {group, nil}
@@ -134,7 +136,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
   @spec dirty_card_status(map(), map(), String.t()) :: map() | nil
   def dirty_card_status(form_params, group_snapshots, group) do
     if dirty_group?(form_params, group_snapshots, group),
-      do: %{tone: :warning, message: "Unsaved changes"},
+      do: %{tone: :warning, message: gettext("Unsaved changes")},
       else: nil
   end
 

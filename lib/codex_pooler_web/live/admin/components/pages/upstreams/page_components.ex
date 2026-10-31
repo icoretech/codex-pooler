@@ -53,21 +53,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :uploads, :map, required: true
   attr :datetime_preferences, :map, required: true
 
+  @spec upstreams_page(map()) :: Phoenix.LiveView.Rendered.t()
   def upstreams_page(assigns) do
     ~H"""
     <section id="admin-upstreams-live" phx-hook="SavedResetConnection" class="grid min-w-0 gap-6">
       <AdminComponents.saved_reset_connection_notice id="saved-reset-connection-list" in_flight={Enum.any?(@upstream_accounts, &saved_reset_open?/1)} />
       <AdminComponents.page_header
         id="upstream-account-page-header"
-        title="Upstreams"
-        description="The accounts your Pools serve from: token health, quota windows, and the saved-reset bank."
+        title={gettext("Upstreams")}
+        description={gettext("The accounts your Pools serve from: token health, quota windows, and the saved-reset bank.")}
       >
         <:actions>
           <AdminComponents.action_button
             :if={@pools == []}
             id="upstream-account-page-create-pool"
             icon="hero-server-stack"
-            label="Create Pool"
+            label={gettext("Create Pool")}
             navigate={~p"/admin/pools"}
             size={:md}
             variant={:primary}
@@ -118,11 +119,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         <AdminComponents.empty_state
           :if={@upstream_accounts == []}
           id="upstream-account-empty-state"
-          title={if @pools == [], do: "No Pools Found", else: "No upstream accounts"}
+          title={if @pools == [], do: gettext("No Pools Found"), else: gettext("No upstream accounts")}
           description={
             if @pools == [],
-              do: "Create a Pool before importing upstream auth.json.",
-              else: "Import upstream auth.json to connect an account to a Pool."
+              do: gettext("Create a Pool before importing upstream auth.json."),
+              else: gettext("Import upstream auth.json to connect an account to a Pool.")
           }
           icon="hero-cloud-arrow-up"
         >
@@ -130,7 +131,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             <AdminComponents.action_button
               id="upstream-empty-create-pool"
               icon="hero-server-stack"
-              label="Create Pool"
+              label={gettext("Create Pool")}
               navigate={~p"/admin/pools"}
               variant={:primary}
             />
@@ -187,14 +188,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
     ~H"""
     <div id="upstream-query-filter" class="upstream-filter-query grid gap-2">
-      <label for={@field.id} class="sr-only">Search</label>
+      <label for={@field.id} class="sr-only">{gettext("Search")}</label>
       <div class="input input-bordered flex min-h-10 w-full items-center gap-2">
         <input
           id={@field.id}
           name={@field.name}
           type="text"
           value={@value}
-          placeholder="Search upstreams..."
+          placeholder={gettext("Search upstreams...")}
           class="peer grow text-sm font-normal"
         />
         <button
@@ -202,7 +203,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           type="button"
           class="grid size-6 shrink-0 place-items-center rounded-full text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary peer-placeholder-shown:hidden"
           phx-click="clear_upstream_query_filter"
-          aria-label="Clear upstream search"
+          aria-label={gettext("Clear upstream search")}
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
@@ -226,7 +227,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       >
         <summary
           data-role="status-filter-trigger"
-          aria-label="Status"
+          aria-label={gettext("Status")}
           class="select flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
         >
           <.status_filter_icon option={@selected} />
@@ -291,30 +292,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         id="upstream-page-oauth-link-action"
         type="button"
         phx-click="open_oauth_link"
-        aria-label="Link OpenAI account"
+        aria-label={gettext("Link OpenAI account")}
         class="btn btn-primary min-w-0 justify-center gap-2 px-4"
       >
         <.icon name="hero-link" class="size-4 shrink-0" />
-        <span class="truncate">Link</span>
+        <span class="truncate">{gettext("Link")}</span>
       </button>
       <.link
         id="upstream-page-create-invite-action"
         patch={@invite_path}
-        aria-label="Invite account"
+        aria-label={gettext("Invite account")}
         class="btn btn-secondary min-w-0 justify-center gap-2 px-4"
       >
         <.icon name="hero-user-plus" class="size-4 shrink-0" />
-        <span class="truncate">Invite</span>
+        <span class="truncate">{gettext("Invite")}</span>
       </.link>
       <button
         id="upstream-page-import-auth-json-action"
         type="button"
         phx-click="open_import_auth_json"
-        aria-label="Import auth.json"
+        aria-label={gettext("Import auth.json")}
         class="btn btn-accent min-w-0 justify-center gap-2 px-4"
       >
         <.icon name="hero-document-arrow-up" class="size-4 shrink-0" />
-        <span class="truncate">Import</span>
+        <span class="truncate">{gettext("Import")}</span>
       </button>
     </div>
     """
@@ -331,6 +332,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :pool_options, :list, required: true
   attr :datetime_preferences, :map, default: %{}
 
+  @spec oauth_link_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def oauth_link_dialog(assigns) do
     assigns =
       assigns
@@ -405,7 +407,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 for="oauth_link_pool_id"
                 class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
               >
-                Pool
+                {gettext("Pool")}
               </label>
               <select
                 id="oauth_link_pool_id"
@@ -413,7 +415,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 class="select w-full"
               >
                 <option value="" selected={oauth_pool_selected?(@oauth_link_form, "")}>
-                  Select Pool
+                  {gettext("Select Pool")}
                 </option>
                 <option
                   :for={{label, value} <- @pool_options}
@@ -475,7 +477,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               :if={@oauth_cockpit_path}
               id="oauth-link-open-cockpit"
               icon="hero-cloud-arrow-up"
-              label="Open cockpit"
+              label={gettext("Open cockpit")}
               navigate={@oauth_cockpit_path}
               variant={:primary}
             />
@@ -483,7 +485,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_oauth_link">close</button>
+        <button type="button" phx-click="cancel_oauth_link">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -492,6 +494,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :account, :map, default: nil
   attr :form, :any, default: nil
 
+  @spec rename_account_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def rename_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
@@ -506,11 +509,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p id="rename-upstream-account-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">
-            Upstream account · {@account.label}
+            {gettext("Upstream account · %{label}", label: @account.label)}
           </p>
-          <h2 id="rename-upstream-account-dialog-title" class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
+          <h2 id="rename-upstream-account-dialog-title" class="mt-1 text-2xl font-bold text-base-content">{gettext("Rename upstream account")}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Update the operator label shown for this upstream account.
+            {gettext("Update the operator label shown for this upstream account.")}
           </p>
         </div>
 
@@ -525,8 +528,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           <.input
             field={@form[:account_label]}
             type="text"
-            label="Label"
-            placeholder="Account label"
+            label={gettext("Label")}
+            placeholder={gettext("Account label")}
             required
           />
         </.form>
@@ -538,14 +541,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="rename-upstream-account-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_rename_account"
             />
             <AdminComponents.action_button
               id="rename-upstream-account-submit"
               icon="hero-pencil-square"
-              label="Rename"
+              label={gettext("Rename")}
               type="submit"
               form="rename-upstream-account-form"
               variant={:primary}
@@ -554,7 +557,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_rename_account">close</button>
+        <button type="button" phx-click="cancel_rename_account">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -563,6 +566,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :account, :map, default: nil
   attr :form, :any, required: true
 
+  @spec delete_account_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def delete_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
@@ -575,11 +579,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Upstream account</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@account.label}?</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Upstream account")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Delete %{label}?", label: @account.label)}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            This permanently removes the account, credentials, quotas, Pool assignments, and account-specific statistics from the database.
-            Shared request accounting remains without an account association. This cannot be undone.
+            {gettext("This permanently removes the account, credentials, quotas, Pool assignments, and account-specific statistics from the database. Shared request accounting remains without an account association. This cannot be undone.")}
           </p>
         </div>
         <.form
@@ -598,7 +601,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@account.label}</span> to confirm
+              <span class="font-semibold text-base-content">{gettext("Type %{label} to confirm", label: @account.label)}</span>
             </:label_content>
           </.input>
         </.form>
@@ -610,14 +613,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="delete-upstream-account-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_account"
             />
             <AdminComponents.action_button
               id="delete-upstream-account-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="delete-upstream-account-form"
               variant={:danger}
@@ -626,7 +629,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_account">close</button>
+        <button type="button" phx-click="cancel_delete_account">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -637,20 +640,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   attr :account_label, :string, required: true
 
+  @spec provider_credits_policy_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def provider_credits_policy_dialog(assigns) do
     ~H"""
     <dialog :if={@account && @form} id="provider-credits-policy-dialog" class="modal modal-bottom overflow-x-hidden sm:modal-middle" aria-labelledby="provider-credits-policy-dialog-title provider-credits-policy-dialog-eyebrow" aria-modal="true" phx-window-keydown="cancel_provider_credits_policy" phx-key="escape" phx-remove={JS.pop_focus()} open>
       <.focus_wrap id="provider-credits-policy-dialog-panel" class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl" phx-mounted={JS.focus(to: "#provider-credits-enabled")}>
         <div class="border-b border-base-300 px-5 py-4">
-          <p id="provider-credits-policy-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">Upstream account · {@account_label}</p>
-          <h2 id="provider-credits-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">Provider credits</h2>
-          <p class="mt-1 text-xs leading-5 text-base-content/60">Balance and admission policy for every Pool using this upstream.</p>
+          <p id="provider-credits-policy-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">{gettext("Upstream account · %{label}", label: @account_label)}</p>
+          <h2 id="provider-credits-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">{gettext("Provider credits")}</h2>
+          <p class="mt-1 text-xs leading-5 text-base-content/60">{gettext("Balance and admission policy for every Pool using this upstream.")}</p>
         </div>
         <div class="grid gap-4 p-5">
           <ProviderCreditsComponents.provider_credits_policy_form form={@form} />
           <details :if={Map.has_key?(@account, :provider_credits_summary)} id="provider-credits-observation-details" class="group border-t border-base-300 pt-4" data-preserve-open>
             <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
-              Balance and availability <.icon name="hero-chevron-right" class="size-4 text-base-content/50 transition-transform group-open:rotate-90" />
+              {gettext("Balance and availability")} <.icon name="hero-chevron-right" class="size-4 text-base-content/50 transition-transform group-open:rotate-90" />
             </summary>
             <div class="pt-4">
               <ProviderCreditsComponents.provider_credits_details summary={@account.provider_credits_summary} />
@@ -659,13 +663,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </div>
         <AdminComponents.dialog_footer id="provider-credits-policy-dialog-footer">
           <:actions>
-            <AdminComponents.action_button id="provider-credits-policy-cancel" label="Cancel" variant={:ghost} phx-click="cancel_provider_credits_policy" />
-            <AdminComponents.action_button id="provider-credits-save" label="Save policy" icon="hero-check" type="submit" form="provider-credits-policy-form" variant={:primary} phx-disable-with="Saving…" />
+            <AdminComponents.action_button id="provider-credits-policy-cancel" label={gettext("Cancel")} variant={:ghost} phx-click="cancel_provider_credits_policy" />
+            <AdminComponents.action_button id="provider-credits-save" label={gettext("Save policy")} icon="hero-check" type="submit" form="provider-credits-policy-form" variant={:primary} phx-disable-with={gettext("Saving…")} />
           </:actions>
         </AdminComponents.dialog_footer>
       </.focus_wrap>
       <form method="dialog" class="modal-backdrop">
-        <button id="provider-credits-policy-backdrop" type="button" phx-click="cancel_provider_credits_policy">close</button>
+        <button id="provider-credits-policy-backdrop" type="button" phx-click="cancel_provider_credits_policy">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -676,6 +680,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :confirming_saved_reset_redemption, :map, default: nil
   attr :datetime_preferences, :map, required: true
 
+  @spec saved_reset_policy_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_policy_dialog(assigns) do
     assigns =
       assigns
@@ -696,11 +701,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       >
         <div class="border-b border-base-300 px-5 py-4">
           <p id="saved-reset-policy-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">
-            Codex saved resets · {@account.label}
+            {gettext("Codex saved resets · %{label}", label: @account.label)}
           </p>
-          <h2 id="saved-reset-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">Saved reset bank</h2>
+          <h2 id="saved-reset-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">{gettext("Saved reset bank")}</h2>
           <p class="mt-1 text-xs leading-5 text-base-content/60">
-            Account-level quota recovery capacity: spent automatically by policy or through one queued manual attempt.
+            {gettext("Account-level quota recovery capacity: spent automatically by policy or through one queued manual attempt.")}
           </p>
         </div>
 
@@ -728,7 +733,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 aria-valuenow={min(@bank_count, 5)}
                 aria-valuemin="0"
                 aria-valuemax="5"
-                aria-label={"#{@bank_count} saved resets"}
+                aria-label={ngettext("%{count} saved reset", "%{count} saved resets", @bank_count)}
                 class="flex w-24 items-center gap-1"
               >
                 <span
@@ -749,7 +754,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 title={@account.saved_resets.next_expires_title}
               >
                 <.icon name="hero-clock" class="size-3 shrink-0" />
-                <span>next expires in {@next_expires_in}</span>
+                <span>{gettext("next expires in %{duration}", duration: @next_expires_in)}</span>
               </span>
               <span class="ml-auto flex items-center gap-2.5">
                 <label
@@ -757,7 +762,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                   for="saved-reset-policy-auto-redeem-enabled"
                   class="flex cursor-pointer items-center gap-2"
                 >
-                  <span class="text-xs font-medium text-base-content/60">Auto redeem</span>
+                  <span class="text-xs font-medium text-base-content/60">{gettext("Auto redeem")}</span>
                   <input
                     type="hidden"
                     name="saved_reset_policy[auto_redeem_enabled]"
@@ -791,7 +796,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                   title={saved_reset_redemption_title(@account.saved_reset_redemption_action)}
                 >
                   <.icon name="hero-bolt" class="size-4" />
-                  <span>Redeem</span>
+                  <span>{gettext("Redeem")}</span>
                 </button>
               </span>
             </div>
@@ -842,7 +847,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             open
           >
             <summary class="flex cursor-pointer items-center justify-between gap-3 px-5 py-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
-              <span>All expirations</span>
+              <span>{gettext("All expirations")}</span>
               <.icon
                 name="hero-chevron-right"
                 class="size-4 text-base-content/50 transition-transform group-open:rotate-90"
@@ -857,7 +862,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 saved_resets={@account.saved_resets}
                 calendar_path={~p"/admin/upstreams/#{@account.identity.id}/saved-reset-expirations.ics"}
                 datetime_preferences={@datetime_preferences}
-                empty_label="No expiration dates reported for the available saved resets yet."
+                empty_label={gettext("No expiration dates reported for the available saved resets yet.")}
               />
             </div>
           </details>
@@ -868,7 +873,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             data-preserve-open
           >
             <summary class="flex cursor-pointer items-center justify-between gap-3 px-5 py-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
-              <span>Advanced policy settings</span>
+              <span>{gettext("Advanced policy settings")}</span>
               <.icon
                 name="hero-chevron-right"
                 class="size-4 text-base-content/50 transition-transform group-open:rotate-90"
@@ -890,7 +895,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="saved-reset-policy-cancel"
-              label="Close"
+              label={gettext("Close")}
               variant={:ghost}
               phx-click="cancel_saved_reset_policy"
             />
@@ -899,7 +904,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               data-saved-reset-action="save-policy"
               data-server-disabled="false"
               icon="hero-check"
-              label="Save policy"
+              label={gettext("Save policy")}
               type="submit"
               form="saved-reset-policy-form"
               variant={:primary}
@@ -908,7 +913,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_saved_reset_policy">close</button>
+        <button type="button" phx-click="cancel_saved_reset_policy">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -945,12 +950,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   defp saved_reset_open?(account), do: match?(%{saved_reset_operation: %{open?: true}}, account)
 
-  defp saved_reset_redemption_title(%{available?: true}), do: "Queue manual redemption"
+  defp saved_reset_redemption_title(%{available?: true}), do: gettext("Queue manual redemption")
 
   defp saved_reset_redemption_title(%{reason: reason}) when is_binary(reason),
     do: reason
 
-  defp saved_reset_redemption_title(_action), do: "Saved reset redemption unavailable"
+  defp saved_reset_redemption_title(_action), do: gettext("Saved reset redemption unavailable")
 
   attr :accounts, :list, required: true
   attr :account_panel_views, :map, required: true
@@ -1015,8 +1020,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   defp oauth_pending_flow?(%{status: "pending"}), do: true
   defp oauth_pending_flow?(_flow), do: false
 
-  defp oauth_dialog_dismiss_label(%{status: "completed"}), do: "Close"
-  defp oauth_dialog_dismiss_label(_flow), do: "Cancel"
+  defp oauth_dialog_dismiss_label(%{status: "completed"}), do: gettext("Close")
+  defp oauth_dialog_dismiss_label(_flow), do: gettext("Cancel")
 
   # The eyebrow already names the provider, so the title spends its words on the
   # thing the operator cannot otherwise see once the flow starts: where this
@@ -1029,22 +1034,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   # completed screen gets the declarative twin of the same sentence: same
   # subject, same Pool, stated as fact.
   defp oauth_dialog_title(:relink, account, _form, _pool_options, %{status: "completed"}),
-    do: "#{oauth_target_label(account)} reauthorized"
+    do: gettext("%{label} reauthorized", label: oauth_target_label(account))
 
   defp oauth_dialog_title(:relink, account, _form, _pool_options, _flow),
-    do: "Relink #{oauth_target_label(account)}"
+    do: gettext("Relink %{label}", label: oauth_target_label(account))
 
   defp oauth_dialog_title(_mode, _account, form, pool_options, %{status: "completed"}) do
     case oauth_selected_pool_label(form, pool_options) do
-      nil -> "Account added"
-      pool -> "Added to #{pool}"
+      nil -> gettext("Account added")
+      pool -> gettext("Added to %{pool}", pool: pool)
     end
   end
 
   defp oauth_dialog_title(_mode, _account, form, pool_options, _flow) do
     case oauth_selected_pool_label(form, pool_options) do
-      nil -> "Link an account"
-      pool -> "Link an account to #{pool}"
+      nil -> gettext("Link an account")
+      pool -> gettext("Link an account to %{pool}", pool: pool)
     end
   end
 
@@ -1059,25 +1064,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   # The completed clause comes first: a finished relink would otherwise fall into
   # the relink clause below and keep telling the operator to approve again.
   defp oauth_dialog_description(_mode, _account, %{status: "completed"}) do
-    "Routing, quota, and health for this account live on its cockpit."
+    gettext("Routing, quota, and health for this account live on its cockpit.")
   end
 
   defp oauth_dialog_description(_mode, _account, %{flow_kind: "browser", status: "pending"}) do
-    "Approve in the tab that opened, then paste the callback URL back here."
+    gettext("Approve in the tab that opened, then paste the callback URL back here.")
   end
 
   defp oauth_dialog_description(_mode, _account, %{flow_kind: "device", status: "pending"}) do
-    "Enter the code below to approve. This dialog updates when the account is ready."
+    gettext("Enter the code below to approve. This dialog updates when the account is ready.")
   end
 
   defp oauth_dialog_description(:relink, _account, _flow),
-    do: "Approve again to refresh this account's authorization."
+    do: gettext("Approve again to refresh this account's authorization.")
 
   defp oauth_dialog_description(_mode, _account, _flow),
-    do: "Choose a Pool, then approve the account."
+    do: gettext("Choose a Pool, then approve the account.")
 
-  defp oauth_callback_submit_label(:relink), do: "Complete relink"
-  defp oauth_callback_submit_label(_mode), do: "Complete link"
+  defp oauth_callback_submit_label(:relink), do: gettext("Complete relink")
+  defp oauth_callback_submit_label(_mode), do: gettext("Complete link")
 
   # A pending message describes the flow that is running, so it renders inside
   # that flow's own section rather than floating above the dialog body.
@@ -1120,5 +1125,5 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
        when is_binary(account_id) and account_id != "",
        do: account_id
 
-  defp oauth_target_label(_account), do: "selected account"
+  defp oauth_target_label(_account), do: gettext("selected account")
 end

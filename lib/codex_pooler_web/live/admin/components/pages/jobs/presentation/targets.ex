@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
   @spec job_target(map()) :: map() | nil
   def job_target(%{target: target}) when is_map(target) do
     case job_target_variant(target) do
@@ -44,7 +45,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   defp assignment_job_target(target) do
     target =
       labeled_target(
-        "Account",
+        gettext("Account"),
         target.assignment_identity_label,
         target.assignment_id,
         target_assignment_secondary(target),
@@ -55,11 +56,11 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   end
 
   defp direct_identity_job_target(target) do
-    status = target_status("Status", target.direct_identity_status)
+    status = target_status(gettext("Status"), target.direct_identity_status)
 
     target =
       labeled_target(
-        "Account",
+        gettext("Account"),
         target.direct_identity_label,
         target.upstream_identity_id,
         status,
@@ -72,18 +73,18 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   # The slug restates the Pool name it is derived from, so it stays out of the
   # row and the card; the drawer still carries the identifying detail.
   defp pool_job_target(target) do
-    target = labeled_target("Pool", target.pool_name, target.pool_id, nil, nil)
+    target = labeled_target(gettext("Pool"), target.pool_name, target.pool_id, nil, nil)
     Map.put(target, :kind, :pool)
   end
 
   defp api_key_job_target(target) do
-    prefix = target_status("Prefix", target.api_key_prefix)
-    target = labeled_target("API key", target.api_key_label, target.api_key_id, prefix, prefix)
+    prefix = target_status(gettext("Prefix"), target.api_key_prefix)
+    target = labeled_target(gettext("API key"), target.api_key_label, target.api_key_id, prefix, prefix)
     Map.put(target, :kind, :api_key)
   end
 
   defp rollup_job_target(target) do
-    primary = "Rollup #{target.rollup_date}"
+    primary = gettext("Rollup %{date}", date: target.rollup_date)
 
     %{
       primary: primary,
@@ -105,9 +106,9 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
 
   defp target_assignment_secondary(target) do
     [
-      target_label("Assignment", target.assignment_label, target.assignment_id),
-      target_label("Pool", target.pool_name, target.pool_id),
-      target_status("Status", target.assignment_status || target.assignment_identity_status)
+      target_label(gettext("Assignment"), target.assignment_label, target.assignment_id),
+      target_label(gettext("Pool"), target.pool_name, target.pool_id),
+      target_status(gettext("Status"), target.assignment_status || target.assignment_identity_status)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
@@ -116,9 +117,9 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
 
   defp target_assignment_secondary_title(target) do
     [
-      target_title("Assignment", target.assignment_label, target.assignment_id),
-      target_title("Pool", target.pool_name, target.pool_id),
-      target_status("Status", target.assignment_status || target.assignment_identity_status)
+      target_title(gettext("Assignment"), target.assignment_label, target.assignment_id),
+      target_title(gettext("Pool"), target.pool_name, target.pool_id),
+      target_status(gettext("Status"), target.assignment_status || target.assignment_identity_status)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
@@ -126,25 +127,47 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   end
 
   defp target_label(kind, label, id) do
+    kind = translate_target_kind(kind)
+
     cond do
-      present?(label) -> "#{kind}: #{label}"
-      present?(id) -> "#{kind}: #{short_id(id)}"
+      present?(label) -> gettext("%{kind}: %{label}", kind: kind, label: label)
+      present?(id) -> gettext("%{kind}: %{id}", kind: kind, id: short_id(id))
       true -> nil
     end
   end
 
   defp target_title(kind, label, id) do
+    kind = translate_target_kind(kind)
+
     cond do
-      present?(label) and present?(id) -> "#{kind}: #{label} (#{id})"
-      present?(label) -> "#{kind}: #{label}"
-      present?(id) -> "#{kind}: #{id}"
+      present?(label) and present?(id) -> gettext("%{kind}: %{label} (%{id})", kind: kind, label: label, id: id)
+      present?(label) -> gettext("%{kind}: %{label}", kind: kind, label: label)
+      present?(id) -> gettext("%{kind}: %{id}", kind: kind, id: id)
       true -> nil
     end
   end
 
   defp target_status(kind, value) do
-    if present?(value), do: "#{kind}: #{value}"
+    if present?(value), do: gettext("%{kind}: %{value}", kind: kind, value: translate_status(value))
   end
+
+  defp translate_target_kind("Account"), do: gettext("Account")
+  defp translate_target_kind("Assignment"), do: gettext("Assignment")
+  defp translate_target_kind("Pool"), do: gettext("Pool")
+  defp translate_target_kind("API key"), do: gettext("API key")
+  defp translate_target_kind(kind), do: kind
+
+  defp translate_status("active"), do: gettext("active")
+  defp translate_status("pending"), do: gettext("pending")
+  defp translate_status("refresh_due"), do: gettext("refresh due")
+  defp translate_status("refreshing"), do: gettext("refreshing")
+  defp translate_status("paused"), do: gettext("paused")
+  defp translate_status("refresh_failed"), do: gettext("refresh failed")
+  defp translate_status("reauth_required"), do: gettext("reauth required")
+  defp translate_status("disabled"), do: gettext("disabled")
+  defp translate_status("deleted"), do: gettext("deleted")
+  defp translate_status("errored"), do: gettext("errored")
+  defp translate_status(value), do: value
 
   defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
 

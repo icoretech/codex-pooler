@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
   alias CodexPooler.Mailer
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.InvitesPageComponents
+  alias CodexPoolerWeb.Admin.PoolInviteForm
 
   setup :owner_session
 
@@ -122,6 +123,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
       status: "active",
       pool_name: "Example Pool",
       invited_email: "invitee@example.com",
+      locale: nil,
       inviter_email: "operator@example.com",
       accepted_by_email: nil,
       accepted_at: nil,
@@ -620,6 +622,74 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#invite-row-#{invite.id}", "synced@example.com")
+  end
+
+  test "invitation language derives from the recipient and preserves an explicit choice across recipient edits", %{conn: conn, scope: scope} do
+    pool = pool_fixture(%{name: "Locale Invite Pool"})
+    %{user: recipient} = operator_fixture(scope, %{"email" => "known-locale@example.com"})
+    {:ok, _recipient} = Accounts.update_user_locale(recipient, "zh-CN")
+    {:ok, view, _html} = live(conn, ~p"/admin/invites")
+    open_invite_dialog(view)
+
+    render_change(view, "validate_invite", %{"_target" => ["invite", "invited_email"], "invite" => %{"pool_id" => pool.id, "invited_email" => recipient.email, "send_email" => "false", "locale" => "en"}})
+    assert has_element?(view, "#invite_locale option[value='zh-CN'][selected]")
+    assert has_element?(view, "#pool-invite-locale-default", "Default: recipient account language")
+
+    render_change(view, "validate_invite", %{"_target" => ["invite", "locale"], "invite" => %{"pool_id" => pool.id, "invited_email" => recipient.email, "send_email" => "false", "locale" => "en"}})
+    render_change(view, "validate_invite", %{"_target" => ["invite", "invited_email"], "invite" => %{"pool_id" => pool.id, "invited_email" => "unknown-locale@example.com", "send_email" => "false", "locale" => "en"}})
+    assert has_element?(view, "#invite_locale option[value='en'][selected]")
+    assert has_element?(view, "#pool-invite-locale-default", "Your selected email language is kept")
+
+    view |> element("#pool-invite-form") |> render_submit(%{"invite" => %{"pool_id" => pool.id, "invited_email" => "unknown-locale@example.com", "send_email" => "false", "locale" => "en"}})
+    invite = Repo.get_by!(Invite, pool_id: pool.id, invited_email: "unknown-locale@example.com")
+    assert invite.locale == "en"
+    assert has_element?(view, "#pool-invite-created-locale", "English")
+    assert has_element?(view, "#invite-locale-#{invite.id}", "Email language: English")
+  end
+
+  test "Chinese invite creation uses the current resolved UI language for an unknown recipient", %{conn: conn} do
+    pool = pool_fixture(%{name: "Chinese Invite Pool"})
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/invites")
+    open_invite_dialog(view)
+
+    assert has_element?(view, "label", "邀请邮件语言")
+    assert has_element?(view, "#invite_locale option[value='zh-CN'][selected]")
+
+    view |> element("#pool-invite-form") |> render_submit(%{"invite" => %{"pool_id" => pool.id, "invited_email" => "unknown-chinese@example.com", "send_email" => "true"}})
+    invite = Repo.get_by!(Invite, pool_id: pool.id, invited_email: "unknown-chinese@example.com")
+    assert invite.locale == "zh-CN"
+    assert has_element?(view, "#pool-invite-created-locale", "简体中文")
+    assert_email_sent(subject: "Codex Pooler Pool 邀请")
+  end
+
+  test "invalid invitation language is rejected without creating or emailing an invite", %{conn: conn} do
+    pool = pool_fixture()
+    {:ok, view, _html} = live(conn, ~p"/admin/invites")
+    open_invite_dialog(view)
+    view |> element("#pool-invite-form") |> render_submit(%{"invite" => %{"pool_id" => pool.id, "invited_email" => "invalid-choice@example.com", "send_email" => "true", "locale" => "zh-TW"}})
+
+    assert has_element?(view, "#pool-invite-form", "is invalid")
+    refute Repo.get_by(Invite, pool_id: pool.id, invited_email: "invalid-choice@example.com")
+    assert_no_email_sent()
+  end
+
+  test "upstream reinvite prefill reuses the latest exact recipient language within the selected visible Pool", %{conn: conn, scope: scope} do
+    pool = pool_fixture()
+    other_pool = pool_fixture()
+    {:ok, %{invite: original}} = Access.create_invite(scope, pool, %{invited_email: "stored-locale@example.com", locale: "zh-CN"})
+    {:ok, _revoked} = Access.revoke_invite(scope, original)
+    {:ok, _prefix_match} = Access.create_invite(scope, pool, %{invited_email: "prefix-stored-locale@example.com", locale: "en"})
+    {:ok, _other_pool} = Access.create_invite(scope, other_pool, %{invited_email: "stored-locale@example.com", locale: "en"})
+
+    params = PoolInviteForm.reinvite_params(pool.id, ["stored-locale@example.com"])
+    {:ok, view, _html} = live(conn, ~p"/admin/invites?#{params}")
+    assert has_element?(view, "#invite_locale option[value='zh-CN'][selected]")
+    assert has_element?(view, "#pool-invite-locale-default", "Stored invitation email language")
+
+    view |> form("#pool-invite-form") |> render_submit()
+    replacement = Repo.get_by!(Invite, pool_id: pool.id, invited_email: "stored-locale@example.com", status: "active")
+    assert replacement.locale == "zh-CN"
+    assert has_element?(view, "#pool-invite-created-locale", "简体中文")
   end
 
   defp owner_session(%{conn: conn}) do

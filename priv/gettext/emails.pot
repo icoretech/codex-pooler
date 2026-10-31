@@ -1,0 +1,227 @@
+## This file is a PO Template file.
+##
+## "msgid"s here are often extracted from source code.
+## Add new messages manually only if they're dynamic
+## messages that can't be statically extracted.
+##
+## Run "mix gettext.extract" to bring this file up to
+## date. Leave "msgstr"s empty as changing them here has no
+## effect: edit them in PO (.po) files instead.
+#
+msgid ""
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:105
+#: lib/codex_pooler/access/invite_email.ex:124
+#, elixir-autogen, elixir-format
+msgid "%{inviter} invited you to connect an OpenAI account to %{pool}."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:311
+#, elixir-autogen, elixir-format
+msgid "- none"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:129
+#, elixir-autogen, elixir-format
+msgid "Accept invite"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:107
+#, elixir-autogen, elixir-format
+msgid "Accept invite: %{url}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:110
+#, elixir-autogen, elixir-format
+msgid "After accepting the invite and linking an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy."
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:126
+#, elixir-autogen, elixir-format
+msgid "After you accept and link an OpenAI account, that account becomes part of %{pool} and can be used by its routing policy."
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:95
+#, elixir-autogen, elixir-format
+msgid "An administrator created or updated Codex Pooler operator access for this email."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:289
+#, elixir-autogen, elixir-format
+msgid "Channel id: %{id}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:40
+#: lib/codex_pooler/access/invite_email.ex:122
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler Pool invite"
+msgstr ""
+
+#: lib/codex_pooler/platform/mailer.ex:168
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler SMTP test email"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:276
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler alert"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:286
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler alert notification"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:30
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler operator access"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:37
+#, elixir-autogen, elixir-format
+msgid "Codex Pooler temporary password"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:298
+#, elixir-autogen, elixir-format
+msgid "First seen at: %{time}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:112
+#: lib/codex_pooler/access/invite_email.ex:128
+#, elixir-autogen, elixir-format
+msgid "If this invite was unexpected, verify it with your system administrator before opening it. You can also discard this email."
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:96
+#, elixir-autogen, elixir-format
+msgid "If you did not expect this email, do not sign in with this password. Contact your system administrator or ignore this email."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:288
+#, elixir-autogen, elixir-format
+msgid "Incident id: %{id}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:293
+#, elixir-autogen, elixir-format
+msgid "Incident state: %{state}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:114
+#, elixir-autogen, elixir-format
+msgid "Invited by: %{email}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:299
+#, elixir-autogen, elixir-format
+msgid "Last seen at: %{time}"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:99
+#, elixir-autogen, elixir-format
+msgid "Login URL: %{url}"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:97
+#, elixir-autogen, elixir-format
+msgid "Never forward this temporary password. Codex Pooler administrators will not ask you to send it back."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:297
+#, elixir-autogen, elixir-format
+msgid "Occurrence count: %{count}"
+msgid_plural "Occurrence count: %{count}"
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:100
+#, elixir-autogen, elixir-format
+msgid "Operator email: %{email}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:408
+#, elixir-autogen, elixir-format
+msgid "Pool id: %{id}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:123
+#, elixir-autogen, elixir-format
+msgid "Pool invite for %{pool}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:410
+#, elixir-autogen, elixir-format
+msgid "Reason code: %{code}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:291
+#, elixir-autogen, elixir-format
+msgid "Rule kind: %{kind}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:301
+#, elixir-autogen, elixir-format
+msgid "Safe evidence summary:"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:290
+#, elixir-autogen, elixir-format
+msgid "Scope type: %{scope}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:130
+#, elixir-autogen, elixir-format
+msgid "Sent by %{inviter} from %{email}."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:292
+#, elixir-autogen, elixir-format
+msgid "Severity: %{severity}"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:101
+#, elixir-autogen, elixir-format
+msgid "Temporary password: %{password}"
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:304
+#, elixir-autogen, elixir-format
+msgid "This alert contains metadata only. Runtime content and credentials are never included."
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:131
+#, elixir-autogen, elixir-format
+msgid "This invite is intended only for the Codex account email that received it. Do not forward the link."
+msgstr ""
+
+#: lib/codex_pooler/platform/mailer.ex:169
+#, elixir-autogen, elixir-format
+msgid "This test email confirms Codex Pooler can send email with the current SMTP settings."
+msgstr ""
+
+#: lib/codex_pooler/alerts/delivery/email_delivery.ex:409
+#, elixir-autogen, elixir-format
+msgid "Upstream identity id: %{id}"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:127
+#, elixir-autogen, elixir-format
+msgid "Verify unexpected invites"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:125
+#, elixir-autogen, elixir-format
+msgid "What happens after accepting"
+msgstr ""
+
+#: lib/codex_pooler/access/invite_email.ex:109
+#, elixir-autogen, elixir-format
+msgid "What happens next:"
+msgstr ""
+
+#: lib/codex_pooler/accounts/operators/operator_email.ex:102
+#, elixir-autogen, elixir-format
+msgid "You will be asked to change this password after sign in."
+msgstr ""

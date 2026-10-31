@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   attr :window, :string, default: nil
   attr :traffic_mode, :atom, default: :interval, values: [:interval, :cumulative]
 
+  @spec activity(map()) :: Phoenix.LiveView.Rendered.t()
   def activity(assigns) do
     ~H"""
     <div id="observatory-activity" class="grid min-w-0 gap-8">
@@ -24,6 +25,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   attr :window, :string, default: nil
   attr :traffic_mode, :atom, default: :interval, values: [:interval, :cumulative]
 
+  @spec traffic_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def traffic_panel(assigns) do
     ~H"""
     <section
@@ -31,16 +33,16 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
       class="grid min-w-0 gap-4"
       aria-labelledby="observatory-traffic-heading"
     >
-      <Section.divider id="observatory-traffic-heading" label="Traffic" suffix={@window} />
+      <Section.divider id="observatory-traffic-heading" label={gettext("Traffic")} suffix={@window} />
       <div class="flex justify-end">
         <div
           id="observatory-traffic-mode-control"
           class="observatory-segmented-control"
           role="group"
-          aria-label="Traffic chart mode"
+          aria-label={gettext("Traffic chart mode")}
         >
           <button
-            :for={{label, mode} <- [{"Interval", "interval"}, {"Cumulative", "cumulative"}]}
+            :for={{label, mode} <- [{gettext("Interval"), "interval"}, {gettext("Cumulative"), "cumulative"}]}
             id={"observatory-traffic-mode-#{mode}"}
             type="button"
             class="observatory-segmented-button"
@@ -76,6 +78,10 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
           data-chart-series={@traffic.chart.series}
           data-chart-unit="tokens"
           data-chart-units={@traffic.chart.units}
+          data-chart-unit-label={gettext("tokens")}
+          data-chart-unit-labels={Map.get(@traffic.chart, :unit_labels)}
+          data-chart-default-series-label={gettext("Value")}
+          data-chart-series-label={gettext("Series %{index}", index: "%{index}")}
           data-chart-value-kinds={@traffic.chart.value_kinds}
           data-chart-yaxis={@traffic.chart.yaxis}
           data-chart-height="264"
@@ -88,39 +94,41 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
           data-chart-wheel-scroll="page"
           data-chart-mode-control="observatory-traffic-mode-control"
           data-chart-mode-description="observatory-traffic-mode-description"
+          data-chart-cumulative-description={gettext("Showing cumulative running totals through each time bucket.")}
+          data-chart-interval-description={gettext("Showing interval values for each time bucket.")}
         >
         </div>
       </div>
 
-      <p id="observatory-traffic-title" class="sr-only">Traffic over time</p>
+      <p id="observatory-traffic-title" class="sr-only">{gettext("Traffic over time")}</p>
       <p id="observatory-traffic-desc" class="sr-only">
-        Token activity by model, with cost, shown for each time bucket.
+        {gettext("Token activity by model, with cost, shown for each time bucket.")}
       </p>
       <p id="observatory-traffic-mode-description" class="sr-only" aria-live="polite">
         {if @traffic_mode == :cumulative do
-          "Showing cumulative running totals through each time bucket."
+          gettext("Showing cumulative running totals through each time bucket.")
         else
-          "Showing interval values for each time bucket."
+          gettext("Showing interval values for each time bucket.")
         end}
       </p>
       <ul
         id="observatory-traffic-interval-values"
         class="sr-only"
         data-chart-source="interval"
-        aria-label="Underlying interval values for Traffic over time"
+        aria-label={gettext("Underlying interval values for Traffic over time")}
       >
         <li :for={row <- @traffic.fallback.rows}>
-          {row.label}: {row.total_label}, {row.cost_label}
+          {gettext("%{time}: %{tokens}, %{cost}", time: row.label, tokens: row.total_label, cost: row.cost_label)}
         </li>
       </ul>
       <div id="observatory-traffic-table-fallback" class="sr-only">
         <table>
-          <caption>Traffic by time bucket</caption>
+          <caption>{gettext("Traffic by time bucket")}</caption>
           <thead>
             <tr>
-              <th scope="col">Time</th>
-              <th scope="col">Tokens</th>
-              <th scope="col">Cost</th>
+              <th scope="col">{gettext("Time")}</th>
+              <th scope="col">{gettext("Tokens")}</th>
+              <th scope="col">{gettext("Cost")}</th>
             </tr>
           </thead>
           <tbody>
@@ -131,7 +139,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
             </tr>
           </tbody>
         </table>
-        <p id="observatory-traffic-fallback-total">Total: {@traffic.fallback.total_label}</p>
+        <p id="observatory-traffic-fallback-total">{gettext("Total: %{total}", total: @traffic.fallback.total_label)}</p>
       </div>
     </section>
     """
@@ -142,6 +150,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   attr :loading_more, :boolean, default: false
   attr :load_error, :boolean, default: false
 
+  @spec outcomes_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def outcomes_panel(assigns) do
     assigns = assign(assigns, :visible_outcomes, assigns.outcomes |> List.wrap() |> group_unattributed())
 
@@ -151,10 +160,10 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
       class="grid min-w-0 gap-4"
       aria-labelledby="observatory-outcomes-heading"
     >
-      <Section.divider id="observatory-outcomes-heading" label="Recent outcomes" suffix="Last 60 minutes" />
+      <Section.divider id="observatory-outcomes-heading" label={gettext("Recent outcomes")} suffix={gettext("Last 60 minutes")} />
       <div id="observatory-outcomes-scroll" class="overflow-x-auto">
         <table id="observatory-outcomes-table" class="table table-sm min-w-160">
-          <caption class="sr-only">Recent request outcomes</caption>
+          <caption class="sr-only">{gettext("Recent request outcomes")}</caption>
           <colgroup>
             <col class="observatory-outcome-time" />
             <col class="observatory-outcome-model" />
@@ -166,13 +175,13 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
           </colgroup>
           <thead>
             <tr>
-              <th scope="col">Time</th>
-              <th scope="col">Model</th>
-              <th scope="col">Activity</th>
-              <th scope="col" class="observatory-outcome-client">Client</th>
-              <th scope="col" class="text-center">Status</th>
-              <th scope="col" class="text-right">Tokens · Cache</th>
-              <th scope="col" class="text-right">Cost</th>
+              <th scope="col">{gettext("Time")}</th>
+              <th scope="col">{gettext("Model")}</th>
+              <th scope="col">{gettext("Activity")}</th>
+              <th scope="col" class="observatory-outcome-client">{gettext("Client")}</th>
+              <th scope="col" class="text-center">{gettext("Status")}</th>
+              <th scope="col" class="text-right">{gettext("Tokens · Cache")}</th>
+              <th scope="col" class="text-right">{gettext("Cost")}</th>
             </tr>
           </thead>
           <tbody>
@@ -183,7 +192,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
               class="align-middle"
             >
               <td
-                data-label="Time"
+                data-label={gettext("Time")}
                 class="truncate text-xs tabular-nums text-base-content/70"
                 title={outcome.timestamp}
               >
@@ -192,13 +201,13 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
               <th
                 :if={!Map.has_key?(outcome, :count)}
                 scope="row"
-                data-label="Model"
+                data-label={gettext("Model")}
                 class="max-w-64 font-normal"
               >
                 <div class="flex min-w-0 items-center gap-2">
                   <span class="flex min-w-0 items-baseline gap-1 text-sm leading-4">
                     <span :if={Map.get(outcome, :model_color)} data-role="model-swatch" aria-hidden="true" class="size-2 shrink-0 self-center rounded-xs" style={"background-color: #{outcome.model_color}"}></span>
-                    <span data-role="outcome-model" class={["min-w-0 truncate", if(outcome.model == "Not applicable", do: "text-xs font-normal text-base-content/55", else: "font-semibold")]} title={outcome.model}>{outcome.model}</span>
+                    <span data-role="outcome-model" class={["min-w-0 truncate", if(outcome.model == gettext("Not applicable"), do: "text-xs font-normal text-base-content/55", else: "font-semibold")]} title={outcome.model}>{outcome.model}</span>
                     <span
                       :if={Map.get(outcome, :effort)}
                       data-role="outcome-effort"
@@ -224,17 +233,17 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
               <th
                 :if={Map.has_key?(outcome, :count)}
                 scope="row"
-                data-label="Model"
+                data-label={gettext("Model")}
                 data-role="observatory-outcome-group"
                 class="max-w-56 truncate text-xs font-normal text-base-content/55"
               >
-                {outcome.model} · {outcome.count} requests
+                {ngettext("%{model} · %{count} request", "%{model} · %{count} requests", outcome.count, model: outcome.model, count: outcome.count)}
               </th>
-              <td data-label="Activity" class="truncate text-xs text-base-content/70" title={activity_label(outcome.endpoint)}>{activity_label(outcome.endpoint)}</td>
-              <td data-label="Client" class="observatory-outcome-client max-w-40 text-xs text-base-content/70">
+              <td data-label={gettext("Activity")} class="truncate text-xs text-base-content/70" title={activity_label(outcome.endpoint)}>{activity_label(outcome.endpoint)}</td>
+              <td data-label={gettext("Client")} class="observatory-outcome-client max-w-40 text-xs text-base-content/70">
                 <.client client={Map.get(outcome, :client)} />
               </td>
-              <td data-label="Status" class="text-center">
+              <td data-label={gettext("Status")} class="text-center">
                 <span
                   class={[
                     AdminBadges.status_chip_class(status_for_tone(outcome.status.tone)),
@@ -250,7 +259,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
                   <span class="observatory-outcome-status-label">{outcome.status.label}</span>
                 </span>
               </td>
-              <td data-label="Tokens · Cache" class="whitespace-nowrap text-right tabular-nums">
+              <td data-label={gettext("Tokens · Cache")} class="whitespace-nowrap text-right tabular-nums">
                 <div class="observatory-outcome-tokens flex items-center justify-end gap-2">
                   <span class="flex items-center justify-end gap-2 text-sm leading-4">
                     <span data-role="outcome-tokens" class="text-right font-semibold">{outcome.tokens.label}</span>
@@ -264,7 +273,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
                   </span>
                 </div>
               </td>
-              <td data-label="Cost" class="whitespace-nowrap text-right text-sm tabular-nums">
+              <td data-label={gettext("Cost")} class="whitespace-nowrap text-right text-sm tabular-nums">
                 <span data-role="outcome-cost" class="font-semibold">{outcome.cost.label}</span>
               </td>
             </tr>
@@ -272,14 +281,14 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
         </table>
       </div>
       <p :if={@visible_outcomes == []} id="observatory-outcomes-empty" class="py-4 text-center text-sm text-base-content/70">
-        No requests in the last 60 minutes
+        {gettext("No requests in the last 60 minutes")}
       </p>
       <div :if={@has_more or @load_error} class="flex flex-wrap items-center justify-center gap-3">
         <p :if={@load_error} id="observatory-outcomes-load-error" role="status" class="text-xs text-error">
-          Older requests could not be loaded. Try again.
+          {gettext("Older requests could not be loaded. Try again.")}
         </p>
         <button id="observatory-outcomes-load-more" type="button" class="btn btn-ghost btn-sm" phx-click="load-more-outcomes" disabled={@loading_more}>
-          {if @loading_more, do: "Loading requests…", else: "Load older requests"}
+          {if @loading_more, do: gettext("Loading requests…"), else: gettext("Load older requests")}
         </button>
       </div>
     </section>
@@ -299,20 +308,25 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   defp status_for_tone(:error), do: :failed
   defp status_for_tone(_tone), do: :unknown
 
-  defp outcome_status_icon("Succeeded"), do: "hero-check-circle"
-  defp outcome_status_icon("Client cancelled"), do: "hero-no-symbol"
-  defp outcome_status_icon("In progress"), do: "hero-arrow-path"
-  defp outcome_status_icon("Accepted"), do: "hero-clock"
-  defp outcome_status_icon(_label), do: "hero-exclamation-triangle"
-  defp speed_title(3), do: "Ultrafast"
-  defp speed_title(2), do: "Fast (priority tier)"
-  defp speed_title(_level), do: "Normal speed"
+  defp outcome_status_icon(label) do
+    cond do
+      label == gettext("Succeeded") -> "hero-check-circle"
+      label == gettext("Client cancelled") -> "hero-no-symbol"
+      label == gettext("In progress") -> "hero-arrow-path"
+      label == gettext("Accepted") -> "hero-clock"
+      true -> "hero-exclamation-triangle"
+    end
+  end
+
+  defp speed_title(3), do: gettext("Ultrafast")
+  defp speed_title(2), do: gettext("Fast (priority tier)")
+  defp speed_title(_level), do: gettext("Normal speed")
 
   attr :client, :map, default: nil
 
   defp client(%{client: nil} = assigns) do
     ~H"""
-    <span data-role="outcome-client">Unknown client</span>
+    <span data-role="outcome-client">{gettext("Unknown client")}</span>
     """
   end
 
@@ -362,20 +376,20 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   defp flush(nil, rows, next), do: {:cont, rows, next}
   defp flush(acc, rows, next), do: {:cont, [acc | rows], next}
 
-  defp unattributed?(outcome), do: outcome.model in ["Unknown model", "Not applicable"] and outcome.endpoint not in ["responses", "chat_completions", "completions", "compaction", "audio", "embeddings"] and get_in(outcome, [:tokens, :total]) == 0
+  defp unattributed?(outcome), do: outcome.model in [gettext("Unknown model"), gettext("Not applicable")] and outcome.endpoint not in ["responses", "chat_completions", "completions", "compaction", "audio", "embeddings"] and get_in(outcome, [:tokens, :total]) == 0
 
   defp same_group?(group, outcome), do: group.model == outcome.model and group.endpoint == outcome.endpoint and group.status == outcome.status and Map.get(group, :client) == Map.get(outcome, :client)
 
   defp activity_label(endpoint) do
     case endpoint do
-      "models" -> "Catalog"
-      "usage" -> "Usage"
-      "files" -> "Files"
-      "audio" -> "Transcription"
-      "compaction" -> "Compaction"
-      generation when generation in ["responses", "chat_completions", "completions"] -> "Generation"
-      "embeddings" -> "Embeddings"
-      _ -> "Other"
+      "models" -> gettext("Catalog")
+      "usage" -> gettext("Usage")
+      "files" -> gettext("Files")
+      "audio" -> gettext("Transcription")
+      "compaction" -> gettext("Compaction")
+      generation when generation in ["responses", "chat_completions", "completions"] -> gettext("Generation")
+      "embeddings" -> gettext("Embeddings")
+      _ -> gettext("Other")
     end
   end
 

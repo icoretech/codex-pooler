@@ -9,6 +9,21 @@ defmodule CodexPoolerWeb.Admin.BadgeComponentsTest do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.Dev.ComponentShowcaseData
 
+  setup do
+    Gettext.put_locale("en")
+    :ok
+  end
+
+  test "Chinese routing presentation and unknown plan labels retain identifier boundaries" do
+    Gettext.put_locale("zh_CN")
+
+    assert BadgeComponents.routing_strategy_label("bridge_ring") == "缓存局部性"
+    assert BadgeComponents.routing_strategy_presentation("quota_first").feature == "优先可用配额"
+    assert BadgeComponents.plan_badge_label(nil) == "未知套餐"
+    assert BadgeComponents.plan_badge_label("mystery_plan") == "mystery_plan"
+    assert BadgeComponents.plan_badge_label("pro") == "Pro 200"
+  end
+
   test "routing options cover the domain catalog with shared labels and complete explanations" do
     ids = RoutingStrategy.ids()
     options = PoolForm.routing_strategy_options()

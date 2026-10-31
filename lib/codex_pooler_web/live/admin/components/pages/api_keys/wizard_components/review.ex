@@ -7,13 +7,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
   attr :review_errors, :list, required: true
   attr :warnings, :list, default: []
 
+  @spec api_key_review_step(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_review_step(assigns) do
     ~H"""
     <section id="api-key-step-review-panel" class="grid min-w-0 gap-5">
       <div class="grid gap-1">
-        <h3 class="text-lg font-semibold text-base-content">Review effective policy</h3>
+        <h3 class="text-lg font-semibold text-base-content">{gettext("Review effective policy")}</h3>
         <p class="text-sm leading-6 text-base-content/65">
-          Confirm the normalized policy before saving.
+          {gettext("Confirm the normalized policy before saving.")}
         </p>
       </div>
 
@@ -24,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
       >
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <div class="grid gap-1">
-          <p class="font-semibold">Policy needs attention</p>
+          <p class="font-semibold">{gettext("Policy needs attention")}</p>
           <ul class="list-disc pl-5 text-sm">
             <li :for={error <- @review_errors}>{error}</li>
           </ul>

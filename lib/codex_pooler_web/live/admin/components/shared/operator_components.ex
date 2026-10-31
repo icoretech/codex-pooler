@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
   attr :form, Phoenix.HTML.Form, required: true
 
+  @spec operator_filter_form(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_filter_form(assigns) do
     ~H"""
     <AdminComponents.filter_form
@@ -37,14 +38,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
     ~H"""
     <div class="grid gap-2">
-      <label for={@field.id} class="sr-only">Search</label>
+      <label for={@field.id} class="sr-only">{gettext("Search")}</label>
       <div class="input input-bordered flex min-h-10 w-full items-center gap-2">
         <input
           id={@field.id}
           name={@field.name}
           type="text"
           value={@value}
-          placeholder="Search operators..."
+          placeholder={gettext("Search operators...")}
           class="peer grow text-sm font-normal"
         />
         <button
@@ -52,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           type="button"
           class="grid size-6 shrink-0 place-items-center rounded-full text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary peer-placeholder-shown:hidden"
           phx-click="clear_operator_query_filter"
-          aria-label="Clear operator search"
+          aria-label={gettext("Clear operator search")}
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
@@ -67,7 +68,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp operator_status_filter_dropdown(assigns) do
     ~H"""
     <div class="grid gap-2">
-      <label for="operator-status-filter" class="sr-only">Status</label>
+      <label for="operator-status-filter" class="sr-only">{gettext("Status")}</label>
       <input
         type="hidden"
         id="operator_filters_status"
@@ -124,13 +125,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
     [
       all_operator_status_filter_option(),
       %{
-        label: "Active",
+        label: gettext("Active"),
         value: "active",
         icon: "hero-check-circle",
         icon_class: "text-success"
       },
       %{
-        label: "Disabled",
+        label: gettext("Disabled"),
         value: "disabled",
         icon: "hero-pause-circle",
         icon_class: "text-warning"
@@ -140,7 +141,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
   defp all_operator_status_filter_option do
     %{
-      label: "Status: All",
+      label: gettext("Status: All"),
       value: "all",
       icon: "hero-users",
       icon_class: "text-base-content/60"
@@ -157,6 +158,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   attr :filter_form, Phoenix.HTML.Form, required: true
   attr :datetime_preferences, :map, required: true
 
+  @spec operator_cards(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_cards(assigns) do
     ~H"""
     <section id="operator-inventory-surface" class="grid min-w-0 gap-4 overflow-visible">
@@ -166,8 +168,8 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
         :if={@operators == []}
         id="operators-empty-state"
         icon="hero-users"
-        title="No operators match"
-        description="No operators match the current filters."
+        title={gettext("No operators match")}
+        description={gettext("No operators match the current filters.")}
       />
 
       <div
@@ -226,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
               :if={self_operator?(@operator, @current_scope)}
               class="shrink-0 text-[9px] font-bold uppercase tracking-[0.06em] text-primary/75"
             >
-              you
+              {gettext("you")}
             </span>
           </span>
           <span class="truncate text-xs leading-4 text-base-content/55">{@operator.email}</span>
@@ -241,7 +243,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
       <dl class="grid grid-cols-2 gap-x-3 gap-y-2.5 px-4 py-3">
         <div id={"#{@dom}-totp"} class="min-w-0">
-          <dt class={card_vital_label_class()}>TOTP</dt>
+          <dt class={card_vital_label_class()}>{gettext("TOTP")}</dt>
           <dd
             class={["truncate text-xs leading-5", totp_value_class(@operator)]}
             aria-label={totp_state_label(@operator)}
@@ -251,7 +253,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           </dd>
         </div>
         <div id={"#{@dom}-password-policy"} class="min-w-0">
-          <dt class={card_vital_label_class()}>Password policy</dt>
+          <dt class={card_vital_label_class()}>{gettext("Password policy")}</dt>
           <dd
             class={["truncate text-xs leading-5", password_policy_value_class(@operator)]}
             title={password_policy_label(@operator)}
@@ -260,7 +262,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           </dd>
         </div>
         <div class="min-w-0">
-          <dt class={card_vital_label_class()}>Last login</dt>
+          <dt class={card_vital_label_class()}>{gettext("Last login")}</dt>
           <dd
             id={"#{@dom}-last-login-at"}
             class="truncate text-xs leading-5 text-base-content/65 tabular-nums"
@@ -269,7 +271,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           </dd>
         </div>
         <div class="min-w-0">
-          <dt class={card_vital_label_class()}>Joined</dt>
+          <dt class={card_vital_label_class()}>{gettext("Joined")}</dt>
           <dd
             id={"#{@dom}-joined-at"}
             class="truncate text-xs leading-5 text-base-content/65 tabular-nums"
@@ -288,13 +290,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
       >
         <div class="mx-4 grid gap-2 border-t border-base-300/70 py-3">
           <p class={card_vital_label_class()}>
-            {if @owner?, do: "Pool visibility", else: "Assigned Pools"}
+            {if @owner?, do: gettext("Pool visibility"), else: gettext("Assigned Pools")}
           </p>
           <p :if={@owner?} class="text-xs leading-5 text-base-content/60">
-            The instance owner is not Pool-scoped: every current and future Pool is visible and manageable.
+            {gettext("The instance owner is not Pool-scoped: every current and future Pool is visible and manageable.")}
           </p>
           <p :if={!@owner? and @pool_names == []} class="text-xs leading-5 text-base-content/60">
-            No Pools assigned yet.
+            {gettext("No Pools assigned yet.")}
           </p>
           <p
             :for={pool_name <- @pool_names}
@@ -309,12 +311,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
       <AdminComponents.card_fact_strip id={"#{@dom}-facts"} data-role="operator-card-footer">
         <:fact role="operator-status-cell">
-          <AdminComponents.card_fact_label>Status</AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_label>{gettext("Status")}</AdminComponents.card_fact_label>
           <AdminComponents.card_fact_value
             id={"#{@dom}-status"}
             tone_class={operator_status_value_tone(@operator.status)}
           >
-            {String.capitalize(@operator.status)}
+            {operator_status_label(@operator.status)}
           </AdminComponents.card_fact_value>
         </:fact>
         <:fact role="operator-pools-cell" interactive>
@@ -332,10 +334,10 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
               aria-expanded={aria_bool(@pools_panel_open?)}
               aria-label={pools_trigger_label(@pools_panel_open?, @owner?, @pool_names)}
             >
-              <span class="sr-only">Pools</span>
+              <span class="sr-only">{gettext("Pools")}</span>
             </button>
             <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
-              Pools
+              {gettext("Pools")}
             </span>
           </AdminComponents.card_fact_label>
           <AdminComponents.card_fact_value
@@ -363,7 +365,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{Identity.operator_display_name(@operator)}"}
+        aria-label={gettext("Actions for %{operator}", operator: Identity.operator_display_name(@operator))}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -375,7 +377,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           <AdminComponents.dropdown_action_item
             id={"edit-operator-#{@operator.id}"}
             icon="hero-pencil-square"
-            label="Edit"
+            label={gettext("Edit")}
             phx-click="edit_operator"
             phx-value-id={@operator.id}
           />
@@ -384,7 +386,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           <AdminComponents.dropdown_action_item
             id={"deactivate-operator-#{@operator.id}"}
             icon="hero-pause"
-            label="Deactivate"
+            label={gettext("Deactivate")}
             variant={:danger}
             disabled={
               !can_deactivate_operator?(
@@ -402,7 +404,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           <AdminComponents.dropdown_action_item
             id={"reactivate-operator-#{@operator.id}"}
             icon="hero-play"
-            label="Reactivate"
+            label={gettext("Reactivate")}
             variant={:positive}
             phx-click="reactivate_operator"
             phx-value-id={@operator.id}
@@ -412,7 +414,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           <AdminComponents.dropdown_action_item
             id={"reset-operator-password-#{@operator.id}"}
             icon="hero-arrow-path"
-            label="Reset password"
+            label={gettext("Reset password")}
             disabled={self_operator?(@operator, @current_scope)}
             title={self_action_title(@operator, @current_scope)}
             phx-click="reset_operator_password"
@@ -425,12 +427,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   end
 
   defp password_policy_label(%User{password_change_required: true}),
-    do: "Password change required"
+    do: gettext("Password change required")
 
-  defp password_policy_label(_operator), do: "No password change required"
+  defp password_policy_label(_operator), do: gettext("No password change required")
 
-  defp totp_state_label(%User{totp_status: "active"}), do: "TOTP enabled"
-  defp totp_state_label(_operator), do: "TOTP not set up"
+  defp totp_state_label(%User{totp_status: "active"}), do: gettext("TOTP enabled")
+  defp totp_state_label(_operator), do: gettext("TOTP not set up")
 
   defp can_deactivate_operator?(
          %User{status: "active"} = operator,
@@ -444,22 +446,22 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp deactivate_title(%User{status: "active"} = operator, current_scope, active_operator_count) do
     cond do
       self_operator?(operator, current_scope) ->
-        "Use account settings for your own account"
+        gettext("Use account settings for your own account")
 
       can_deactivate_operator?(operator, current_scope, active_operator_count) ->
-        "Deactivate operator"
+        gettext("Deactivate operator")
 
       true ->
-        "At least one active operator must remain"
+        gettext("At least one active operator must remain")
     end
   end
 
   defp deactivate_title(_operator, _current_scope, _active_operator_count),
-    do: "Deactivate operator"
+    do: gettext("Deactivate operator")
 
   defp self_action_title(%User{} = operator, current_scope) do
     if self_operator?(operator, current_scope) do
-      "Use account settings for your own account"
+      gettext("Use account settings for your own account")
     else
       nil
     end
@@ -468,17 +470,17 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp self_operator?(%User{id: operator_id}, %{user: %{id: operator_id}}), do: true
   defp self_operator?(_operator, _current_scope), do: false
 
-  defp format_datetime(nil, _datetime_preferences), do: "not yet"
+  defp format_datetime(nil, _datetime_preferences), do: gettext("not yet")
 
   defp format_datetime(%DateTime{} = datetime, datetime_preferences),
-    do: DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "not yet")
+    do: DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: gettext("not yet"))
 
   defp card_vital_label_class,
     do: [AdminComponents.card_fact_label_class(), "text-base-content/35"]
 
-  defp operator_role_label("instance_owner"), do: "Instance owner"
-  defp operator_role_label("instance_admin"), do: "Instance admin"
-  defp operator_role_label(_role), do: "No role"
+  defp operator_role_label("instance_owner"), do: gettext("Instance owner")
+  defp operator_role_label("instance_admin"), do: gettext("Instance admin")
+  defp operator_role_label(_role), do: gettext("No role")
 
   defp operator_role_class(true),
     do: "truncate text-[9.5px] font-bold uppercase tracking-[0.07em] text-primary/70"
@@ -486,8 +488,8 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp operator_role_class(false),
     do: "truncate text-[9.5px] font-bold uppercase tracking-[0.07em] text-base-content/45"
 
-  defp totp_value_label(%User{totp_status: "active"}), do: "Enabled"
-  defp totp_value_label(_operator), do: "Not set up"
+  defp totp_value_label(%User{totp_status: "active"}), do: gettext("Enabled")
+  defp totp_value_label(_operator), do: gettext("Not set up")
 
   defp totp_value_class(%User{totp_status: "active"}), do: "text-success"
   defp totp_value_class(_operator), do: "text-warning"
@@ -495,25 +497,24 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp password_policy_value_class(%User{password_change_required: true}), do: "text-warning"
   defp password_policy_value_class(_operator), do: "text-base-content/65"
 
+  defp operator_status_label("active"), do: gettext("Active")
+  defp operator_status_label("disabled"), do: gettext("Disabled")
+  defp operator_status_label(status), do: String.capitalize(status)
+
   defp operator_status_value_tone("active"), do: "text-success"
   defp operator_status_value_tone(_status), do: "text-warning"
 
-  defp pool_count_label(true = _owner?, _pool_names), do: "All Pools"
-  defp pool_count_label(false = _owner?, [_single] = _pool_names), do: "1 Pool"
-  defp pool_count_label(false = _owner?, pool_names), do: "#{length(pool_names)} Pools"
+  defp pool_count_label(true = _owner?, _pool_names), do: gettext("All Pools")
+  defp pool_count_label(false = _owner?, pool_names), do: ngettext("%{count} Pool", "%{count} Pools", length(pool_names))
 
-  defp pools_trigger_label(open?, owner?, pool_names) do
-    action = if open?, do: "Hide", else: "Show"
+  defp pools_trigger_label(true, true, _pool_names), do: gettext("Hide Pool visibility for this operator")
+  defp pools_trigger_label(false, true, _pool_names), do: gettext("Show Pool visibility for this operator")
 
-    subject =
-      if owner? do
-        "Pool visibility"
-      else
-        "assigned Pools (#{pool_count_label(false, pool_names)})"
-      end
+  defp pools_trigger_label(true, false, pool_names),
+    do: gettext("Hide assigned Pools (%{pools}) for this operator", pools: pool_count_label(false, pool_names))
 
-    "#{action} #{subject} for this operator"
-  end
+  defp pools_trigger_label(false, false, pool_names),
+    do: gettext("Show assigned Pools (%{pools}) for this operator", pools: pool_count_label(false, pool_names))
 
   # Same panel and overlay contract as the upstream account card (§5.19 kept
   # them radio-free; §5.17 owns the interactive cell): hidden panels stay in

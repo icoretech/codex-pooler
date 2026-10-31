@@ -64,7 +64,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
           :if={worker_state_badge_visible?(@card.state)}
           data-role="worker-state-badge"
           title={@card.state_label}
-          aria-label={"State: #{@card.state_label}"}
+          aria-label={gettext("State: %{state}", state: @card.state_label)}
           class={[
             worker_state_badge_class(@card.state),
             "shrink-0 gap-1.5 whitespace-nowrap"
@@ -92,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{@card.title}"}
+        aria-label={gettext("Actions for %{title}", title: @card.title)}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -104,7 +104,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
           <AdminComponents.dropdown_action_item
             id={"enqueue-job-worker-#{@card.id}"}
             icon="hero-play"
-            label="Enqueue Now"
+            label={gettext("Enqueue Now")}
             phx-click="enqueue_worker_group"
             phx-value-id={Atom.to_string(@card.key)}
           />
@@ -158,7 +158,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
           <span
             :if={@card.open_marker_overflow_count > 0}
             data-role="open-worker-overflow"
-            title={"#{@card.open_marker_overflow_count} more open targets"}
+            title={open_marker_overflow_title(@card.open_marker_overflow_count)}
             class="grid size-8 shrink-0 place-items-center rounded-full border border-info/30 bg-info/5 text-[0.6875rem] font-semibold text-info"
           >
             +{@card.open_marker_overflow_count}
@@ -207,7 +207,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
           <span
             :if={@card.failure_marker_overflow_count > 0}
             data-role="failed-worker-overflow"
-            title={"#{@card.failure_marker_overflow_count} more failed targets"}
+            title={failure_marker_overflow_title(@card.failure_marker_overflow_count)}
             class="grid size-8 shrink-0 place-items-center rounded-full border border-error/40 bg-error/5 text-[0.6875rem] font-semibold text-error"
           >
             +{@card.failure_marker_overflow_count}
@@ -254,7 +254,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
           <div class="flex min-w-0 items-start justify-between gap-3">
             <div class="min-w-0">
               <p class="text-xs font-semibold uppercase text-error">
-                {if @latest?, do: "Latest failure", else: "Failure detail"}
+                {if @latest?, do: gettext("Latest failure"), else: gettext("Failure detail")}
               </p>
               <p class="mt-1 font-semibold text-base-content [overflow-wrap:anywhere]">
                 {@marker.target_label}
@@ -264,7 +264,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
               id={"job-failure-panel-close-#{@marker.id}"}
               type="button"
               data-role="failure-panel-close"
-              aria-label="Close failure panel"
+              aria-label={gettext("Close failure panel")}
               phx-click="close_worker_failure"
               class="grid size-7 shrink-0 place-items-center rounded-full text-base-content/45 transition-colors hover:bg-error/10 hover:text-error focus:outline-none focus:ring-2 focus:ring-error/40"
             >
@@ -289,13 +289,13 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
               class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-xs text-base-content/60"
             >
               <div>
-                <dt>When</dt>
+                <dt>{gettext("When")}</dt>
                 <dd class="font-semibold tabular-nums text-base-content">
                   {format_job_timestamp(@marker.failed_at, @datetime_preferences)}
                 </dd>
               </div>
               <div>
-                <dt>Attempts</dt>
+                <dt>{gettext("Attempts")}</dt>
                 <dd class="font-semibold tabular-nums text-base-content">
                   {@marker.attempts}
                 </dd>
@@ -322,7 +322,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
       data-density="compact"
     >
       <:fact role="next-run-group">
-        <AdminComponents.card_fact_label>Next run</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_label>{gettext("Next run")}</AdminComponents.card_fact_label>
         <AdminComponents.card_fact_value>
           <span
             data-role="next-run"
@@ -335,19 +335,19 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
         </AdminComponents.card_fact_value>
       </:fact>
       <:fact role="last-run">
-        <AdminComponents.card_fact_label>Last run</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_label>{gettext("Last run")}</AdminComponents.card_fact_label>
         <AdminComponents.card_fact_value class="tabular-nums">
           {format_job_timestamp(@card.last_seen_at, @datetime_preferences)}
         </AdminComponents.card_fact_value>
       </:fact>
       <:fact role="schedule">
-        <AdminComponents.card_fact_label>Schedule</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_label>{gettext("Schedule")}</AdminComponents.card_fact_label>
         <AdminComponents.card_fact_value
           :if={@card.on_demand}
           data-role="cadence-label"
           title={@card.cadence_label}
         >
-          On demand
+          {gettext("On demand")}
         </AdminComponents.card_fact_value>
         <AdminComponents.card_fact_value
           :if={!@card.on_demand}
@@ -379,4 +379,10 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
       _state -> :neutral
     end
   end
+
+  defp open_marker_overflow_title(count),
+    do: ngettext("%{count} more open target", "%{count} more open targets", count)
+
+  defp failure_marker_overflow_title(count),
+    do: ngettext("%{count} more failed target", "%{count} more failed targets", count)
 end

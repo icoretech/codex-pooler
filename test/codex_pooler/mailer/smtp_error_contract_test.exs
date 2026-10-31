@@ -8,7 +8,7 @@ defmodule CodexPooler.Mailer.SmtpErrorContractTest do
     {port, monitor, receipt} = start_smtp!(:no_capabilities)
     {:ok, config} = Config.from_settings(settings(port, %{tls: "always"}))
 
-    assert Mailer.send_smtp_test_email("recipient@example.com", config) ==
+    assert Mailer.send_smtp_test_email("recipient@example.com", config, "en") ==
              {:error, %{code: :smtp_test_email_tls_unavailable, message: "SMTP server does not support the requested TLS mode"}}
 
     assert_server_closed(monitor, receipt)
@@ -18,7 +18,7 @@ defmodule CodexPooler.Mailer.SmtpErrorContractTest do
     {port, monitor, receipt} = start_smtp!(:malformed)
     {:ok, config} = Config.from_settings(settings(port))
 
-    assert Mailer.send_smtp_test_email("recipient@example.com", config) ==
+    assert Mailer.send_smtp_test_email("recipient@example.com", config, "en") ==
              {:error, %{code: :smtp_test_email_unexpected_response, message: "SMTP server returned an unexpected response"}}
 
     assert_server_closed(monitor, receipt)

@@ -20,6 +20,49 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
   setup :register_and_log_in_user
 
+  test "Chinese request logs translate index, drawer and diagnostic labels without translating metadata", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "request-logs-zh", name: "Stored Pool label"})
+    secret = "request-logs-zh-secret-never-render"
+
+    %{request: request} =
+      request_log_fixture(pool, %{
+        requested_model: "gpt-log-zh-evidence",
+        request_metadata: %{"body" => %{"input" => secret}, "routing" => %{"strategy" => "bridge_ring"}},
+        attempt_response_metadata: %{"upstream_websocket_connection" => %{"lifecycle_id" => "77777777-7777-4777-8777-777777777777", "generation" => 2, "reused" => true, "reconnected" => false}}
+      })
+
+    {:ok, view, _html} = live_request_logs(put_locale(conn, "zh-CN"), ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert page_title(view) == "请求日志 - Codex Pooler"
+    assert has_element?(view, "#request-log-page-header", "请求日志")
+    assert has_element?(view, "#request-log-status-filter [data-status=succeeded]", "已成功")
+    assert has_element?(view, "#request-log-upstream-filter [data-upstream-id='']", "任意账号")
+    assert has_element?(view, "#request-log-row-#{request.id}", "已成功")
+    assert has_element?(view, "#request-log-row-#{request.id}", "gpt-log-zh-evidence")
+
+    view |> element("#request-log-#{request.id}-open-details") |> render_click()
+    assert_patch(view)
+    await_request_logs(view)
+
+    assert has_element?(view, "#request-log-detail-outcome", "最终结果")
+    assert has_element?(view, "#request-log-detail-status", "已成功")
+    assert has_element?(view, "#request-log-detail-requested-reasoning", "未设置")
+    assert has_element?(view, "#request-log-detail-routing-strategy", "bridge_ring")
+    assert has_element?(view, "#request-log-detail-attempt-1-reused", "是")
+    assert has_element?(view, "#request-log-detail-attempt-1-reconnected", "否")
+    assert has_element?(view, "#request-log-detail-sanitized-metadata", "脱敏元数据")
+    refute render(view) =~ secret
+  end
+
+  test "Chinese logs empty state and invalid filters remain localized after async loading", %{conn: conn} do
+    {:ok, view, _html} = live_request_logs(put_locale(conn, "zh-CN"), ~p"/admin/request-logs?status=unsupported&date_from=invalid")
+    assert has_element?(view, "#request-log-page-header", "请求日志")
+    assert has_element?(view, "#request-log-empty-state", "没有请求日志")
+    assert has_element?(view, "#request-log-filter-errors", "部分筛选条件已忽略")
+    assert has_element?(view, "#request-log-filter-errors", "不支持此状态筛选条件")
+    assert has_element?(view, "#request-log-filter-errors", "开始日期必须是有效日期")
+    assert has_element?(view, "#request-log-request-id-filter input[aria-label='请求 ID']")
+  end
+
   test "nested query values never crash request or audit log pages", %{conn: conn} do
     for route <- ["/admin/request-logs", "/admin/audit-logs"],
         field <- ~w(pool_id model status date_from date_to request_id upstream_identity_id) do

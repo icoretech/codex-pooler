@@ -5,6 +5,10 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   This module owns the cross-domain joins from visible incidents to their
   linked alert rules, visible delivery channels, and recent delivery attempts.
   Returned projections are metadata-only and scoped by `CodexPooler.Accounts.Scope`.
+
+  A delivery attempt's `channel_label` is nil when neither a live channel nor
+  its retained name snapshot exists. Presentation callers supply their own
+  missing-channel label rather than interpreting a stored channel name.
   """
 
   import Ecto.Query
@@ -61,8 +65,8 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   @type delivery_attempt :: %{
           required(:id) => Ecto.UUID.t(),
           required(:incident_id) => Ecto.UUID.t(),
-          required(:channel_id) => Ecto.UUID.t(),
-          required(:channel_label) => String.t(),
+          required(:channel_id) => Ecto.UUID.t() | nil,
+          required(:channel_label) => String.t() | nil,
           required(:status) => String.t(),
           required(:attempt_number) => pos_integer(),
           required(:max_attempts) => pos_integer(),
@@ -325,7 +329,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   defp delivery_channel_label(_channel, %{channel_display_name: label}) when is_binary(label) and label != "",
     do: label
 
-  defp delivery_channel_label(_channel, _attempt), do: "Deleted channel"
+  defp delivery_channel_label(_channel, _attempt), do: nil
 
   defp safe_attempt_metadata(%{} = metadata) do
     metadata

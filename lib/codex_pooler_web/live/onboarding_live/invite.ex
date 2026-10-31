@@ -6,11 +6,14 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   alias CodexPoolerWeb.OnboardingLive.Invite.Components
 
   @impl true
+  @spec render(map()) :: Phoenix.LiveView.Rendered.t()
   def render(assigns) do
     ~H"""
     <Components.invite_page
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       contract={@contract}
       device_authorization={@device_authorization}
       device_poll_status={@device_poll_status}
@@ -23,17 +26,18 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   end
 
   @impl true
+  @spec mount(map(), map(), Phoenix.LiveView.Socket.t()) :: {:ok, Phoenix.LiveView.Socket.t()}
   def mount(%{"invite_token" => token}, _session, socket) do
     socket =
       socket
       |> assign(
-        page_title: "Codex account onboarding",
+        page_title: gettext("Codex account onboarding"),
         current_origin: nil,
         invite_token: token,
         device_authorization: nil,
         invite_timer: nil,
         invite_timer_ref: nil,
-        device_poll_status: "Waiting for approval.",
+        device_poll_status: gettext("Waiting for approval."),
         completed_onboarding: nil,
         invite_state: :loading,
         error_message: nil,
@@ -68,10 +72,10 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Device authorization started")
+         |> put_flash(:info, gettext("Device authorization started"))
          |> transition_device_pending(
            authorization,
-           "Open the verification page, enter the code, and keep this page open."
+           gettext("Open the verification page, enter the code, and keep this page open.")
          )
          |> schedule_device_poll()}
 
@@ -106,11 +110,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
     with %{account_id: account_id} <- socket.assigns.device_authorization,
          {:ok, completed} <- InviteOnboarding.poll_device(socket.assigns.invite_token, account_id) do
       socket
-      |> put_flash(:info, "Codex account connected")
+      |> put_flash(:info, gettext("Codex account connected"))
       |> transition_accepted(completed_response(completed, public_origin(socket)))
     else
       nil ->
-        transition_device_error(socket, "Start device authorization again.")
+        transition_device_error(socket, gettext("Start device authorization again."))
 
       {:error, %{code: code} = reason}
       when code in [:codex_device_authorization_pending, :codex_device_authorization_slow_down] ->
@@ -137,7 +141,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
         schedule_invite_workflow_tick(socket, retry_seconds)
 
       _state ->
-        transition_device_error(socket, "Start device authorization again.")
+        transition_device_error(socket, gettext("Start device authorization again."))
     end
   end
 
@@ -250,7 +254,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
       invite_state: :accepted,
       contract: nil,
       device_authorization: nil,
-      device_poll_status: "Codex account connected.",
+      device_poll_status: gettext("Codex account connected."),
       completed_onboarding: completed_onboarding
     )
   end
@@ -279,7 +283,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
           assign(socket,
             contract: nil,
             invite_state: :invalid,
-            error_message: "This invite link cannot be used. Ask the operator for a fresh invite."
+            error_message: gettext("This invite link cannot be used. Ask the operator for a fresh invite.")
           )
         end
     end
@@ -296,13 +300,13 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   end
 
   defp error_message(%{code: :codex_device_code_expired}),
-    do: "The authorization window expired. Start device approval again."
+    do: gettext("The authorization window expired. Start device approval again.")
 
   defp error_message(%{code: :invite_email_mismatch}),
-    do: "The authorized Codex account email does not match this invite."
+    do: gettext("The authorized Codex account email does not match this invite.")
 
   defp error_message(_reason),
-    do: "Onboarding could not continue. Try again or ask for a fresh invite."
+    do: gettext("Onboarding could not continue. Try again or ask for a fresh invite.")
 
   defp completed_response(completed, origin) do
     completed.info.email
@@ -349,7 +353,13 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
 
   defp pending_message(reason) do
     retry_after = Map.get(reason, :retry_after_seconds, 5)
-    "Approval is still pending. Checking again in #{retry_after} seconds."
+
+    ngettext(
+      "Approval is still pending. Checking again in %{count} second.",
+      "Approval is still pending. Checking again in %{count} seconds.",
+      retry_after,
+      count: retry_after
+    )
   end
 
   defp public_origin(socket) do

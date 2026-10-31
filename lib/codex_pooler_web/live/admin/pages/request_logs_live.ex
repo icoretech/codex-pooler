@@ -54,7 +54,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     {:ok,
      socket
      |> assign(
-       page_title: "Request logs",
+       page_title: gettext("Request logs"),
        pools: [],
        selected_pool: nil,
        request_logs: empty_request_logs(),
@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       {:noreply,
        socket
        |> assign(request_logs_loading?: false, request_logs_rerun?: false)
-       |> put_flash(:error, "request logs could not be loaded")}
+       |> put_flash(:error, gettext("request logs could not be loaded"))}
     else
       {:noreply, maybe_start_pending_request_logs(socket)}
     end
@@ -240,6 +240,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:request_logs}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -260,11 +262,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           >
             <AdminComponents.page_header
               id="request-log-page-header"
-              title="Request logs"
-              description="Every request through the gateway: where it routed, how it ended, and what it cost."
+              title={gettext("Request logs")}
+              description={gettext("Every request through the gateway: where it routed, how it ended, and what it cost.")}
             >
               <:actions>
-                <.link id="request-log-model-guide-link" href="https://www.codex-pooler.com/docs/operators/lens/#read-the-request-log-warnings" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm gap-1.5"><.icon name="hero-question-mark-circle" class="size-4" /><span class="admin-control-label">Model warnings explained</span></.link>
+                <.link id="request-log-model-guide-link" href="https://www.codex-pooler.com/docs/operators/lens/#read-the-request-log-warnings" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm gap-1.5"><.icon name="hero-question-mark-circle" class="size-4" /><span class="admin-control-label">{gettext("Model warnings explained")}</span></.link>
               </:actions>
             </AdminComponents.page_header>
 
@@ -278,14 +280,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
             >
               <PoolFilterComponents.pool_filter_dropdown
                 id="request-log-pool-filter"
-                label="Pool"
+                label={gettext("Pool")}
                 hidden_id="filters_pool_id"
                 selected_value={@filter_values["pool_id"] || ""}
                 options={@pool_filter_options}
               />
               <.request_log_filter_dropdown
                 id="request-log-status-filter"
-                label="Status"
+                label={gettext("Status")}
                 field_name="status"
                 hidden_id="filters_status"
                 role="status-filter"
@@ -297,7 +299,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
               />
               <.request_log_filter_dropdown
                 id="request-log-upstream-filter"
-                label="Upstream account"
+                label={gettext("Upstream account")}
                 field_name="upstream_identity_id"
                 hidden_id="filters_upstream_identity_id"
                 role="upstream-filter"
@@ -314,7 +316,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
               />
               <.request_log_filter_dropdown
                 id="request-log-model-filter"
-                label="Model"
+                label={gettext("Model")}
                 field_name="model"
                 hidden_id="filters_model"
                 role="model-filter"
@@ -328,12 +330,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
                 <.request_id_filter field={@filter_form[:request_id]} />
                 <AdminComponents.cally_date_filter
                   field={@filter_form[:date_from]}
-                  label="Date from"
+                  label={gettext("Date from")}
                   timezone={@datetime_preferences.timezone}
                 />
                 <AdminComponents.cally_date_filter
                   field={@filter_form[:date_to]}
-                  label="Date to"
+                  label={gettext("Date to")}
                   timezone={@datetime_preferences.timezone}
                 />
               </:advanced>
@@ -346,7 +348,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
             >
               <.icon name="hero-exclamation-triangle" class="size-5" />
               <div>
-                <p class="font-semibold">Some filters were ignored</p>
+                <p class="font-semibold">{gettext("Some filters were ignored")}</p>
                 <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
                   <li :for={error <- @filter_errors}>{error.message}</li>
                 </ul>
@@ -389,8 +391,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           name={@field.name}
           type="text"
           value={@value}
-          placeholder="Correlation or row id"
-          aria-label="Request ID"
+          placeholder={gettext("Correlation or row id")}
+          aria-label={gettext("Request ID")}
           class="min-w-0 grow text-xs font-normal"
         />
         <button
@@ -401,7 +403,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
             @value == "" && "hidden"
           ]}
           phx-click="clear_request_id_filter"
-          aria-label="Clear request id filter"
+          aria-label={gettext("Clear request id filter")}
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
@@ -528,15 +530,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   defp maybe_start_request_logs(socket, generation) do
     if connected?(socket) and not socket.assigns.request_logs_running? do
       preparation = socket.assigns.request_logs_preparation
+      locale = Gettext.get_locale()
 
       socket
       |> assign(request_logs_running?: true, request_logs_rerun?: false)
-      |> start_async({:request_logs, generation}, fn ->
-        build_request_logs_result(preparation)
-      end)
+      |> start_async({:request_logs, generation}, fn -> build_request_logs_result_in_locale(preparation, locale) end)
     else
       assign(socket, :request_logs_rerun?, connected?(socket))
     end
+  end
+
+  defp build_request_logs_result_in_locale(preparation, locale) do
+    Gettext.with_locale(locale, fn -> build_request_logs_result(preparation) end)
   end
 
   defp maybe_start_pending_request_logs(socket) do
@@ -981,7 +986,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       |> List.wrap()
 
     [
-      %{label: "Any model", value: "", icon: "hero-cpu-chip"}
+      %{label: gettext("Any model"), value: "", icon: "hero-cpu-chip"}
       | Enum.map(Enum.uniq(selected_models ++ models), fn model ->
           %{label: model, value: model, icon: "hero-cpu-chip"}
         end)
@@ -1010,7 +1015,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   end
 
   defp any_upstream_filter_option do
-    %{label: "Any account", value: "", icon: "hero-cloud-arrow-up"}
+    %{label: gettext("Any account"), value: "", icon: "hero-cloud-arrow-up"}
   end
 
   defp selected_upstream_filter_option(options, upstream_identity_id) do
@@ -1019,7 +1024,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   defp upstream_account_option(identity) do
     %{
-      label: identity.account_label || identity.chatgpt_account_id || "upstream account",
+      label: identity.account_label || identity.chatgpt_account_id || gettext("upstream account"),
       value: identity.id,
       icon: "hero-cloud-arrow-up"
     }

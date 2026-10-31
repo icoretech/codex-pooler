@@ -9,29 +9,8 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   alias CodexPoolerWeb.DateTimeDisplay
 
   @default_tab "smtp"
-  @base_system_tabs [
-    %{
-      id: "smtp",
-      label: "SMTP"
-    },
-    %{
-      id: "mcp",
-      label: "MCP"
-    },
-    %{
-      id: "metrics",
-      label: "Metrics"
-    },
-    %{
-      id: "gateway",
-      label: "Gateway"
-    },
-    %{
-      id: "firewall",
-      label: "Firewall"
-    }
-  ]
-  @development_tab %{id: "development", label: "Development"}
+  @base_system_tabs ~w(smtp mcp metrics gateway firewall)
+  @development_tab "development"
   @settings_groups ~w(gateway ingress files transcription operator catalog development mcp metrics smtp)
 
   @impl true
@@ -44,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       {:ok,
        socket
        |> assign(
-         page_title: "System",
+         page_title: gettext("System"),
          owner_authorized?: true,
          selected_tab: @default_tab,
          system_tabs: system_tabs(development_helpers_available?),
@@ -68,7 +47,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
     else
       {:ok,
        socket
-       |> assign(page_title: "System", owner_authorized?: false)
+       |> assign(page_title: gettext("System"), owner_authorized?: false)
        |> NotificationCenterHooks.follow_viewer_visibility()}
     end
   end
@@ -163,22 +142,23 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       case InstanceSettings.send_smtp_test_email(
              socket.assigns.settings,
              params,
-             socket.assigns.current_scope
+             socket.assigns.current_scope,
+             socket.assigns.locale.tag
            ) do
         {:ok, %{code: :smtp_test_email_sent}} ->
           %{
             tone: :success,
-            message: "Test email sent to #{operator_email_for_status(socket.assigns.current_scope)}"
+            message: gettext("Test email sent to %{recipient}", recipient: operator_email_for_status(socket.assigns.current_scope))
           }
 
         {:error, %Ecto.Changeset{} = changeset} ->
           smtp_changeset_status(changeset)
 
-        {:error, %{message: message}} ->
-          %{tone: :error, message: message}
+        {:error, %{code: _code} = error} ->
+          %{tone: :error, message: smtp_error_message(error)}
 
         {:error, _reason} ->
-          %{tone: :error, message: "SMTP test email failed"}
+          %{tone: :error, message: gettext("SMTP test email failed")}
       end
 
     {:noreply, assign(socket, :smtp_test_status, status)}
@@ -191,16 +171,18 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
           {:noreply,
            socket
            |> assign(:development_action_status, sample_data_import_status(result))
-           |> put_flash(:info, "Sample data imported")}
+           |> put_flash(:info, gettext("Sample data imported"))}
 
-        {:error, message} ->
+        {:error, reason} ->
+          message = sample_data_import_error_message(reason)
+
           {:noreply,
            socket
            |> assign(:development_action_status, %{tone: :error, message: message})
-           |> put_flash(:error, "Sample data could not be imported")}
+           |> put_flash(:error, gettext("Sample data could not be imported"))}
       end
     else
-      {:noreply, put_flash(socket, :error, "Development helpers are not available")}
+      {:noreply, put_flash(socket, :error, gettext("Development helpers are not available"))}
     end
   end
 
@@ -213,7 +195,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
          CodexPoolerWeb.DevFeatures.impeccable_live_status()
        )}
     else
-      {:noreply, put_flash(socket, :error, "Development helpers are not available")}
+      {:noreply, put_flash(socket, :error, gettext("Development helpers are not available"))}
     end
   end
 
@@ -224,12 +206,19 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       case Catalog.import_openai_pricing_from_url(source_url) do
         {:ok, result} ->
           message =
-            "Pricing imported: #{result.inserted} inserted, #{result.skipped} skipped, #{result.total} total."
+            ngettext(
+              "Pricing imported: %{inserted} inserted, %{skipped} skipped, %{total} total.",
+              "Pricing imported: %{inserted} inserted, %{skipped} skipped, %{total} total.",
+              result.total,
+              inserted: result.inserted,
+              skipped: result.skipped,
+              total: result.total
+            )
 
           {:noreply,
            socket
            |> assign(:development_action_status, %{tone: :success, message: message})
-           |> put_flash(:info, "Pricing catalog imported")}
+           |> put_flash(:info, gettext("Pricing catalog imported"))}
 
         {:error, reason} ->
           message = pricing_import_error_message(reason)
@@ -237,10 +226,10 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
           {:noreply,
            socket
            |> assign(:development_action_status, %{tone: :error, message: message})
-           |> put_flash(:error, "Pricing catalog could not be imported")}
+           |> put_flash(:error, gettext("Pricing catalog could not be imported"))}
       end
     else
-      {:noreply, put_flash(socket, :error, "Development helpers are not available")}
+      {:noreply, put_flash(socket, :error, gettext("Development helpers are not available"))}
     end
   end
 
@@ -273,7 +262,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
     socket =
       socket
       |> assign(settings: latest_settings, form_params: form_params, smtp_test_status: nil)
-      |> put_card_status(group, %{tone: :error, message: "Reload this card and retry."})
+      |> put_card_status(group, %{tone: :error, message: gettext("Reload this card and retry.")})
       |> put_group_form(group, changeset)
 
     if autosave? do
@@ -283,7 +272,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
        put_flash(
          socket,
          :error,
-         "#{card_title(group)} was updated by another operator. Reload and retry."
+         gettext("%{card} was updated by another operator. Reload and retry.", card: card_title(group))
        )}
     end
   end
@@ -330,6 +319,8 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:system}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -337,15 +328,15 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       <section id="admin-system-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="system-page-header"
-          title="System"
-          description="Instance-wide runtime settings, from gateway and ingress behavior to metrics and SMTP delivery."
+          title={gettext("System")}
+          description={gettext("Instance-wide runtime settings, from gateway and ingress behavior to metrics and SMTP delivery.")}
         />
 
         <AdminComponents.empty_state
           :if={!@owner_authorized?}
           id="admin-system-owner-denied"
-          title="System settings require owner access"
-          description="Only instance owners can inspect or change global system settings."
+          title={gettext("System settings require owner access")}
+          description={gettext("Only instance owners can inspect or change global system settings.")}
           icon="hero-lock-closed"
         />
 
@@ -381,7 +372,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   end
 
   defp owner_denied(socket) do
-    put_flash(socket, :error, "Only instance owners can manage system settings")
+    put_flash(socket, :error, gettext("Only instance owners can manage system settings"))
   end
 
   defp put_group_form(socket, group, %Ecto.Changeset{} = changeset) do
@@ -452,18 +443,18 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       {:error, %Ecto.Changeset{} = changeset} ->
         status =
           if stale_changeset?(changeset),
-            do: %{tone: :error, message: "Reload this card and retry."},
-            else: %{tone: :error, message: "Review errors before saving this card."}
+            do: %{tone: :error, message: gettext("Reload this card and retry.")},
+            else: %{tone: :error, message: gettext("Review errors before saving this card.")}
 
         socket =
           if stale_changeset?(changeset) do
             put_flash(
               socket,
               :error,
-              "#{card_title(group)} was updated by another operator. Reload and retry."
+              gettext("%{card} was updated by another operator. Reload and retry.", card: card_title(group))
             )
           else
-            put_flash(socket, :error, "#{card_title(group)} could not be saved")
+            put_flash(socket, :error, gettext("%{card} could not be saved", card: card_title(group)))
           end
 
         {:noreply,
@@ -481,22 +472,22 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
     assign(socket, :card_statuses, Map.put(socket.assigns.card_statuses, group, status))
   end
 
-  defp card_title("gateway"), do: "Gateway controls"
-  defp card_title("ingress"), do: "Runtime ingress"
-  defp card_title("files"), do: "File bridge limits"
-  defp card_title("transcription"), do: "Audio upload limit"
-  defp card_title("operator"), do: "Public operator app URL"
-  defp card_title("catalog"), do: "Pricing catalog source"
-  defp card_title("development"), do: "Development helpers"
-  defp card_title("mcp"), do: "MCP service"
-  defp card_title("metrics"), do: "Metrics bearer token"
-  defp card_title("smtp"), do: "SMTP delivery"
+  defp card_title("gateway"), do: gettext("Gateway controls")
+  defp card_title("ingress"), do: gettext("Runtime ingress")
+  defp card_title("files"), do: gettext("File bridge limits")
+  defp card_title("transcription"), do: gettext("Audio upload limit")
+  defp card_title("operator"), do: gettext("Public operator app URL")
+  defp card_title("catalog"), do: gettext("Pricing catalog source")
+  defp card_title("development"), do: gettext("Development helpers")
+  defp card_title("mcp"), do: gettext("MCP service")
+  defp card_title("metrics"), do: gettext("Metrics bearer token")
+  defp card_title("smtp"), do: gettext("SMTP delivery")
 
   defp maybe_put_save_feedback(socket, group, true, _message) do
     dismiss_ref = make_ref()
     Process.send_after(self(), {:clear_card_status, group, dismiss_ref}, 2_500)
 
-    put_card_status(socket, group, %{tone: :success, message: "Saved", dismiss_ref: dismiss_ref})
+    put_card_status(socket, group, %{tone: :success, message: gettext("Saved"), dismiss_ref: dismiss_ref})
   end
 
   defp maybe_put_save_feedback(socket, _group, false, message) do
@@ -506,14 +497,14 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   defp save_feedback_message("metrics", %{
          "metrics" => %{"bearer_token_action" => "clear"}
        }),
-       do: "Metrics bearer token cleared"
+       do: gettext("Metrics bearer token cleared")
 
-  defp save_feedback_message(group, _params), do: "#{card_title(group)} saved"
+  defp save_feedback_message(group, _params), do: gettext("%{card} saved", card: card_title(group))
 
   defp maybe_put_clear_card_status(card_statuses, "metrics", %{
          "metrics" => %{"bearer_token_action" => "clear"}
        }) do
-    Map.put(card_statuses, "metrics", %{tone: :success, message: "Cleared"})
+    Map.put(card_statuses, "metrics", %{tone: :success, message: gettext("Cleared")})
   end
 
   defp maybe_put_clear_card_status(card_statuses, _group, _params), do: card_statuses
@@ -521,23 +512,62 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   defp import_sample_data do
     case Dev.seed_full() do
       {:ok, result} -> {:ok, result}
-      {:error, %{message: message}} -> {:error, message}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp sample_data_import_error_message(%{code: :dev_support_unavailable, message: "Development support is not compiled for this environment"}),
+    do: gettext("Development support is not compiled for this environment")
+
+  defp sample_data_import_error_message(%{message: message}) when is_binary(message), do: message
 
   defp sample_data_import_status(result) do
     %{
       tone: :success,
-      message: "Sample data imported: #{length(result.pools)} pools, #{length(result.api_keys)} API keys, #{length(result.upstream_identities)} upstream accounts, #{length(result.assignments)} assignments, #{length(result.models)} models, #{length(result.quota_windows)} quota windows, #{length(result.request_logs)} request logs, #{length(result.invites)} invites, #{length(result.audit_events)} audit events, and #{length(result.jobs)} jobs."
+      message:
+        ngettext(
+          "Sample data imported: %{pools} pools, %{api_keys} API keys, %{upstream_accounts} upstream accounts, %{assignments} assignments, %{models} models, %{quota_windows} quota windows, %{request_logs} request logs, %{invites} invites, %{audit_events} audit events, and %{jobs} jobs.",
+          "Sample data imported: %{pools} pools, %{api_keys} API keys, %{upstream_accounts} upstream accounts, %{assignments} assignments, %{models} models, %{quota_windows} quota windows, %{request_logs} request logs, %{invites} invites, %{audit_events} audit events, and %{jobs} jobs.",
+          length(result.jobs),
+          pools: length(result.pools),
+          api_keys: length(result.api_keys),
+          upstream_accounts: length(result.upstream_identities),
+          assignments: length(result.assignments),
+          models: length(result.models),
+          quota_windows: length(result.quota_windows),
+          request_logs: length(result.request_logs),
+          invites: length(result.invites),
+          audit_events: length(result.audit_events),
+          jobs: length(result.jobs)
+        )
     }
   end
 
   defp pricing_import_error_message(%{code: code, message: message}) do
-    "Pricing import failed: #{code} #{message}"
+    gettext("Pricing import failed: %{code} %{message}", code: code, message: pricing_import_message(message))
   end
 
-  defp system_tabs(true), do: @base_system_tabs ++ [@development_tab]
-  defp system_tabs(false), do: @base_system_tabs
+  defp pricing_import_message("url must be a string"), do: gettext("url must be a string")
+  defp pricing_import_message("url must be an absolute HTTP or HTTPS URL"), do: gettext("url must be an absolute HTTP or HTTPS URL")
+  defp pricing_import_message("pricing catalog transport failed"), do: gettext("pricing catalog transport failed")
+  defp pricing_import_message("pricing catalog is not valid JSON"), do: gettext("pricing catalog is not valid JSON")
+  defp pricing_import_message("pricing catalog is incompatible with the supported format"), do: gettext("pricing catalog is incompatible with the supported format")
+  defp pricing_import_message("concurrent pricing snapshot conflicts with candidate semantics"), do: gettext("concurrent pricing snapshot conflicts with candidate semantics")
+  defp pricing_import_message("fast and priority pricing aliases conflict"), do: gettext("fast and priority pricing aliases conflict")
+  defp pricing_import_message("pricing catalog returned HTTP " <> status), do: gettext("pricing catalog returned HTTP %{status}", status: status)
+  defp pricing_import_message(message), do: message
+
+  defp system_tabs(development_helpers_available?) do
+    ids = if development_helpers_available?, do: @base_system_tabs ++ [@development_tab], else: @base_system_tabs
+    Enum.map(ids, &%{id: &1, label: system_tab_label(&1)})
+  end
+
+  defp system_tab_label("smtp"), do: gettext("SMTP")
+  defp system_tab_label("mcp"), do: gettext("MCP")
+  defp system_tab_label("metrics"), do: gettext("Metrics")
+  defp system_tab_label("gateway"), do: gettext("Gateway")
+  defp system_tab_label("firewall"), do: gettext("Firewall")
+  defp system_tab_label("development"), do: gettext("Development")
 
   defp normalize_tab(tab, development_helpers_available?) do
     if Enum.any?(system_tabs(development_helpers_available?), &(&1.id == tab)) do
@@ -548,17 +578,56 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   end
 
   defp smtp_changeset_status(_changeset) do
-    %{tone: :error, message: "SMTP settings need correction before testing."}
+    %{tone: :error, message: gettext("SMTP settings need correction before testing.")}
   end
+
+  defp smtp_error_message(%{code: :smtp_disabled}), do: gettext("SMTP is disabled")
+  defp smtp_error_message(%{code: :smtp_test_email_recipient_missing}), do: gettext("Signed-in operator email is required for SMTP test email")
+  defp smtp_error_message(%{code: :smtp_test_email_timeout}), do: gettext("SMTP test email timed out")
+  defp smtp_error_message(%{code: :smtp_test_email_auth_failed}), do: gettext("SMTP authentication failed")
+  defp smtp_error_message(%{code: :smtp_test_email_auth_unavailable}), do: gettext("SMTP server does not support the requested authentication flow")
+  defp smtp_error_message(%{code: :smtp_test_email_tls_unavailable}), do: gettext("SMTP server does not support the requested TLS mode")
+  defp smtp_error_message(%{code: :smtp_test_email_tls_failed}), do: gettext("SMTP TLS handshake failed; verify SSL/TLS mode and certificate settings")
+  defp smtp_error_message(%{code: :smtp_test_email_rejected}), do: gettext("SMTP server rejected the test email")
+  defp smtp_error_message(%{code: :smtp_test_email_unexpected_response}), do: gettext("SMTP server returned an unexpected response")
+  defp smtp_error_message(%{code: :smtp_test_email_connection_failed}), do: gettext("SMTP connection failed")
+  defp smtp_error_message(%{code: :smtp_test_email_temporary_failure}), do: gettext("SMTP server temporarily rejected the test email")
+  defp smtp_error_message(%{code: :smtp_test_email_failed}), do: gettext("SMTP test email failed")
+  defp smtp_error_message(%{code: :smtp_password_unavailable}), do: gettext("SMTP password is unavailable")
+
+  defp smtp_error_message(%{code: code, message: message}) when code in [:invalid_mailer_config, :smtp_test_email_invalid_config],
+    do: smtp_configuration_message(message)
+
+  defp smtp_error_message(%{code: code}) when code in [:app_secret_key_missing, :app_secret_key_invalid, :app_secret_decryption_failed, :app_secret_invalid_ciphertext],
+    do: gettext("instance setting secret operation failed")
+
+  defp smtp_error_message(_error), do: gettext("SMTP test email failed")
+
+  defp smtp_configuration_message("SMTP relay host is required"), do: gettext("SMTP relay host is required")
+  defp smtp_configuration_message("SMTP port must be a positive integer"), do: gettext("SMTP port must be a positive integer")
+  defp smtp_configuration_message("SMTP username and password are both required for authentication"), do: gettext("SMTP username and password are both required for authentication")
+  defp smtp_configuration_message("SMTP from address must be configured"), do: gettext("SMTP from address must be configured")
+  defp smtp_configuration_message("SMTP password must be present when SMTP username is set"), do: gettext("SMTP password must be present when SMTP username is set")
+  defp smtp_configuration_message("SMTP username must be present when SMTP password is set"), do: gettext("SMTP username must be present when SMTP password is set")
+  defp smtp_configuration_message("SMTP host must be present when SMTP is enabled"), do: gettext("SMTP host must be present when SMTP is enabled")
+  defp smtp_configuration_message("SMTP from address must be present when SMTP is enabled"), do: gettext("SMTP from address must be present when SMTP is enabled")
+  defp smtp_configuration_message("SMTP host must be a string"), do: gettext("SMTP host must be a string")
+  defp smtp_configuration_message("SMTP from address must be a string"), do: gettext("SMTP from address must be a string")
+  defp smtp_configuration_message("SMTP username must be a string"), do: gettext("SMTP username must be a string")
+  defp smtp_configuration_message("SMTP password must be a string"), do: gettext("SMTP password must be a string")
+  defp smtp_configuration_message("SMTP retries must be a non-negative integer"), do: gettext("SMTP retries must be a non-negative integer")
+  defp smtp_configuration_message("SMTP SSL must be true or false"), do: gettext("SMTP SSL must be true or false")
+  defp smtp_configuration_message("SMTP TLS must be one of always, if_available, or never"), do: gettext("SMTP TLS must be one of always, if_available, or never")
+  defp smtp_configuration_message(_message), do: gettext("SMTP settings need correction before testing.")
 
   defp operator_email_for_status(%{user: %{email: email}}) when is_binary(email) do
     case String.trim(email) do
-      "" -> "the signed-in operator"
+      "" -> gettext("the signed-in operator")
       trimmed -> trimmed
     end
   end
 
-  defp operator_email_for_status(_scope), do: "the signed-in operator"
+  defp operator_email_for_status(_scope), do: gettext("the signed-in operator")
 
   defp stale_changeset?(changeset), do: Keyword.has_key?(changeset.errors, :lock_version)
 end

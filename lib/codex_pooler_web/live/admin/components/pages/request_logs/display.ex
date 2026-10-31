@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.ServiceTier
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.RequestLogsDisplay.{Errors, Status, UserAgents}
@@ -11,11 +13,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defdelegate selected_model_filter_option(model), to: Status
   defdelegate status_label(status), to: Status
 
+  @spec format_api_key(map()) :: String.t()
   def format_api_key(log) do
     cond do
-      is_nil(log.api_key_id) -> "external token"
+      is_nil(log.api_key_id) -> gettext("external token")
       log.api_key_display_name -> log.api_key_display_name
-      true -> "unnamed key"
+      true -> gettext("unnamed key")
     end
   end
 
@@ -76,12 +79,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @spec speed_level_title(map()) :: String.t()
   def speed_level_title(log) do
     cond do
-      speed_level(log) == 3 -> "Ultrafast"
-      speed_level(log) == 2 -> "Fast (priority tier)"
-      priority_unapplied?(log) -> "Normal speed (priority requested, not applied by the upstream)"
-      true -> "Normal speed"
+      speed_level(log) == 3 -> gettext("Ultrafast")
+      speed_level(log) == 2 -> gettext("Fast (priority tier)")
+      priority_unapplied?(log) -> gettext("Normal speed (priority requested, not applied by the upstream)")
+      true -> gettext("Normal speed")
     end
   end
 
@@ -96,8 +100,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp priority_unapplied?(_log), do: false
 
-  def speed_tier_label(%{cost: %{status: "priced", pricing_availability: "priced"}}), do: "Priced at priority tier"
-  def speed_tier_label(%{}), do: "Priority tier"
+  @spec speed_tier_label(map()) :: String.t()
+  def speed_tier_label(%{cost: %{status: "priced", pricing_availability: "priced"}}), do: gettext("Priced at priority tier")
+  def speed_tier_label(%{}), do: gettext("Priority tier")
 
   def protocol_label("websocket"), do: "WebSocket"
   def protocol_label("http_sse"), do: "HTTP SSE"
@@ -105,16 +110,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def protocol_label("http_json"), do: "HTTP JSON"
   def protocol_label(_transport), do: "HTTP"
 
+  @spec protocol_title(map()) :: String.t()
   def protocol_title(%{transport: transport} = log) do
     transport_label =
       if is_binary(transport) do
-        "transport: #{transport}"
+        gettext("transport: %{transport}", transport: transport)
       else
-        "transport not recorded"
+        gettext("transport not recorded")
       end
 
     case speed_tier_mode(log) do
-      :fast -> "#{transport_label}; fast mode"
+      :fast -> gettext("%{transport}; fast mode", transport: transport_label)
       nil -> transport_label
     end
   end
@@ -139,10 +145,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_total(1), do: "1"
   def format_total(total), do: Integer.to_string(total || 0)
 
+  @spec format_datetime(term(), map()) :: String.t()
   def format_datetime(value, datetime_preferences),
-    do: DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
+    do: DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: gettext("not recorded"))
 
-  def format_datetime(nil), do: "not recorded"
+  @spec format_datetime(nil) :: String.t()
+  def format_datetime(nil), do: gettext("not recorded")
 
   def format_record_id(nil), do: nil
 
@@ -153,11 +161,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defdelegate request_status_icon_class(status), to: Status
   defdelegate request_status_filter_icon_color(status), to: Status
 
+  @spec format_token_counts(map() | nil) :: String.t()
   def format_token_counts(nil), do: "-"
 
   def format_token_counts(counts) do
     case total_token_count(counts) do
-      total when is_integer(total) -> "#{Format.token_count(total)} tokens"
+      total when is_integer(total) -> ngettext("%{tokens} token", "%{tokens} tokens", total, tokens: Format.token_count(total))
       _total -> "-"
     end
   end
@@ -175,14 +184,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @spec token_totals_title(map()) :: String.t() | nil
   def token_totals_title(%{token_counts: nil}), do: nil
 
   def token_totals_title(%{token_counts: counts}) do
     [
-      token_part("input", counts.input_tokens),
-      token_part("output", counts.output_tokens),
-      token_part("reasoning", counts.reasoning_tokens),
-      token_part("cached input", counts.cached_input_tokens)
+      token_part(:input, counts.input_tokens),
+      token_part(:output, counts.output_tokens),
+      token_part(:reasoning, counts.reasoning_tokens),
+      token_part(:cached_input, counts.cached_input_tokens)
     ]
     |> Enum.reject(&is_nil/1)
     |> case do
@@ -191,13 +201,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @spec format_usage_cost(map() | nil) :: String.t()
   def format_usage_cost(%{status: "priced", usd: %Decimal{} = usd}),
     do: Format.money_precise(usd)
 
   def format_usage_cost(cost) do
     case format_cost(cost) do
-      "-" -> "cost n/a"
-      "unavailable" -> "cost n/a"
+      "-" -> gettext("cost n/a")
+      "unavailable" -> gettext("cost n/a")
       cost_label -> cost_label
     end
   end
@@ -209,11 +220,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @spec format_total_cost(map() | nil) :: String.t()
   def format_total_cost(cost) do
     case format_cost(cost) do
-      "-" -> "Total cost unavailable"
-      "unavailable" -> "Total cost unavailable"
-      cost_label -> "Total cost #{cost_label}"
+      "-" -> gettext("Total cost unavailable")
+      "unavailable" -> gettext("Total cost unavailable")
+      cost_label -> gettext("Total cost %{cost}", cost: cost_label)
     end
   end
 
@@ -243,10 +255,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   token when nothing was sent, or nothing when the request has no reasoning
   concept or the outcome cannot say.
   """
+  @spec format_model_reasoning_slot(map()) :: String.t() | nil
   def format_model_reasoning_slot(log) do
     cond do
       reasoning = format_model_reasoning(log) -> reasoning
-      model_default_reasoning?(log) -> "default"
+      model_default_reasoning?(log) -> gettext("default")
       true -> nil
     end
   end
@@ -287,12 +300,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     |> Enum.find_value(&present_string/1)
   end
 
+  @spec format_requested_reasoning_detail(map()) :: String.t() | nil
   def format_requested_reasoning_detail(log) do
     requested = present_string(Map.get(log, :reasoning_effort))
     displayed = format_model_reasoning(log)
 
     if is_binary(requested) and requested != displayed do
-      "requested: #{requested}"
+      gettext("requested: %{effort}", effort: requested)
     else
       nil
     end
@@ -304,6 +318,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   attempt recorded what it sent. A provider that substitutes a model (A/B
   testing, safety buffering) is otherwise invisible in the list.
   """
+  @spec format_served_model_detail(map()) :: String.t() | nil
   def format_served_model_detail(log) do
     served = present_string(Map.get(log, :served_model))
 
@@ -311,7 +326,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
       present_string(Map.get(log, :upstream_model)) ||
         present_string(Map.get(log, :requested_model))
 
-    if served && !same_model?(served, basis), do: "served #{served}"
+    if served && !same_model?(served, basis), do: gettext("served %{model}", model: served)
   end
 
   def format_model_service_tier(log) do
@@ -326,21 +341,23 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   Codex backend reports `default` for `priority` requests, so this is what keeps
   "tier default" from hiding that priority was asked for.
   """
+  @spec format_requested_tier_detail(map()) :: String.t() | nil
   def format_requested_tier_detail(log) do
     requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
     if requested && !same_service_tier?(requested, format_model_service_tier(log)) do
-      "#{requested} requested"
+      gettext("%{tier} requested", tier: requested)
     end
   end
 
+  @spec format_cached_token_breakdown(map()) :: String.t() | nil
   def format_cached_token_breakdown(%{token_counts: nil}), do: nil
 
   def format_cached_token_breakdown(log) do
     cached = log.token_counts.cached_input_tokens
 
     if cached && cached != 0 do
-      "#{Format.token_count(cached)} cached"
+      ngettext("%{tokens} cached", "%{tokens} cached", max(cached, 0), tokens: Format.token_count(cached))
     else
       nil
     end
@@ -367,10 +384,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def format_route_latency(_value), do: nil
 
+  @spec format_latency_title(integer() | nil) :: String.t() | nil
   def format_latency_title(nil), do: nil
 
   def format_latency_title(value) when is_integer(value),
-    do: "Elapsed upstream attempt time #{format_integer(value)} ms"
+    do: gettext("Elapsed upstream attempt time %{duration} ms", duration: format_integer(value))
 
   def format_latency_title(_value), do: nil
 
@@ -395,8 +413,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defdelegate format_user_agent(log), to: UserAgents, as: :format
   defdelegate user_agent_display(log), to: UserAgents, as: :display
 
+  @spec format_transport_route(map()) :: String.t()
   def format_transport_route(log) do
-    log.endpoint || "unknown endpoint"
+    log.endpoint || gettext("unknown endpoint")
   end
 
   @doc "Recorded source and destination paths for the request table, without duplicate endpoints."
@@ -413,7 +432,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
         endpoint || translated || source
       end
 
-    %{source: if(source && source != destination, do: source), destination: destination || "unknown endpoint"}
+    %{source: if(source && source != destination, do: source), destination: destination || gettext("unknown endpoint")}
   end
 
   defp translated_destination(%{metadata: metadata}) when is_map(metadata),
@@ -516,8 +535,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defp token_part(_label, nil), do: nil
   defp token_part(_label, 0), do: nil
 
-  defp token_part(label, value) when is_integer(value),
-    do: "#{Format.token_count(value)} #{label}"
+  defp token_part(:input, value) when is_integer(value), do: ngettext("%{tokens} input", "%{tokens} input", max(value, 0), tokens: Format.token_count(value))
+  defp token_part(:output, value) when is_integer(value), do: ngettext("%{tokens} output", "%{tokens} output", max(value, 0), tokens: Format.token_count(value))
+  defp token_part(:reasoning, value) when is_integer(value), do: ngettext("%{tokens} reasoning", "%{tokens} reasoning", max(value, 0), tokens: Format.token_count(value))
+  defp token_part(:cached_input, value) when is_integer(value), do: ngettext("%{tokens} cached input", "%{tokens} cached input", max(value, 0), tokens: Format.token_count(value))
 
   defp token_part(_label, _value), do: nil
 
@@ -549,8 +570,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   # "tier" keeps the value from reading as an effort; the slash only separates
   # it from an effort token, so a row without one does not open on a dangle.
   defp service_tier_phrase(nil, _reasoning), do: nil
-  defp service_tier_phrase(tier, nil), do: "tier #{tier}"
-  defp service_tier_phrase(tier, _reasoning), do: "/ tier #{tier}"
+  defp service_tier_phrase(tier, nil), do: gettext("tier %{tier}", tier: tier)
+  defp service_tier_phrase(tier, _reasoning), do: gettext("/ tier %{tier}", tier: tier)
 
   defp dispatched_upstream?(log) do
     present_string(Map.get(log, :upstream_identity_id)) != nil or
@@ -571,7 +592,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp request_body_size(%{metadata: metadata}) when is_map(metadata) do
     case nested_metadata_value(metadata, "request", "body_bytes") do
-      bytes when is_integer(bytes) and bytes >= 0 -> "#{format_integer(bytes)} bytes"
+      bytes when is_integer(bytes) and bytes >= 0 -> ngettext("%{bytes} byte", "%{bytes} bytes", bytes, bytes: format_integer(bytes))
       _bytes -> nil
     end
   end
@@ -592,7 +613,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     cached = log.token_counts.cached_input_tokens
 
     if cached && cached != 0 do
-      [verbose_non_cached_tokens(total, cached), "#{Format.token_count(cached)} cached input"]
+      [verbose_non_cached_tokens(total, cached), ngettext("%{tokens} cached input", "%{tokens} cached input", max(cached, 0), tokens: Format.token_count(cached))]
       |> Enum.reject(&is_nil/1)
       |> Enum.join("; ")
     else
@@ -601,7 +622,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   end
 
   defp verbose_non_cached_tokens(total, cached) when is_integer(total) and is_integer(cached),
-    do: "#{Format.token_count(max(total - cached, 0))} non-cached"
+    do: ngettext("%{tokens} non-cached", "%{tokens} non-cached", max(total - cached, 0), tokens: Format.token_count(max(total - cached, 0)))
 
   defp verbose_non_cached_tokens(_total, _cached), do: nil
 
@@ -609,12 +630,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defp format_seconds(value), do: "#{Float.round(value / 1_000, 1)}s"
 
   defp format_cached_input_cost(%Decimal{} = usd),
-    do: "Cached input cost #{Format.money(usd)} is included in the total cost"
+    do: gettext("Cached input cost %{cost} is included in the total cost", cost: Format.money(usd))
 
   defp format_cached_input_cost(_usd), do: nil
 
   defp compact_cached_input_cost(%Decimal{} = usd),
-    do: "(#{Format.money(usd)} cached)"
+    do: gettext("(%{cost} cached)", cost: Format.money(usd))
 
   defp compact_cached_input_cost(_usd), do: nil
 

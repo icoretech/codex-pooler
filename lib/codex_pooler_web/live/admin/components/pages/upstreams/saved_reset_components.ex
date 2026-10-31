@@ -12,10 +12,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   attr :id, :string, required: true
   attr :saved_resets, :map, required: true
   attr :datetime_preferences, :map, required: true
-  attr :empty_label, :string, default: "Expiration dates not reported"
+  attr :empty_label, :string, default: nil
   attr :now, :any, default: nil
   attr :calendar_path, :string, default: nil
 
+  @spec saved_reset_expiration_table(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_expiration_table(assigns) do
     now = assigns.now || DateTime.utc_now()
 
@@ -33,7 +34,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
       data-role="saved-reset-expiration-empty"
       class="text-xs leading-5 text-base-content/60"
     >
-      {@empty_label}
+      {@empty_label || gettext("Expiration dates not reported")}
     </p>
     <ul
       :if={@rows != []}
@@ -65,8 +66,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             id={"#{@id}-time-left-#{row.index}"}
             data-role="saved-reset-expiration-time-left"
             class="inline-flex shrink-0 items-center gap-1 rounded-field text-xs font-medium leading-4 tabular-nums text-(--color-reset-bank) hover:underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-            title="Download all upcoming banked reset expirations (.ics)"
-            aria-label={"Download all upcoming banked reset expirations (.ics); this reset expires #{row.title}"}
+            title={gettext("Download all upcoming banked reset expirations (.ics)")}
+            aria-label={gettext("Download all upcoming banked reset expirations (.ics); this reset expires %{time}", time: row.title)}
           >
             <.icon name="hero-clock" class="size-3 shrink-0" />
             <span>{row.time_left_label}</span>
@@ -105,7 +106,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             class="min-w-0 truncate"
             title={row.source_title}
           >
-            {row.source_label} {row.source_date_label}
+            {source_date_label(row.source_label, row.source_date_label)}
           </span>
           <span
             :if={row.held_label}
@@ -113,7 +114,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             data-role="saved-reset-expiration-held"
             class="shrink-0 tabular-nums"
           >
-            held {row.held_label}
+            {gettext("held %{duration}", duration: row.held_label)}
           </span>
         </div>
       </li>
@@ -124,12 +125,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   attr :id, :string, required: true
   attr :cause, :map, default: nil
 
+  @spec saved_reset_last_auto_redemption_cause(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_last_auto_redemption_cause(%{cause: %{label: label}} = assigns)
       when is_binary(label) do
     ~H"""
     <p id={@id} class="text-xs leading-5 text-base-content/60">
-      <span class="font-medium text-base-content/75">Last automatic redemption</span>
-      <span> · {@cause.label}</span>
+      <span class="font-medium text-base-content/75">{gettext("Last automatic redemption · %{cause}", cause: @cause.label)}</span>
     </p>
     """
   end
@@ -141,6 +142,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
 
   attr :form, :any, required: true
 
+  @spec saved_reset_policy_fields(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_policy_fields(assigns) do
     threshold_field = assigns.form[:quota_threshold_percent]
 
@@ -170,7 +172,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
         ]}
         aria-disabled={if(!@policy_enabled?, do: "true")}
       >
-        <legend class="sr-only">When automatic redemption can start</legend>
+        <legend class="sr-only">{gettext("When automatic redemption can start")}</legend>
         <label
           id="saved-reset-policy-trigger-blocked"
           data-role="saved-reset-policy-trigger-card"
@@ -193,10 +195,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           />
           <span class="grid min-w-0 gap-0.5">
             <span class="text-[13px] font-semibold leading-tight text-base-content">
-              Long-window quota blocked
+              {gettext("Long-window quota blocked")}
             </span>
             <span class="text-[11px] leading-4 text-base-content/55">
-              Request traffic can recover weekly or monthly account quota. Expiration rescue runs only through scheduled account checks.
+              {gettext("Request traffic can recover weekly or monthly account quota. Expiration rescue runs only through scheduled account checks.")}
             </span>
           </span>
         </label>
@@ -221,12 +223,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             class="sr-only"
           />
           <span class="grid min-w-0 gap-0.5">
-            <span class="text-[13px] font-semibold leading-tight text-base-content">Near limit</span>
+            <span class="text-[13px] font-semibold leading-tight text-base-content">{gettext("Near limit")}</span>
             <span class="text-[11px] leading-4 text-base-content/55">
-              Starts earlier: once every eligible account in the Pool reaches
+              <span class="block">{gettext("Starts earlier: once every eligible account in the Pool reaches the configured percentage of the weekly or monthly account quota window.")}</span>
+              <span class="mt-1 inline-block">{gettext("Quota threshold (%)")}</span>
               <input
                 id="saved-reset-policy-quota-threshold-percent"
                 type="number"
+                aria-label={gettext("Quota threshold (%)")}
                 name="saved_reset_policy[quota_threshold_percent]"
                 value={
                   Phoenix.HTML.Form.normalize_value(
@@ -242,7 +246,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                   "input input-xs mx-0.5 inline-block w-14 border-base-300 bg-base-100 px-1.5 text-center text-[11px] font-semibold tabular-nums",
                   @threshold_errors != [] && "input-error"
                 ]}
-              />% of the weekly or monthly account quota window.
+              />
             </span>
             <span
               :for={message <- @threshold_errors}
@@ -262,12 +266,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             type="number"
             id="saved-reset-policy-min-blocked-minutes"
             name="saved_reset_policy[min_blocked_minutes]"
-            label="Natural reset buffer"
+            label={gettext("Natural reset buffer")}
             min="0"
             readonly={!@policy_enabled?}
           />
           <p class="text-xs leading-5 text-base-content/65">
-            Do not spend a saved reset when the weekly or monthly account quota will reset naturally within this many minutes.
+            {gettext("Do not spend a saved reset when the weekly or monthly account quota will reset naturally within this many minutes.")}
           </p>
         </div>
         <div class="grid gap-1">
@@ -276,12 +280,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             type="number"
             id="saved-reset-policy-keep-credits"
             name="saved_reset_policy[keep_credits]"
-            label="Resets to keep"
+            label={gettext("Resets to keep")}
             min="0"
             readonly={!@policy_enabled?}
           />
           <p class="text-xs leading-5 text-base-content/65">
-            Automatic redemption stops when the available reset count is at or below this reserve.
+            {gettext("Automatic redemption stops when the available reset count is at or below this reserve.")}
           </p>
         </div>
       </div>
@@ -392,8 +396,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           title: DateTimeDisplay.format_datetime(expires_at, datetime_preferences),
           expired?: !future?,
           time_left_label: time_left_label(seconds_until_expiration, future?),
-          source_label: "seen",
-          source_date_label: "not recorded",
+          source_label: :seen,
+          source_date_label: gettext("not recorded"),
           source_title: nil,
           held_label: nil,
           life_percent: nil,
@@ -404,13 +408,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
         %{
           index: index,
           expires_at: nil,
-          date_label: "unknown time",
+          date_label: gettext("unknown time"),
           time_label: nil,
           title: to_string(value),
           expired?: false,
-          time_left_label: "unknown",
-          source_label: "seen",
-          source_date_label: "not recorded",
+          time_left_label: gettext("unknown"),
+          source_label: :seen,
+          source_date_label: gettext("not recorded"),
           source_title: nil,
           held_label: nil,
           life_percent: nil,
@@ -428,12 +432,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
        ) do
     case ResetFormatting.parse_datetime(granted_at_value) do
       %DateTime{} = granted_at ->
-        merge_source(row, granted_at, "banked", datetime_preferences, now)
+        merge_source(row, granted_at, :banked, datetime_preferences, now)
 
       nil ->
         case ResetFormatting.parse_datetime(first_seen_at_value) do
           %DateTime{} = first_seen_at ->
-            merge_source(row, first_seen_at, "seen", datetime_preferences, now)
+            merge_source(row, first_seen_at, :seen, datetime_preferences, now)
 
           nil ->
             row
@@ -468,7 +472,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   defp life_fraction(_source_at, _expires_at, _now), do: nil
 
   defp time_left_label(seconds, true), do: precise_duration_label(max(seconds, 0))
-  defp time_left_label(_seconds, false), do: "expired"
+  defp time_left_label(_seconds, false), do: gettext("expired")
 
   defp precise_duration_label(seconds) when seconds >= 60 do
     total_minutes = div(seconds, 60)
@@ -488,6 +492,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   defp held_label(seconds) when seconds >= 60, do: "#{div(seconds, 60)}m"
   defp held_label(seconds) when seconds >= 0, do: "<1m"
   defp held_label(_seconds), do: nil
+
+  defp source_date_label(:seen, date), do: gettext("seen %{date}", date: date)
+  defp source_date_label(:banked, date), do: gettext("banked %{date}", date: date)
 
   defp shine_delay(index), do: Float.round(index * @shine_stagger_seconds, 1)
 end

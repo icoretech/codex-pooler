@@ -1,11 +1,14 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 3, to_form: 2]
   import Phoenix.LiveView, only: [put_flash: 3, clear_flash: 2]
 
   alias CodexPooler.Upstreams
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
 
   @reason "admin_upstream_cockpit_live"
 
@@ -34,7 +37,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
          ) do
       {:ok, _result} ->
         socket
-        |> put_flash(:info, "Saved reset policy updated")
+        |> put_flash(:info, gettext("Saved reset policy updated"))
         |> reload_fun.()
 
       {:error, reason} ->
@@ -47,7 +50,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
   def open_redemption_confirmation(socket, identity_id, pool_id) do
     cond do
       identity_id != socket.assigns.cockpit.identity.id ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       confirming_redemption_for?(socket, identity_id) ->
         close_redemption_confirmation(socket)
@@ -93,13 +96,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
 
     cond do
       not match?(%{identity: %{id: ^identity_id}}, socket.assigns.cockpit) ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       status_only?(socket.assigns.cockpit) ->
         resume_status(socket)
 
       not confirmed? ->
-        put_flash(socket, :error, "Confirm saved reset redemption before queueing it")
+        put_flash(socket, :error, gettext("Confirm saved reset redemption before queueing it"))
 
       action_available?(socket, :redeem_saved_reset, identity_id) ->
         enqueue_redemption(socket, identity_id, pool_id, reload_fun)
@@ -120,14 +123,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
         socket
         |> clear_flash(:error)
         |> close_redemption_confirmation()
-        |> put_flash(:info, "Saved reset redemption is already queued")
+        |> put_flash(:info, gettext("Saved reset redemption is already queued"))
         |> reload_fun.()
 
       {:ok, _result} ->
         socket
         |> clear_flash(:error)
         |> close_redemption_confirmation()
-        |> put_flash(:info, "Saved reset redemption queued")
+        |> put_flash(:info, gettext("Saved reset redemption queued"))
         |> reload_fun.()
 
       {:error, %{code: :saved_reset_redemption_in_progress}} ->
@@ -135,7 +138,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
 
       {:error, _reason} ->
         socket
-        |> put_flash(:error, "Saved reset request was not accepted. Use Refresh to see the current account state.")
+        |> put_flash(:error, gettext("Saved reset request was not accepted. Use Refresh to see the current account state."))
         |> reload_fun.()
     end
   end
@@ -146,7 +149,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
     socket
     |> clear_flash(:error)
     |> close_redemption_confirmation()
-    |> put_flash(:info, "Review the recorded saved reset status before taking another action")
+    |> put_flash(:info, gettext("Review the recorded saved reset status before taking another action"))
   end
 
   defp confirmed?(socket, identity_id, pool_id) do
@@ -165,17 +168,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
 
   defp put_unavailable_action_error(socket, action_key) do
     action = Map.fetch!(socket.assigns.cockpit.actions, action_key)
-    reason = action.reason || "action is unavailable"
-    put_flash(socket, :error, "Redeem saved reset is not available: #{reason}")
+    reason = action.reason || gettext("action is unavailable")
+    put_flash(socket, :error, gettext("Redeem saved reset is not available: %{reason}", reason: reason))
   end
 
-  defp error_message(%Ecto.Changeset{} = changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
-    |> Enum.join(", ")
-  end
-
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Operation failed"
+  defp error_message(reason), do: WorkflowError.message(reason)
 end

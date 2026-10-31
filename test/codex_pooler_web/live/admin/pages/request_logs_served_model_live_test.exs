@@ -99,7 +99,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsServedModelLiveTest do
     assert view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query("#{issues} [data-role='error-line'] .hero-exclamation-triangle.text-error") |> Enum.count() == 3
 
     assert has_element?(view, "#{issues} [data-role='served-model']", "Model mismatch: sample-alternative")
-    assert has_element?(view, "#{issues} [data-role='model-declaration-conflict']", "model name changed · attempts 1")
+    assert has_element?(view, "#{issues} [data-role='model-declaration-conflict']", "model name changed · attempt 1")
     assert has_element?(view, "#{row} > td:nth-child(4) [data-role='route']", "/backend-api/codex/responses")
     assert has_element?(view, "#{row} > td:nth-child(6) [data-role='token-totals']", "3")
     assert has_element?(view, "#{row} [data-role='status-text']", "Failed")

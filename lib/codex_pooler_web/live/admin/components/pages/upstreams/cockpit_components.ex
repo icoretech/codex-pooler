@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   attr :uploads, :map, required: true
   attr :datetime_preferences, :map, required: true
 
+  @spec cockpit_page(map()) :: Phoenix.LiveView.Rendered.t()
   def cockpit_page(assigns) do
     ~H"""
     <div id="request-log-detail-drawer-root" class="drawer drawer-end">
@@ -58,8 +59,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
           <AdminComponents.saved_reset_connection_notice id="saved-reset-connection-cockpit" in_flight={match?(%{saved_reset_operation: %{open?: true}}, @cockpit)} />
           <AdminComponents.page_header
             id="upstream-cockpit-page-header"
-            title="Upstream health"
-            description="One upstream account up close: serving state, quota evidence, and its recovery actions."
+            title={gettext("Upstream health")}
+            description={gettext("One upstream account up close: serving state, quota evidence, and its recovery actions.")}
           />
 
           <AuthJsonDialog.auth_json_import_dialog

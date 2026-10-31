@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
     only: [
       format_record_id: 1,
@@ -8,8 +10,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format do
     ]
 
   @spec request_log_title(map() | nil) :: String.t()
-  def request_log_title(%{id: id}), do: "Request #{format_record_id(id) || id}"
-  def request_log_title(_log), do: "Request details"
+  def request_log_title(%{id: id}), do: gettext("Request %{id}", id: format_record_id(id) || id)
+  def request_log_title(_log), do: gettext("Request details")
 
   @spec request_log_subtitle(map() | nil) :: String.t() | nil
   def request_log_subtitle(%{correlation_id: id}) when is_binary(id) and id != "", do: id
@@ -55,7 +57,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format do
   def safe_text(value, _fallback) when is_float(value),
     do: :erlang.float_to_binary(value, decimals: 2)
 
-  def safe_text(value, _fallback) when is_boolean(value), do: if(value, do: "yes", else: "no")
+  def safe_text(value, _fallback) when is_boolean(value), do: if(value, do: gettext("yes"), else: gettext("no"))
   def safe_text(value, _fallback) when is_atom(value), do: Atom.to_string(value)
   def safe_text(_value, fallback), do: fallback
 end

@@ -86,12 +86,16 @@ defmodule CodexPooler.MailerTest do
     assert {:ok, _receipt} = Mailer.deliver(email)
   end
 
-  test "send_smtp_test_email/2 composes the deterministic subject and body" do
+  test "send_smtp_test_email/3 composes the deterministic subject and body" do
     assert {:ok, %{code: :smtp_test_email_sent}} =
-             Mailer.send_smtp_test_email("recipient@example.com", %{
-               from: "instance-sender@example.com",
-               adapter_config: [adapter: Swoosh.Adapters.Test]
-             })
+             Mailer.send_smtp_test_email(
+               "recipient@example.com",
+               %{
+                 from: "instance-sender@example.com",
+                 adapter_config: [adapter: Swoosh.Adapters.Test]
+               },
+               "en"
+             )
 
     assert_email_sent(
       from: {"Codex Pooler", "instance-sender@example.com"},
@@ -101,23 +105,51 @@ defmodule CodexPooler.MailerTest do
     )
   end
 
-  test "send_smtp_test_email/2 sanitizes SMTP delivery failures" do
+  test "SMTP test email uses the explicit current UI language and restores the caller locale" do
+    Gettext.put_locale("en")
+
+    assert {:ok, %{code: :smtp_test_email_sent}} =
+             Mailer.send_smtp_test_email("recipient@example.com", %{from: "sender@example.com", adapter_config: [adapter: Swoosh.Adapters.Test]}, "zh-CN")
+
+    assert_email_sent(
+      subject: "Codex Pooler SMTP 测试邮件",
+      text_body: "这封测试邮件确认 Codex Pooler 可以使用当前 SMTP 设置发送邮件。"
+    )
+
+    assert Gettext.get_locale() == "en"
+  end
+
+  test "SMTP test email falls back to English for an unsupported explicit language" do
+    Gettext.put_locale("zh_CN")
+
+    assert {:ok, %{code: :smtp_test_email_sent}} =
+             Mailer.send_smtp_test_email("recipient@example.com", %{from: "sender@example.com", adapter_config: [adapter: Swoosh.Adapters.Test]}, "retired-locale")
+
+    assert_email_sent(subject: "Codex Pooler SMTP test email")
+    assert Gettext.get_locale() == "zh_CN"
+  end
+
+  test "send_smtp_test_email/3 sanitizes SMTP delivery failures" do
     port = start_closing_tcp_server!()
 
     assert {:error, %{code: :smtp_test_email_connection_failed, message: message} = error} =
-             Mailer.send_smtp_test_email("recipient@example.com", %{
-               from: "instance-sender@example.com",
-               adapter_config: [
-                 adapter: Swoosh.Adapters.SMTP,
-                 relay: "127.0.0.1",
-                 port: port,
-                 username: "username",
-                 password: "wrong-password",
-                 ssl: false,
-                 tls: :never,
-                 retries: 0
-               ]
-             })
+             Mailer.send_smtp_test_email(
+               "recipient@example.com",
+               %{
+                 from: "instance-sender@example.com",
+                 adapter_config: [
+                   adapter: Swoosh.Adapters.SMTP,
+                   relay: "127.0.0.1",
+                   port: port,
+                   username: "username",
+                   password: "wrong-password",
+                   ssl: false,
+                   tls: :never,
+                   retries: 0
+                 ]
+               },
+               "en"
+             )
 
     assert message == "SMTP connection failed"
     refute inspect(error) =~ "wrong-password"

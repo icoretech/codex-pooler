@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
   attr :settings, :any, required: true
   attr :card_statuses, :map, required: true
 
+  @spec card(map()) :: Phoenix.LiveView.Rendered.t()
   def card(assigns) do
     assigns =
       assign(assigns, :exposure, metrics_exposure(assigns.settings.metrics.bearer_token_status))
@@ -24,10 +25,10 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
     >
       <FormControls.settings_group
         id="instance-settings-metrics"
-        eyebrow="Metrics"
-        title="Metrics bearer token"
-        description="Protect the Prometheus metrics endpoint with an HMAC-only write-once token."
-        hint="Blank saves preserve the current token. Choose clear to intentionally remove it. The raw token cannot be recovered after save."
+        eyebrow={gettext("Metrics")}
+        title={gettext("Metrics bearer token")}
+        description={gettext("Protect the Prometheus metrics endpoint with an HMAC-only write-once token.")}
+        hint={gettext("Blank saves preserve the current token. Choose clear to intentionally remove it. The raw token cannot be recovered after save.")}
       >
         <section
           id="instance-settings-metrics-exposure-status"
@@ -37,7 +38,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="grid gap-1">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                /metrics exposure
+                {gettext("/metrics exposure")}
               </p>
               <p class="text-sm font-semibold text-base-content">{@exposure.title}</p>
             </div>
@@ -45,7 +46,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
           </div>
           <p class="text-sm leading-6 text-base-content/70">{@exposure.description}</p>
           <p class="text-xs leading-5 text-base-content/60">
-            The runtime firewall does not apply to /metrics. Exposure is controlled only by this metrics bearer token.
+            {gettext("The runtime firewall does not apply to /metrics. Exposure is controlled only by this metrics bearer token.")}
           </p>
         </section>
 
@@ -54,24 +55,24 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
             id="instance-settings-metrics-token"
             name="instance_settings[metrics][bearer_token]"
             action_name="instance_settings[metrics][bearer_token_action]"
-            label="Metrics bearer token"
-            status_label="Stored token"
-            clear_label="Clear stored token — reopens /metrics"
+            label={gettext("Metrics bearer token")}
+            status_label={gettext("Stored token")}
+            clear_label={gettext("Clear stored token — reopens /metrics")}
             action={param_secret_action(@form_params, "metrics", "bearer_token_action")}
             status={@settings.metrics.bearer_token_status}
           />
           <div class="grid content-start gap-2 rounded-box border border-base-300 bg-base-200/60 p-3 text-sm">
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Safe metadata
+              {gettext("Safe metadata")}
             </p>
             <p
               id="instance-settings-metrics-token-fingerprint"
               class="break-all text-base-content/70"
             >
-              Fingerprint: {safe_value(@settings.metrics.bearer_token_fingerprint)}
+              {gettext("Fingerprint: %{fingerprint}", fingerprint: safe_value(@settings.metrics.bearer_token_fingerprint))}
             </p>
             <p class="break-all text-base-content/70">
-              Key version: {safe_value(@settings.metrics.bearer_token_key_version)}
+              {gettext("Key version: %{version}", version: safe_value(@settings.metrics.bearer_token_key_version))}
             </p>
           </div>
         </div>
@@ -82,7 +83,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
           class="rounded-box border border-warning/25 bg-warning/10 px-3 py-2 text-sm font-medium text-warning"
           role="alert"
         >
-          Clearing the stored token reopens /metrics without authentication.
+          {gettext("Clearing the stored token reopens /metrics without authentication.")}
         </p>
       </FormControls.settings_group>
     </FormControls.settings_card>
@@ -97,14 +98,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
   end
 
   defp safe_value(value) when is_binary(value) and value != "", do: value
-  defp safe_value(_value), do: "not configured"
+  defp safe_value(_value), do: gettext("not configured")
 
   defp metrics_exposure(:intentionally_unset) do
     %{
       state: "open",
-      label: "Open",
-      title: "Unauthenticated scrapes allowed",
-      description: "No metrics bearer token is stored, so /metrics returns 200 without Authorization.",
+      label: pgettext("metrics exposure", "Open"),
+      title: gettext("Unauthenticated scrapes allowed"),
+      description: gettext("No metrics bearer token is stored, so /metrics returns 200 without Authorization."),
       badge_class: "badge badge-warning badge-sm font-semibold"
     }
   end
@@ -112,9 +113,9 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
   defp metrics_exposure(:configured) do
     %{
       state: "protected",
-      label: "Protected",
-      title: "Exact bearer token required",
-      description: "A metrics bearer token is stored, so /metrics requires the exact Bearer token.",
+      label: gettext("Protected"),
+      title: gettext("Exact bearer token required"),
+      description: gettext("A metrics bearer token is stored, so /metrics requires the exact Bearer token."),
       badge_class: "badge badge-success badge-sm font-semibold"
     }
   end
@@ -122,9 +123,9 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
   defp metrics_exposure(_status) do
     %{
       state: "unavailable",
-      label: "Unavailable",
-      title: "Requests fail closed",
-      description: "Metrics settings are unavailable, so /metrics fails closed with 401.",
+      label: gettext("Unavailable"),
+      title: gettext("Requests fail closed"),
+      description: gettext("Metrics settings are unavailable, so /metrics fails closed with 401."),
       badge_class: "badge badge-error badge-sm font-semibold"
     }
   end

@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
   attr :pool_filter_options, :list, required: true
   attr :timezone, :string, required: true
 
+  @spec audit_log_filters(map()) :: Phoenix.LiveView.Rendered.t()
   def audit_log_filters(assigns) do
     ~H"""
     <AdminComponents.filter_form
@@ -24,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
     >
       <PoolFilterComponents.pool_filter_dropdown
         id="audit-log-pool-filter"
-        label="Pool"
+        label={gettext("Pool")}
         hidden_id="filters_pool_id"
         selected_value={@filter_values["pool_id"] || ""}
         options={@pool_filter_options}
@@ -43,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
         >
           <summary
             data-role="outcome-filter-trigger"
-            aria-label="Outcome"
+            aria-label={gettext("Outcome")}
             class="select flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
           >
             <span
@@ -105,7 +106,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
         >
           <summary
             data-role="action-filter-trigger"
-            aria-label="Event"
+            aria-label={gettext("Event")}
             class="select flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
           >
             <span
@@ -154,20 +155,20 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
         <.select_filter
           field={@filter_form[:actor_type]}
           options={Presentation.actor_type_options()}
-          label="Actor type"
+          label={gettext("Actor type")}
         />
         <.segmented_text_filter
           field={@filter_form[:actor]}
-          label="Actor"
-          placeholder="email or id"
+          label={gettext("Actor")}
+          placeholder={gettext("email or id")}
         />
         <.segmented_text_filter
           field={@filter_form[:target]}
-          label="Target"
-          placeholder="user or id"
+          label={gettext("Target")}
+          placeholder={gettext("user or id")}
         />
-        <AdminComponents.cally_date_filter field={@filter_form[:date_from]} label="Date from" timezone={@timezone} />
-        <AdminComponents.cally_date_filter field={@filter_form[:date_to]} label="Date to" timezone={@timezone} />
+        <AdminComponents.cally_date_filter field={@filter_form[:date_from]} label={gettext("Date from")} timezone={@timezone} />
+        <AdminComponents.cally_date_filter field={@filter_form[:date_to]} label={gettext("Date to")} timezone={@timezone} />
       </:advanced>
     </AdminComponents.filter_form>
 
@@ -178,7 +179,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
     >
       <.icon name="hero-exclamation-triangle" class="size-5" />
       <div>
-        <p class="font-semibold">Some filters were ignored</p>
+        <p class="font-semibold">{gettext("Some filters were ignored")}</p>
         <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
           <li :for={error <- @filter_errors}>{error.message}</li>
         </ul>

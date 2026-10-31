@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Alerts.Schemas.AlertRule
@@ -16,47 +18,59 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   @default_state RuleStatus.active_state()
   @default_scope_type "pool"
 
-  @rule_kind_options [
-    {"No usable assignments", "pool_no_usable_assignments"},
-    {"Low usable assignments", "pool_low_usable_assignments"},
-    {"All assignments in a state", "pool_all_assignments_in_state"},
-    {"Quota threshold on assigned upstreams", "upstream_quota_threshold"},
-    {"Upstream auth state", "upstream_auth_state"},
-    {"First-seen banked saved reset", @saved_reset_rule_kind}
-  ]
+  defp rule_kind_choices do
+    [
+      {gettext("No usable assignments"), "pool_no_usable_assignments"},
+      {gettext("Low usable assignments"), "pool_low_usable_assignments"},
+      {gettext("All assignments in a state"), "pool_all_assignments_in_state"},
+      {gettext("Quota threshold on assigned upstreams"), "upstream_quota_threshold"},
+      {gettext("Upstream auth state"), "upstream_auth_state"},
+      {gettext("First-seen banked saved reset"), @saved_reset_rule_kind}
+    ]
+  end
 
-  @severity_options [
-    {"Info", "info"},
-    {"Warning", "warning"},
-    {"Critical", "critical"}
-  ]
+  defp severity_choices do
+    [
+      {gettext("Info"), "info"},
+      {gettext("Warning"), "warning"},
+      {gettext("Critical"), "critical"}
+    ]
+  end
 
-  @state_options [
-    {"Enabled", "active"},
-    {"Disabled", "disabled"}
-  ]
+  defp state_choices do
+    [
+      {gettext("Enabled"), "active"},
+      {gettext("Disabled"), "disabled"}
+    ]
+  end
 
-  @assignment_state_options [
-    {"Missing quota evidence", "missing_evidence"},
-    {"Stale quota evidence", "stale"},
-    {"Weekly-only quota evidence", "weekly_only"},
-    {"Quota exhausted", "exhausted"},
-    {"Reauthorization required", "reauth_required"},
-    {"Refresh failed", "refresh_failed"}
-  ]
+  defp assignment_state_options do
+    [
+      {gettext("Missing quota evidence"), "missing_evidence"},
+      {gettext("Stale quota evidence"), "stale"},
+      {gettext("Weekly-only quota evidence"), "weekly_only"},
+      {gettext("Quota exhausted"), "exhausted"},
+      {gettext("Reauthorization required"), "reauth_required"},
+      {gettext("Refresh failed"), "refresh_failed"}
+    ]
+  end
 
-  @auth_state_options [
-    {"Reauthorization required", "reauth_required"},
-    {"Refresh failed", "refresh_failed"}
-  ]
+  defp auth_state_options do
+    [
+      {gettext("Reauthorization required"), "reauth_required"},
+      {gettext("Refresh failed"), "refresh_failed"}
+    ]
+  end
 
-  @window_selector_options [
-    {"Any quota window", "any"},
-    {"Account primary window", "account_primary"},
-    {"Account secondary window", "account_secondary"},
-    {"Model primary window", "model_primary"},
-    {"Model secondary window", "model_secondary"}
-  ]
+  defp window_selector_choices do
+    [
+      {gettext("Any quota window"), "any"},
+      {gettext("Account primary window"), "account_primary"},
+      {gettext("Account secondary window"), "account_secondary"},
+      {gettext("Model primary window"), "model_primary"},
+      {gettext("Model secondary window"), "model_secondary"}
+    ]
+  end
 
   @spec create_form([Pool.t()], attrs() | map(), keyword()) :: Phoenix.HTML.Form.t()
   def create_form(pools, attrs \\ %{}, opts \\ []) do
@@ -111,45 +125,45 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   def pool_options(pools), do: Enum.map(pools, &{&1.name, &1.id})
 
   @spec rule_kind_options() :: [option()]
-  def rule_kind_options, do: @rule_kind_options
+  def rule_kind_options, do: rule_kind_choices()
 
   @spec severity_options() :: [option()]
-  def severity_options, do: @severity_options
+  def severity_options, do: severity_choices()
 
   @spec state_options() :: [option()]
-  def state_options, do: @state_options
+  def state_options, do: state_choices()
 
   @spec route_class_options() :: [option()]
   def route_class_options, do: Enum.map(AlertRule.route_classes(), &{&1, &1})
 
   @spec target_state_options(String.t()) :: [option()]
-  def target_state_options("upstream_auth_state"), do: @auth_state_options
-  def target_state_options(_rule_kind), do: @assignment_state_options
+  def target_state_options("upstream_auth_state"), do: auth_state_options()
+  def target_state_options(_rule_kind), do: assignment_state_options()
 
   @spec window_selector_options() :: [option()]
-  def window_selector_options, do: @window_selector_options
+  def window_selector_options, do: window_selector_choices()
 
   @spec rule_kind_label(String.t()) :: String.t()
-  def rule_kind_label(value), do: label_for(@rule_kind_options, value, "Alert rule")
+  def rule_kind_label(value), do: label_for(rule_kind_options(), value, gettext("Alert rule"))
 
   @spec severity_label(String.t()) :: String.t()
-  def severity_label(value), do: label_for(@severity_options, value, "Unknown severity")
+  def severity_label(value), do: label_for(severity_options(), value, gettext("Unknown severity"))
 
   @spec state_label(String.t()) :: String.t()
-  def state_label(value), do: label_for(@state_options, value, "Unknown state")
+  def state_label(value), do: label_for(state_options(), value, gettext("Unknown state"))
 
   @spec target_state_label(String.t() | nil) :: String.t()
-  def target_state_label(nil), do: "Not set"
-  def target_state_label(value), do: label_for(@assignment_state_options, value, "Unknown state")
+  def target_state_label(nil), do: gettext("Not set")
+  def target_state_label(value), do: label_for(assignment_state_options(), value, gettext("Unknown state"))
 
   @spec window_selector_label(String.t() | nil) :: String.t()
-  def window_selector_label(nil), do: "Not set"
+  def window_selector_label(nil), do: gettext("Not set")
 
   def window_selector_label(value),
-    do: label_for(@window_selector_options, value, "Unknown window")
+    do: label_for(window_selector_options(), value, gettext("Unknown window"))
 
   @spec threshold_label(Decimal.t() | nil) :: String.t()
-  def threshold_label(nil), do: "Not set"
+  def threshold_label(nil), do: gettext("Not set")
   def threshold_label(value), do: "#{Decimal.to_string(value, :normal)}%"
 
   @spec value(Phoenix.HTML.FormField.t()) :: term()
@@ -270,7 +284,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   defp scope_type_for(_rule_kind), do: "pool"
 
   defp normalize_target_state("upstream_auth_state", value) do
-    normalize_option(value, Enum.map(@auth_state_options, &elem(&1, 1)), "reauth_required")
+    normalize_option(value, ["reauth_required", "refresh_failed"], "reauth_required")
   end
 
   defp normalize_target_state(_rule_kind, value) do

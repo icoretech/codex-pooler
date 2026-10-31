@@ -21,6 +21,48 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
   setup :register_and_log_in_user
 
+  test "Chinese API key inventory and policy wizard translate labels and errors", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "locale-keys", name: "Locale Keys"})
+    {:ok, %{api_key: api_key, raw_key: raw_key}} = Access.create_api_key(scope, pool, %{display_name: "Locale key"})
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/api-keys")
+
+    assert has_element?(view, "#api-key-page-header", "API 密钥")
+    assert has_element?(view, "#api-key-page-create-action", "创建 API 密钥")
+    assert has_element?(view, "#api-key-pool-group-locale-keys-count", "1 个密钥")
+    assert has_element?(view, "#api-key-row-#{api_key.id}-status", "启用")
+    assert has_element?(view, "#api-key-row-#{api_key.id}-last-used", "从未使用")
+    refute render(view) =~ raw_key
+
+    open_create_dialog(view)
+    assert has_element?(view, "#api-key-header", "创建 API 密钥")
+    assert has_element?(view, "#api-key-step-basics-panel label", "显示名称")
+    select_api_key_section(view, :models)
+    assert has_element?(view, "#api-key-step-models-panel", "所有模型")
+    assert has_element?(view, "#api-key-catalog-status", "模型目录尚未同步")
+
+    view |> element("#api-key-form") |> render_change(%{"api_key" => %{"display_name" => "", "max_active_requests" => "0"}})
+    select_api_key_section(view, :review)
+    assert has_element?(view, "#api-key-review-errors", "显示名称为必填项")
+    assert has_element?(view, "#api-key-review-errors", "活跃请求限制必须为正整数")
+    assert has_element?(view, "#api-key-submit[disabled]", "创建 API 密钥")
+
+    view |> element("#api-key-cancel-create") |> render_click()
+    view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+    _ = render_async(view)
+    select_api_key_section(view, :limits)
+    assert has_element?(view, "#api-key-budget-title", "预算用量")
+    assert has_element?(view, "#api-key-budget-daily", "今天（UTC）")
+    view |> element("#api-key-cancel-edit") |> render_click()
+  end
+
+  test "Chinese API key empty state explains the prerequisite", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/api-keys")
+
+    assert has_element?(view, "#api-key-empty-state", "没有 API 密钥")
+    assert has_element?(view, "#api-key-empty-state", "添加 API 密钥前，请先创建 Pool。")
+    assert has_element?(view, "#api-key-empty-create-action", "创建 Pool")
+  end
+
   test "guides operators to create a Pool before API keys", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
 

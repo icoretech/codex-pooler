@@ -39,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     socket =
       socket
       |> assign(
-        page_title: "Upstreams",
+        page_title: gettext("Upstreams"),
         can_manage_pools?: false,
         pools: [],
         pool_options: [],
@@ -85,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         mailer_configured?: Mailer.configured?()
       )
       |> assign(PoolEditorWorkflow.initial_assigns())
-      |> assign(InviteWorkflow.initial_assigns())
+      |> assign(InviteWorkflow.initial_assigns(socket.assigns.locale.tag))
       |> assign(ProviderCreditsWorkflow.initial_assigns())
       |> allow_upload(:auth_json,
         accept: ~w(.json),
@@ -151,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     # patch to the page without their parameters.
     url_dialog_lost? = url_dialog_lost?(socket)
     socket = if url_dialog_lost?, do: push_patch(socket, to: upstreams_path(socket)), else: socket
-    {:noreply, if(closed? or url_dialog_lost?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+    {:noreply, if(closed? or url_dialog_lost?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
   end
 
   def handle_info(:refresh_saved_reset_status_tick, socket) do
@@ -343,8 +343,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply, push_patch(socket, to: upstreams_path(socket))}
   end
 
-  def handle_event("validate_invite", %{"invite" => invite_params}, socket) do
-    {:noreply, InviteWorkflow.validate(socket, invite_params)}
+  def handle_event("validate_invite", %{"invite" => invite_params} = params, socket) do
+    {:noreply, InviteWorkflow.validate(socket, invite_params, params["_target"])}
   end
 
   def handle_event("create_invite", %{"invite" => invite_params}, socket) do
@@ -432,7 +432,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          |> defer_upstreams_reload()}
 
       nil ->
-        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Upstream account was not found"))}
     end
   end
 
@@ -479,7 +479,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   def handle_event("open_saved_reset_policy", %{"id" => identity_id}, socket) do
     case find_account(socket.assigns.upstream_accounts, identity_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Upstream account was not found"))}
 
       account ->
         {:noreply,
@@ -572,7 +572,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         end
 
       nil ->
-        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Upstream account was not found"))}
     end
   end
 
@@ -598,7 +598,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          )}
 
       nil ->
-        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Upstream account was not found"))}
     end
   end
 
@@ -649,6 +649,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:upstreams}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -682,6 +684,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         creating_invite={@creating_invite}
         invite_form={@invite_form}
         invite_form_valid?={@invite_form_valid?}
+        invite_locale_source={@invite_locale_source}
         last_invite={@last_invite}
         mailer_configured?={@mailer_configured?}
         pool_options={@dialog_pool_options}
@@ -847,11 +850,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   defp start_upstreams_reload(socket, generation) do
     scope = socket.assigns.current_scope
     params = socket.assigns.filter_values
+    locale = Gettext.get_locale()
 
     socket
     |> assign(upstreams_reload_running?: true, upstreams_reload_rerun?: false)
     |> start_async({:upstreams_reload, generation}, fn ->
-      upstreams_page_state(scope, params)
+      Gettext.with_locale(locale, fn -> upstreams_page_state(scope, params) end)
     end)
   end
 
@@ -1087,12 +1091,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     preferences = DateTimeDisplay.preferences_for_user(scope.user)
     cursors = Map.new(socket.assigns.upstream_accounts, &{&1.identity.id, &1.saved_reset_refresh_cursor})
     running = %{generation: generation, page_generation: socket.assigns.upstreams_reload_generation, identity_ids: identity_ids, forced?: forced?, cursors: Map.take(cursors, identity_ids)}
+    locale = Gettext.get_locale()
 
     socket
     |> assign(saved_reset_status_running: running, saved_reset_status_rerun: nil)
     |> start_async({:saved_reset_status, generation}, fn ->
-      pools = Pools.list_visible_pools(scope)
-      UpstreamAccountsReadModel.list_visible_accounts(scope, filtered_pools(pools, filters), filters, preferences)
+      Gettext.with_locale(locale, fn ->
+        pools = Pools.list_visible_pools(scope)
+        UpstreamAccountsReadModel.list_visible_accounts(scope, filtered_pools(pools, filters), filters, preferences)
+      end)
     end)
   end
 
@@ -1243,19 +1250,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     pools
     |> Enum.map(&{pool_name(&1), &1.id})
     |> case do
-      [] -> [{"No active Pools available", ""}]
+      [] -> [{gettext("No active Pools available"), ""}]
       options -> options
     end
   end
 
-  defp pool_name(nil), do: "Unknown Pool"
+  defp pool_name(nil), do: gettext("Unknown Pool")
   defp pool_name(pool), do: pool.name
 
   defp dialog_pool_options(pools) do
     pools
     |> Enum.map(&{pool_name(&1), &1.id})
     |> case do
-      [] -> [{"No active Pools available", ""}]
+      [] -> [{gettext("No active Pools available"), ""}]
       options -> options
     end
   end

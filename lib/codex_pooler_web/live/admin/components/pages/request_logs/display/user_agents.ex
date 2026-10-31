@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.UserAgents do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Accounting.ClientIdentity
 
   @type css_class :: ClientIdentity.css_class()
@@ -18,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.UserAgents do
 
       %{
         text: compact(user_agent),
-        title: "#{classification.label} user agent",
+        title: if(classification.kind == "unknown", do: gettext("Client user agent"), else: gettext("%{client} user agent", client: classification.label)),
         kind: classification.kind,
         label: classification.label,
         icon: classification.icon,

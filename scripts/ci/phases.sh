@@ -35,6 +35,7 @@ static_checks() {
     phase format mix format --check-formatted
     phase security mix quality.security
     phase credo mix quality.credo
+    phase i18n mix quality.i18n
 }
 case "$mode" in
   quality)

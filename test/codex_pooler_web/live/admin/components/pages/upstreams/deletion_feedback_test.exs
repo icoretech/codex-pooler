@@ -84,7 +84,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamDeletionFeedbackTest do
       deletion_state: deletion_state,
       deletion_updates_paused?: paused,
       identity: %{account_email: nil, label: "Sample account", onboarding_method: "import"},
-      header: %{title: "Sample account", status: "deleted", status_label: "Deleted", plan_reported?: false, safe_account_id_label: "unavailable", subject_ref: nil}
+      header: %{title: "Sample account", status: "deleted", status_label: "Deleted", plan_reported?: false, safe_account_id_label: "unavailable", safe_account_id_value: "unavailable", subject_ref: nil}
     }
 
     render_component(&Summary.credential_card/1, cockpit: cockpit)

@@ -12,12 +12,15 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
   alias CodexPoolerWeb.UserAuth
 
   @default_tab "appearance"
-  @settings_tabs [
-    %{id: "appearance", label: "Appearance", description: "Theme and display defaults"},
-    %{id: "account", label: "Account", description: "Identity details"},
-    %{id: "security", label: "Security", description: "Password and second factor"}
-  ]
-  @tab_ids Enum.map(@settings_tabs, & &1.id)
+  @tab_ids ~w(appearance account security)
+
+  defp settings_tabs do
+    [
+      %{id: "appearance", label: gettext("Appearance"), description: gettext("Theme and display defaults")},
+      %{id: "account", label: gettext("Account"), description: gettext("Identity details")},
+      %{id: "security", label: gettext("Security"), description: gettext("Password and second factor")}
+    ]
+  end
 
   @impl true
   def mount(_params, session, socket) do
@@ -25,9 +28,9 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
 
     socket =
       assign(socket,
-        page_title: "Settings",
+        page_title: gettext("Settings"),
         selected_tab: @default_tab,
-        settings_tabs: @settings_tabs,
+        settings_tabs: settings_tabs(),
         current_user_token: session["user_token"],
         account_form: account_form(user),
         datetime_format_options: DateTimeDisplay.format_options(),
@@ -67,13 +70,13 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          |> assign(:account_form, account_form(user))
          |> assign_datetime_preferences()
          |> assign_mcp_panel()
-         |> put_flash(:info, "Account settings updated")}
+         |> put_flash(:info, gettext("Account settings updated"))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :account_form, to_form(changeset, as: :user))}
 
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Account settings could not be updated")}
+        {:noreply, put_flash(socket, :error, gettext("Account settings could not be updated"))}
     end
   end
 
@@ -83,7 +86,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
     case MCP.set_operator_mcp_enabled(socket.assigns.current_scope.user, enabled?) do
       {:ok, _settings} ->
         message =
-          if enabled?, do: "MCP enabled for this operator", else: "MCP disabled for this operator"
+          if enabled?, do: gettext("MCP enabled for this operator"), else: gettext("MCP disabled for this operator")
 
         {:noreply,
          socket
@@ -91,7 +94,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          |> put_flash(:info, message)}
 
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "MCP account setting could not be updated")}
+        {:noreply, put_flash(socket, :error, gettext("MCP account setting could not be updated"))}
     end
   end
 
@@ -102,7 +105,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          socket
          |> assign_mcp_panel()
          |> assign(:mcp_created_secret, %{key: key, raw_token: raw_token})
-         |> put_flash(:info, "MCP key created. Copy the token now.")}
+         |> put_flash(:info, gettext("MCP key created. Copy the token now."))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :mcp_key_form, to_form(changeset, as: :mcp_key))}
@@ -119,16 +122,16 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply,
          socket
          |> assign_mcp_panel()
-         |> put_flash(:info, "MCP key label updated")}
+         |> put_flash(:info, gettext("MCP key label updated"))}
 
       {:error, %Ecto.Changeset{}} ->
-        {:noreply, put_flash(socket, :error, "MCP key label could not be updated")}
+        {:noreply, put_flash(socket, :error, gettext("MCP key label could not be updated"))}
 
       {:error, _reason} ->
         {:noreply,
          socket
          |> assign_mcp_panel()
-         |> put_flash(:error, "MCP key was not found")}
+         |> put_flash(:error, gettext("MCP key was not found"))}
     end
   end
 
@@ -144,7 +147,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply,
          socket
          |> assign_mcp_panel()
-         |> put_flash(:error, "MCP key was not found")}
+         |> put_flash(:error, gettext("MCP key was not found"))}
     end
   end
 
@@ -160,7 +163,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          |> assign(:mcp_delete_key, nil)
          |> assign(:mcp_delete_form, mcp_delete_form(nil))
          |> assign_mcp_panel()
-         |> put_flash(:info, "MCP key deleted")}
+         |> put_flash(:info, gettext("MCP key deleted"))}
 
       {:error, _reason} ->
         {:noreply,
@@ -168,29 +171,29 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          |> assign(:mcp_delete_key, nil)
          |> assign(:mcp_delete_form, mcp_delete_form(nil))
          |> assign_mcp_panel()
-         |> put_flash(:error, "MCP key was not found")}
+         |> put_flash(:error, gettext("MCP key was not found"))}
     end
   end
 
   def handle_event("enable_totp", _params, socket) do
     if socket.assigns.totp_enabled? do
-      {:noreply, put_flash(socket, :info, "TOTP is already enabled")}
+      {:noreply, put_flash(socket, :info, gettext("TOTP is already enabled"))}
     else
       case Accounts.enable_totp_for_user(socket.assigns.current_scope.user) do
         {:ok, setup} ->
           {:noreply,
            socket
            |> assign(totp_enabled?: true, totp_setup: setup)
-           |> put_flash(:info, "TOTP enabled. Save the setup details now.")}
+           |> put_flash(:info, gettext("TOTP enabled. Save the setup details now."))}
 
         {:error, :totp_already_enabled} ->
           {:noreply,
            socket
            |> assign(totp_enabled?: true, totp_setup: nil)
-           |> put_flash(:info, "TOTP is already enabled")}
+           |> put_flash(:info, gettext("TOTP is already enabled"))}
 
         {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, "TOTP setup failed")}
+          {:noreply, put_flash(socket, :error, gettext("TOTP setup failed"))}
       end
     end
   end
@@ -213,19 +216,19 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
        |> assign(:current_scope, Scope.for_user(user))
        |> assign(:password_form, password_form())
        |> assign_browser_sessions()
-       |> put_flash(:info, "Password updated")}
+       |> put_flash(:info, gettext("Password updated"))}
     else
       {:error, :password_confirmation_mismatch} ->
         {:noreply,
          socket
          |> assign(:password_form, password_form())
-         |> put_flash(:error, "Passwords do not match.")}
+         |> put_flash(:error, gettext("Passwords do not match."))}
 
       {:error, :invalid_current_password} ->
         {:noreply,
          socket
          |> assign(:password_form, password_form())
-         |> put_flash(:error, "Current password is incorrect.")}
+         |> put_flash(:error, gettext("Current password is incorrect."))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
@@ -237,7 +240,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply,
          socket
          |> assign(:password_form, password_form())
-         |> put_flash(:error, "Password could not be updated")}
+         |> put_flash(:error, gettext("Password could not be updated"))}
     end
   end
 
@@ -254,16 +257,16 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply,
          socket
          |> assign_browser_sessions()
-         |> put_flash(:info, "Other sessions signed out")}
+         |> put_flash(:info, gettext("Other sessions signed out"))}
 
       {:ok, _count} ->
         {:noreply,
          socket
          |> assign_browser_sessions()
-         |> put_flash(:info, "No other sessions to sign out")}
+         |> put_flash(:info, gettext("No other sessions to sign out"))}
 
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Other sessions could not be signed out")}
+        {:noreply, put_flash(socket, :error, gettext("Other sessions could not be signed out"))}
     end
   end
 
@@ -277,7 +280,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Browser session signed out")
+         |> put_flash(:info, gettext("Browser session signed out"))
          |> redirect(to: ~p"/login")}
 
       {:ok, %{current?: false, revoked_count: count}} when count > 0 ->
@@ -286,16 +289,16 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         {:noreply,
          socket
          |> assign_browser_sessions()
-         |> put_flash(:info, "Browser session signed out")}
+         |> put_flash(:info, gettext("Browser session signed out"))}
 
       {:ok, _result} ->
         {:noreply,
          socket
          |> assign_browser_sessions()
-         |> put_flash(:info, "Browser session was already signed out")}
+         |> put_flash(:info, gettext("Browser session was already signed out"))}
 
       {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, "Browser session could not be signed out")}
+        {:noreply, put_flash(socket, :error, gettext("Browser session could not be signed out"))}
     end
   end
 
@@ -312,6 +315,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:settings}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -319,14 +324,14 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
       <section id="admin-settings-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="settings-page-header"
-          title="Settings"
-          description="Your operator account: profile, password, two-factor, and browser sessions."
+          title={gettext("Settings")}
+          description={gettext("Your operator account: profile, password, two-factor, and browser sessions.")}
         />
 
         <section id="settings-workspace" class="grid gap-4">
           <SettingsPageComponents.tab_picker tabs={@settings_tabs} selected_tab={@selected_tab} />
 
-          <SettingsPageComponents.appearance_panel :if={@selected_tab == "appearance"} />
+          <SettingsPageComponents.appearance_panel :if={@selected_tab == "appearance"} locale={@locale} locale_preference={@locale_preference} current_scope={@current_scope} />
 
           <SettingsPageComponents.account_panel
             :if={@selected_tab == "account"}
@@ -436,10 +441,16 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
 
   defp changeset_error(changeset) do
     changeset.errors
-    |> Enum.map(fn {field, {message, _opts}} ->
-      "#{Phoenix.Naming.humanize(field)} #{message}"
+    |> Enum.map(fn {field, error} ->
+      gettext("%{field} %{message}", field: password_field_label(field), message: translate_error(error))
     end)
     |> List.first()
-    |> Kernel.||("Password change failed.")
+    |> Kernel.||(gettext("Password change failed."))
   end
+
+  defp password_field_label(:current_password), do: gettext("Current password")
+  defp password_field_label(:new_password), do: gettext("New password")
+  defp password_field_label(:new_password_confirmation), do: gettext("Confirm new password")
+  defp password_field_label(:password), do: gettext("Password")
+  defp password_field_label(field), do: Phoenix.Naming.humanize(field)
 end

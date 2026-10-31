@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Admin.AlertNotificationQuery
 
   @type impacted_pool :: AlertNotificationQuery.impacted_pool()
@@ -36,15 +38,19 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   end
 
   @spec severity_label(String.t() | nil) :: String.t()
-  def severity_label("critical"), do: "Critical"
-  def severity_label("warning"), do: "Warning"
-  def severity_label("info"), do: "Info"
-  def severity_label(_severity), do: "Unknown severity"
+  def severity_label("critical"), do: gettext("Critical")
+  def severity_label("warning"), do: gettext("Warning")
+  def severity_label("info"), do: gettext("Info")
+  def severity_label(_severity), do: gettext("Unknown severity")
 
   @spec state_label(String.t() | nil) :: String.t()
-  def state_label("open"), do: "Open"
-  def state_label("acknowledged"), do: "Acknowledged"
-  def state_label(_state), do: "Unknown state"
+  def state_label("open") do
+    gettext_comment("Open means an unresolved alert incident, not the action for opening a page.")
+    pgettext("incident state", "Open")
+  end
+
+  def state_label("acknowledged"), do: gettext("Acknowledged")
+  def state_label(_state), do: gettext("Unknown state")
 
   @spec page_state(AlertNotificationQuery.page_state()) :: page_state()
   defp page_state(%{rows: rows, unread_count: unread_count, page_size: page_size}) do
@@ -79,20 +85,20 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
     }
   end
 
-  defp reason_title(%{rule_kind: "pool_no_usable_assignments"}), do: "No usable assignments"
+  defp reason_title(%{rule_kind: "pool_no_usable_assignments"}), do: gettext("No usable assignments")
 
   defp reason_title(%{rule_kind: "pool_low_usable_assignments"}),
-    do: "Low usable assignment coverage"
+    do: gettext("Low usable assignment coverage")
 
   defp reason_title(%{rule_kind: "pool_all_assignments_in_state"}),
-    do: "Assignments match an attention state"
+    do: gettext("Assignments match an attention state")
 
-  defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: "Quota threshold reached"
+  defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: gettext("Quota threshold reached")
 
-  defp reason_title(%{rule_kind: "upstream_auth_state"}), do: "Upstream auth attention needed"
+  defp reason_title(%{rule_kind: "upstream_auth_state"}), do: gettext("Upstream auth attention needed")
 
   defp reason_title(%{rule_kind: "upstream_saved_reset_banked_first_seen"}),
-    do: "First-seen banked saved reset"
+    do: gettext("First-seen banked saved reset")
 
-  defp reason_title(_row), do: "Alert condition matched"
+  defp reason_title(_row), do: gettext("Alert condition matched")
 end

@@ -27,17 +27,17 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
     ~H"""
     <AdminComponents.admin_surface
       id="stats-api-key-surface"
-      title="Leaderboard"
+      title={gettext("Leaderboard")}
       description={description(@sort, @window_label)}
     >
       <:header_actions>
         <div
           class="flex shrink-0 items-center gap-0.5 rounded-full border border-base-300 bg-base-200/60 p-0.5"
           role="group"
-          aria-label="Leaderboard ranking"
+          aria-label={gettext("Leaderboard ranking")}
         >
           <button
-            :for={{label, sort} <- [{"Tokens", :tokens}, {"Cost", :cost}]}
+            :for={{label, sort} <- [{gettext("Tokens"), :tokens}, {gettext("Cost"), :cost}]}
             id={"stats-api-key-sort-#{sort}"}
             type="button"
             class={sort_button_class(@sort == sort)}
@@ -54,7 +54,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
         id="stats-api-key-empty-card"
         class="px-4 py-10 text-center text-sm text-base-content/60"
       >
-        No settled API-key usage for this period.
+        {gettext("No settled API-key usage for this period.")}
       </p>
 
       <ol
@@ -70,17 +70,17 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
         >
           <div class="grid min-w-0 gap-2 p-3">
             <div class="flex justify-center">
-              <span class={medallion_class(index + 1)} aria-label={"Rank #{index + 1}"}>
+              <span class={medallion_class(index + 1)} aria-label={gettext("Rank %{rank}", rank: index + 1)}>
                 <.icon :if={index == 0} name="hero-trophy" class="size-4" />
                 <span :if={index > 0} class="text-sm font-bold">{index + 1}</span>
               </span>
             </div>
             <div class="min-w-0">
               <p class="truncate text-sm font-semibold text-base-content" title={row.display_name}>
-                {row.display_name || "API key not recorded"}
+                {row.display_name || gettext("API key not recorded")}
               </p>
               <p class="truncate text-xs text-base-content/55">
-                {row.pool_name || "Pool not available"}
+                {row.pool_name || gettext("Pool not available")}
               </p>
             </div>
             <p class="text-lg font-bold tabular-nums leading-tight text-base-content">
@@ -88,15 +88,11 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
                 {format_micros(row.settled_cost_micros)}
               <% else %>
                 {Format.token_count(row.total_tokens)}
-                <span class="text-xs font-medium text-base-content/50">tokens</span>
+                <span class="text-xs font-medium text-base-content/50">{ngettext("token", "tokens", row.total_tokens)}</span>
               <% end %>
             </p>
             <p class="text-[11px] leading-4 text-base-content/55">
-              <%= if @sort == :cost do %>
-                {Format.integer(row.requests)} req · {Format.token_count(row.total_tokens)} tokens
-              <% else %>
-                {Format.integer(row.requests)} req · {format_micros(row.settled_cost_micros)}
-              <% end %>
+              {usage_summary(row, @sort)}
             </p>
           </div>
           <div class={step_class(index + 1)} aria-hidden="true">
@@ -122,10 +118,10 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
           </span>
           <div class="grid min-w-0 flex-1">
             <p class="truncate text-sm font-medium text-base-content">
-              {row.display_name || "API key not recorded"}
+              {row.display_name || gettext("API key not recorded")}
             </p>
             <p class="truncate text-xs text-base-content/50">
-              {row.pool_name || "Pool not available"}
+              {row.pool_name || gettext("Pool not available")}
             </p>
           </div>
           <div class="grid shrink-0 justify-items-end gap-0.5 text-right">
@@ -134,15 +130,11 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
                 {format_micros(row.settled_cost_micros)}
               <% else %>
                 {Format.token_count(row.total_tokens)}
-                <span class="text-[11px] font-medium text-base-content/50">tokens</span>
+                <span class="text-[11px] font-medium text-base-content/50">{ngettext("token", "tokens", row.total_tokens)}</span>
               <% end %>
             </span>
             <span class="text-[11px] leading-4 tabular-nums text-base-content/50">
-              <%= if @sort == :cost do %>
-                {Format.integer(row.requests)} req · {Format.token_count(row.total_tokens)} tokens
-              <% else %>
-                {Format.integer(row.requests)} req · {format_micros(row.settled_cost_micros)}
-              <% end %>
+              {usage_summary(row, @sort)}
             </span>
           </div>
         </li>
@@ -157,14 +149,30 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
   defp ranking(rows, _sort),
     do: rows |> Enum.sort_by(&{&1.total_tokens, &1.requests}, :desc) |> Enum.take(@limit)
 
-  defp description(sort, window_label),
-    do: "#{ranking_label(sort)} in the #{window_label(window_label)}"
+  defp description(:cost, window_label),
+    do: gettext("Top API keys by settled cost in the %{window}", window: window_label(window_label))
 
-  defp ranking_label(:cost), do: "Top API keys by settled cost"
-  defp ranking_label(_sort), do: "Top API keys by token usage"
+  defp description(_sort, window_label),
+    do: gettext("Top API keys by token usage in the %{window}", window: window_label(window_label))
 
   defp window_label(label) when is_binary(label) and label != "", do: String.downcase(label)
-  defp window_label(_label), do: "selected window"
+  defp window_label(_label), do: gettext("selected window")
+
+  defp usage_summary(row, :cost) do
+    tokens = ngettext("%{tokens} token", "%{tokens} tokens", row.total_tokens, tokens: Format.token_count(row.total_tokens))
+
+    ngettext("%{requests} req · %{tokens}", "%{requests} req · %{tokens}", row.requests,
+      requests: Format.integer(row.requests),
+      tokens: tokens
+    )
+  end
+
+  defp usage_summary(row, _sort) do
+    ngettext("%{requests} req · %{cost}", "%{requests} req · %{cost}", row.requests,
+      requests: Format.integer(row.requests),
+      cost: format_micros(row.settled_cost_micros)
+    )
+  end
 
   defp sort_button_class(active?) do
     [
@@ -211,6 +219,6 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
       "border-(--codex-rank-bronze)/50 bg-(--codex-rank-bronze)/16 text-(--codex-rank-bronze-ink)"
     ]
 
-  defp format_micros(nil), do: "unavailable"
+  defp format_micros(nil), do: gettext("unavailable")
   defp format_micros(micros), do: Format.money_precise_from_micros(micros)
 end

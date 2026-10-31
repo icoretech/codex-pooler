@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import CodexPoolerWeb.Admin.RequestLogsDisplay, only: [format_route_latency: 1]
 
   alias CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows
@@ -17,81 +19,81 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     rows = [
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-ref",
-        "Attempt ref",
+        gettext("Attempt ref"),
         attempt.attempt_ref,
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-assignment",
-        "Assignment id",
+        gettext("Assignment id"),
         attempt.pool_upstream_assignment_id,
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-status-code",
-        "Upstream status",
+        gettext("Upstream status"),
         attempt.upstream_status_code
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-network-error",
-        "Network error",
+        gettext("Network error"),
         attempt.network_error_code,
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-code",
-        "Provider terminal code",
+        gettext("Provider terminal code"),
         Map.get(attempt, :upstream_error_code),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-stream-terminal-type",
-        "Terminal event",
+        gettext("Terminal event"),
         Map.get(attempt, :stream_terminal_type),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-compaction-invalid-reason",
-        "Compaction rejection reason",
+        gettext("Compaction rejection reason"),
         Map.get(attempt, :compaction_invalid_reason),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-param",
-        "Upstream error parameter",
+        gettext("Upstream error parameter"),
         Map.get(attempt, :upstream_error_param),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-code",
-        "Provider rejection code",
+        gettext("Provider rejection code"),
         Map.get(attempt, :rejection_error_code),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-type",
-        "Provider rejection type",
+        gettext("Provider rejection type"),
         Map.get(attempt, :rejection_error_type),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-rejection-error-param",
-        "Provider rejection parameter",
+        gettext("Provider rejection parameter"),
         Map.get(attempt, :rejection_error_param),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-latency",
-        "Latency",
+        gettext("Latency"),
         format_route_latency(attempt.latency_ms),
         mono: true
       ),
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-retryable",
-        "Retryable",
+        gettext("Retryable"),
         attempt.retryable
       ),
-      detail("request-log-detail-attempt-#{attempt.attempt_number}-final", "Final", attempt.final)
+      detail("request-log-detail-attempt-#{attempt.attempt_number}-final", gettext("Final"), attempt.final)
     ]
 
     mode_rows =
@@ -108,19 +110,19 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     prefix = "request-log-detail-attempt-#{attempt.attempt_number}-model"
 
     [
-      detail("#{prefix}-sent", "Sent model", Map.get(attempt, :upstream_model)),
-      detail("#{prefix}-first", "First model reported", Map.get(attempt, :served_model) || "Unavailable"),
-      detail("#{prefix}-coverage", "Model-name recording", if(observation, do: "#{observation["coverage"]} · collector v#{observation["version"]}", else: "Not collected")),
-      detail("#{prefix}-conflict", "Model name changed within response", conflict_label(observation)),
-      detail("#{prefix}-first-conflict", "First different name reported", observation && observation["first_conflicting_model"]),
-      detail("#{prefix}-terminal", "Model reported at end", (observation && observation["terminal_model"]) || "No final model reported"),
-      detail("#{prefix}-terminal-status", "Final response event", (observation && observation["terminal_status"]) || if(observation, do: "No final event recorded", else: "Not collected"))
+      detail("#{prefix}-sent", gettext("Sent model"), Map.get(attempt, :upstream_model)),
+      detail("#{prefix}-first", gettext("First model reported"), Map.get(attempt, :served_model) || gettext("Unavailable")),
+      detail("#{prefix}-coverage", gettext("Model-name recording"), if(observation, do: gettext("%{coverage} · collector v%{version}", coverage: observation["coverage"], version: observation["version"]), else: gettext("Not collected"))),
+      detail("#{prefix}-conflict", gettext("Model name changed within response"), conflict_label(observation)),
+      detail("#{prefix}-first-conflict", gettext("First different name reported"), observation && observation["first_conflicting_model"]),
+      detail("#{prefix}-terminal", gettext("Model reported at end"), (observation && observation["terminal_model"]) || gettext("No final model reported")),
+      detail("#{prefix}-terminal-status", gettext("Final response event"), (observation && observation["terminal_status"]) || if(observation, do: gettext("No final event recorded"), else: gettext("Not collected")))
     ]
   end
 
-  defp conflict_label(%{"conflict" => true}), do: "Yes — provider reported different names in one response"
-  defp conflict_label(%{"conflict" => false}), do: "No name change observed"
-  defp conflict_label(_observation), do: "Unknown"
+  defp conflict_label(%{"conflict" => true}), do: gettext("Yes — provider reported different names in one response")
+  defp conflict_label(%{"conflict" => false}), do: gettext("No name change observed")
+  defp conflict_label(_observation), do: gettext("Unknown")
 
   @spec transport_failure_rows(map()) :: [detail_row()]
   def transport_failure_rows(attempt) do
@@ -128,21 +130,21 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     prefix = "request-log-detail-transport-#{attempt.attempt_number}"
 
     [
-      detail("#{prefix}-evidence-source", "Evidence source", Map.get(failure, :evidence_source)),
-      detail("#{prefix}-termination-source", "Termination source", Map.get(failure, :termination_source), mono: true),
-      detail("#{prefix}-exception", "Exception", Map.get(failure, :exception), mono: true),
-      detail("#{prefix}-reason-class", "Reason class", Map.get(failure, :reason_class), mono: true),
-      detail("#{prefix}-reason", "Reason", Map.get(failure, :reason), mono: true),
-      detail("#{prefix}-phase", "Phase", Map.get(failure, :phase), mono: true),
+      detail("#{prefix}-evidence-source", gettext("Evidence source"), Map.get(failure, :evidence_source)),
+      detail("#{prefix}-termination-source", gettext("Termination source"), Map.get(failure, :termination_source), mono: true),
+      detail("#{prefix}-exception", gettext("Exception"), Map.get(failure, :exception), mono: true),
+      detail("#{prefix}-reason-class", gettext("Reason class"), Map.get(failure, :reason_class), mono: true),
+      detail("#{prefix}-reason", gettext("Reason"), Map.get(failure, :reason), mono: true),
+      detail("#{prefix}-phase", gettext("Phase"), Map.get(failure, :phase), mono: true),
       detail(
         "#{prefix}-pre-visible-output",
-        "Pre-visible output",
+        gettext("Pre-visible output"),
         Map.get(failure, :pre_visible_output)
       ),
-      detail("#{prefix}-terminal-seen", "Terminal seen", Map.get(failure, :terminal_seen)),
+      detail("#{prefix}-terminal-seen", gettext("Terminal seen"), Map.get(failure, :terminal_seen)),
       detail(
         "#{prefix}-text-frame-count",
-        "Text frame count",
+        gettext("Text frame count"),
         Map.get(failure, :text_frame_count)
       )
     ]
@@ -173,10 +175,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         prefix = "request-log-detail-attempt-#{attempt_number}"
 
         [
-          detail("#{prefix}-lifecycle-id", "Lifecycle ID", lifecycle_id, mono: true),
-          detail("#{prefix}-generation", "Generation", generation, mono: true),
-          detail("#{prefix}-reused", "Reused", reused),
-          detail("#{prefix}-reconnected", "Reconnected", reconnected)
+          detail("#{prefix}-lifecycle-id", gettext("Lifecycle ID"), lifecycle_id, mono: true),
+          detail("#{prefix}-generation", gettext("Generation"), generation, mono: true),
+          detail("#{prefix}-reused", gettext("Reused"), reused),
+          detail("#{prefix}-reconnected", gettext("Reconnected"), reconnected)
         ]
 
       _invalid ->
@@ -206,7 +208,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         [
           detail(
             "request-log-detail-attempt-#{attempt_number}-downstream-delivery",
-            "Downstream delivery",
+            gettext("Downstream delivery"),
             downstream_delivery_line(outcome, terminal_class, frames, receipt, pushed_at, transport),
             mono: true
           )
@@ -217,26 +219,26 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     end
   end
 
-  defp highest_frame_class(%{highest_frame_class: class}) when is_binary(class), do: "highest frame #{class}"
+  defp highest_frame_class(%{highest_frame_class: class}) when is_binary(class), do: gettext("highest frame %{class}", class: class)
   defp highest_frame_class(_receipt), do: nil
 
   defp completed_items(%{completed_items: count}) when is_integer(count) and count >= 0,
-    do: "#{count} completed #{if count == 1, do: "item", else: "items"}"
+    do: ngettext("%{count} completed item", "%{count} completed items", count, count: count)
 
   defp completed_items(_receipt), do: nil
 
-  defp write_failure(%{write_failure: failure}) when is_binary(failure), do: "write failed #{failure}"
+  defp write_failure(%{write_failure: failure}) when is_binary(failure), do: gettext("write failed %{failure}", failure: failure)
   defp write_failure(_receipt), do: nil
 
   defp downstream_delivery_line(outcome, terminal_class, frames, receipt, pushed_at, transport) do
     [
       outcome,
-      "terminal #{terminal_class}",
-      "#{frames} #{if frames == 1, do: "frame", else: "frames"} after visible",
+      gettext("terminal %{class}", class: terminal_class),
+      ngettext("%{count} frame after visible", "%{count} frames after visible", frames, count: frames),
       highest_frame_class(receipt),
       completed_items(receipt),
       write_failure(receipt),
-      pushed_at && "pushed #{pushed_at}",
+      pushed_at && gettext("pushed %{time}", time: pushed_at),
       transport
     ]
     |> Enum.reject(&is_nil/1)

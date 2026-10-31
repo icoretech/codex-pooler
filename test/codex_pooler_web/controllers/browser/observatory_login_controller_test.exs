@@ -36,6 +36,20 @@ defmodule CodexPoolerWeb.Browser.ObservatoryLoginControllerTest do
     refute Map.has_key?(conn.assigns, :current_scope)
   end
 
+  test "Chinese locale translates Observatory login and rejected key feedback", %{conn: conn} do
+    conn = conn |> put_locale("zh-CN") |> get(@login_path)
+    html = html_response(conn, 200)
+
+    assert html =~ "观测台"
+    assert html =~ "访问密钥"
+    assert html =~ "继续"
+
+    conn = post_login(recycle(conn), @endpoint, %{"observatory" => %{"api_key" => "invalid-key"}})
+    html = html_response(conn, 422)
+
+    assert html =~ "API 密钥无效或不可用。"
+  end
+
   test "observatory login is a dedicated GET route and dashboard routes remain absent" do
     routes =
       CodexPoolerWeb.Router

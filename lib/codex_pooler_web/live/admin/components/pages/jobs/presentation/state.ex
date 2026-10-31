@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.JobsPresentation.State do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   @default_job_state_presentation %{
     icon: "hero-question-mark-circle",
     icon_class: "mx-auto size-5 text-base-content/60",
@@ -55,13 +57,13 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.State do
       icon: "hero-clock",
       icon_class: "mx-auto size-5 text-info",
       tone: :info,
-      label: "Awaiting first run"
+      label: nil
     },
     "idle" => %{
       icon: "hero-minus-circle",
       icon_class: "mx-auto size-5 text-base-content/40",
       tone: :neutral,
-      label: "No observed run"
+      label: nil
     }
   }
 
@@ -75,14 +77,19 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.State do
   def icon_class(state), do: presentation(state).icon_class
 
   @spec label(String.t() | nil) :: String.t()
-  def label(nil), do: "Unknown"
-
-  def label(state) do
-    case presentation(state).label do
-      nil -> state |> to_string() |> String.replace("_", " ") |> String.capitalize()
-      label -> label
-    end
-  end
+  def label(nil), do: gettext("Unknown")
+  def label("completed"), do: gettext("Completed")
+  def label("discarded"), do: gettext("Discarded")
+  def label("cancelled"), do: gettext("Cancelled")
+  def label("executing"), do: gettext("Executing")
+  def label("retryable"), do: gettext("Retryable")
+  def label("available"), do: gettext("Available")
+  def label("scheduled"), do: gettext("Scheduled")
+  def label("awaiting_first_run"), do: gettext("Awaiting first run")
+  def label("idle"), do: gettext("No observed run")
+  def label("suspended"), do: gettext("Suspended")
+  def label("unknown_state"), do: gettext("Unknown state")
+  def label(_state), do: gettext("Unknown")
 
   defp presentation(state),
     do: Map.get(@job_state_presentations, state, @default_job_state_presentation)

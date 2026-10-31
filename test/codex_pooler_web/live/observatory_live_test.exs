@@ -79,7 +79,8 @@ defmodule CodexPoolerWeb.ObservatoryLiveTest do
     assert term_contains_binary?(decoded_payload, session_row.token_hash) == false
     assert term_contains_binary?(decoded_payload, api_key.key_hash) == false
 
-    assert Map.keys(decoded_payload.session) == ["observatory_handoff"]
+    assert Enum.sort(Map.keys(decoded_payload.session)) == ["locale", "observatory_handoff"]
+    assert decoded_payload.session["locale"] == "en"
     handoff = decoded_payload.session["observatory_handoff"]
     assert Map.keys(handoff) == [:dashboard_session_id]
     assert {:ok, handoff.dashboard_session_id} == Ecto.UUID.cast(handoff.dashboard_session_id)

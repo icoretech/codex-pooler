@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
 
   attr :id, :string, required: true
-  attr :label, :string, default: "Pool"
+  attr :label, :string, default: nil
   attr :field_name, :string, default: "pool_id"
   attr :hidden_id, :string, required: true
   attr :role, :string, default: "pool-filter"
@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
   attr :selected, :map, default: nil
   attr :options, :list, required: true
 
+  @spec pool_filter_dropdown(map()) :: Phoenix.LiveView.Rendered.t()
   def pool_filter_dropdown(assigns) do
     assigns =
       assign(
@@ -40,7 +41,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
       >
         <summary
           data-role={"#{@role}-trigger"}
-          aria-label={@label}
+          aria-label={@label || gettext("Pool")}
           class="select flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
         >
           <.pool_filter_icon option={@selected} />
@@ -102,6 +103,7 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
     """
   end
 
+  @spec pool_filter_options(list()) :: [map()]
   def pool_filter_options(pools) do
     settings_by_pool_id =
       pools
@@ -117,15 +119,18 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
     [all_pool_filter_option() | pool_options]
   end
 
+  @spec selected_pool_filter_option([map()], String.t() | nil) :: map()
   def selected_pool_filter_option(options, pool_id) do
     Enum.find(options, &(&1.value == (pool_id || ""))) || all_pool_filter_option()
   end
 
+  @spec all_pool_filter_options() :: [map()]
   def all_pool_filter_options, do: [all_pool_filter_option()]
 
+  @spec all_pool_filter_option() :: map()
   def all_pool_filter_option do
     %{
-      label: "All Pools",
+      label: gettext("All Pools"),
       value: "",
       icon: "hero-server-stack",
       icon_class: "text-base-content/60",
@@ -181,8 +186,8 @@ defmodule CodexPoolerWeb.Admin.PoolFilterComponents do
   defp pool_status_icon_class("archived"), do: "text-error"
   defp pool_status_icon_class(_status), do: "text-base-content/60"
 
-  defp pool_status_label("active"), do: "Active Pool"
-  defp pool_status_label("disabled"), do: "Disabled Pool"
-  defp pool_status_label("archived"), do: "Archived Pool"
+  defp pool_status_label("active"), do: gettext("Active Pool")
+  defp pool_status_label("disabled"), do: gettext("Disabled Pool")
+  defp pool_status_label("archived"), do: gettext("Archived Pool")
   defp pool_status_label(_status), do: nil
 end

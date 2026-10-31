@@ -10,6 +10,42 @@ defmodule CodexPoolerWeb.Admin.LensLiveTest do
 
   setup :register_and_log_in_user
 
+  test "Chinese filters and empty history survive an asynchronous filter reload", %{conn: conn} do
+    {:ok, view, _html} = live_lens(put_locale(conn, "zh-CN"), ~p"/admin/lens")
+
+    assert has_element?(view, "#model-history-header", "查找服务商报告的模型")
+    assert has_element?(view, "#lens-window-filter [data-role=window-filter-trigger]", "最近 24 小时")
+    assert has_element?(view, "#lens-model-filter [data-role=sent_model-filter-trigger]", "任意发送模型")
+    assert has_element?(view, "#lens-evidence-filter [data-value=signals]", "模型差异")
+    assert has_element?(view, "#model-history-empty", "没有保留的尝试")
+    assert hd(lens_assigns(view).model_options).label == "任意发送模型"
+
+    view |> element("#lens-window-filter [data-value='1h']") |> render_click()
+    assert_patch(view)
+    assigns = await_lens(view)
+    assert assigns.history.bucket_seconds == 300
+    assert hd(assigns.model_options).label == "任意发送模型"
+    assert has_element?(view, "#lens-window-filter [data-role=window-filter-trigger]", "最近一小时")
+    assert has_element?(view, "#model-history-empty", "请调整筛选条件以查看现有历史记录")
+  end
+
+  test "Chinese history translates chart legends and read-model options without changing model evidence", %{conn: conn, scope: scope} do
+    {_pool, setup, assignment} = data_pool(scope, "lens-zh-history")
+    observation = %{"version" => 1, "coverage" => "full", "conflict" => true, "first_conflicting_model" => "model-zh-later", "terminal_model" => "model-zh-final", "terminal_status" => "completed"}
+    attempt = request_fixture(setup) |> attempt_fixture(assignment, %{served_model: "model-zh-other", model_observation: observation})
+
+    {:ok, view, _html} = live_lens(put_locale(conn, "zh-CN"), ~p"/admin/lens")
+
+    assert has_element?(view, "[data-role=model-count-mismatches]", "与发送模型不同")
+    assert has_element?(view, "#model-history-attempt-#{attempt.id}", "模型名称已变化")
+    assert has_element?(view, "#model-history-attempt-#{attempt.id}", "model-zh-other")
+    assert has_element?(view, "#model-history-attempt-#{attempt.id}", "full")
+    assert has_element?(view, "#model-history-attempt-#{attempt.id}", "completed")
+    assert has_element?(view, "#lens-model-filter [data-value='upstream-gpt-6-luna']", "upstream-gpt-6-luna")
+    assert [%{"name" => "与发送模型不同"}, %{"name" => "响应期间名称发生变化"}] = Enum.map(chart_series(view, "lens-signals-plot"), &Map.take(&1, ["name"]))
+    assert hd(lens_assigns(view).model_options).label == "任意发送模型"
+  end
+
   test "an assigned admin's unavailable Pool URL restores visible history and live updates", %{scope: scope} do
     {visible, setup, assignment} = data_pool(scope, "lens-visible-filter")
     {hidden, _, _} = data_pool(scope, "lens-hidden-filter")
@@ -118,7 +154,7 @@ defmodule CodexPoolerWeb.Admin.LensLiveTest do
 
     {:ok, detail, _html} = live(conn, ~p"/admin/request-logs?#{%{selected_request_id: request.id}}")
     render_async(detail)
-    assert has_element?(detail, "[data-role=model-declaration-conflict]", "attempts 1")
+    assert has_element?(detail, "[data-role=model-declaration-conflict]", "attempt 1")
     assert has_element?(detail, "[data-role=model-declaration-conflict]", "model name changed")
     assert has_element?(detail, "#request-log-detail-attempt-1-model-conflict", "Model name changed within response")
     assert has_element?(detail, "#request-log-detail-attempt-1-model-first-conflict", "model-b")

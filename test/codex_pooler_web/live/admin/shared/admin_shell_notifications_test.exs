@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AlertIncidentsReadModel
+  alias CodexPoolerWeb.Admin.Components
 
   setup :register_and_log_in_user
 
@@ -36,6 +37,46 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
       refute has_element?(view, "#admin-notifications-dismiss-all")
       refute has_element?(view, "[data-role='admin-notification-row']")
     end
+  end
+
+  test "Chinese shell translates empty notifications and connection accessibility", %{conn: conn} do
+    {:ok, view, html} = live(put_locale(conn, "zh-CN"), ~p"/admin/settings")
+
+    assert has_element?(view, "#admin-notifications-list", "无活跃通知")
+    assert has_element?(view, "#admin-notifications-summary", "无活跃告警")
+    assert has_element?(view, "#admin-notifications-button[aria-label='通知：无未读通知']")
+    assert has_element?(view, "#admin-websocket-state-button[aria-label='实时更新：正在同步']")
+    assert has_element?(view, "#admin-live-updates-toggle[aria-label='暂停实时更新']")
+
+    labels =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#topbar-connection-indicator")
+      |> LazyHTML.attribute("data-ws-labels")
+      |> List.first()
+      |> Jason.decode!()
+
+    assert labels["connectingLabel"] == "实时更新：正在同步"
+    assert labels["heartbeatHealthy"] == "心跳正常 · %{milliseconds}ms"
+    assert labels["retriesOther"] == "%{retries} 次重试失败"
+  end
+
+  test "Chinese unread labels preserve the capped badge rather than the plural count", %{scope: scope} do
+    Gettext.put_locale("zh_CN")
+
+    document =
+      render_component(&Components.admin_shell/1,
+        flash: %{},
+        current_scope: scope,
+        active_nav: :settings,
+        alert_notification_center: %{badge_count: 105, badge_label: "99+", rows: [], has_rows?: false},
+        inner_block: [%{inner_block: fn _, _ -> "" end}]
+      )
+      |> LazyHTML.from_fragment()
+
+    assert document |> LazyHTML.query("#admin-notifications-badge[aria-label='99+ 条未读通知']") |> LazyHTML.text() =~ "99+"
+    assert document |> LazyHTML.query("#admin-notifications-button[aria-label='通知：99+ 条未读']") |> Enum.count() == 1
+    assert document |> LazyHTML.query("#admin-notifications-summary") |> LazyHTML.text() == "99+ 条未读"
   end
 
   test "renders populated notification rows from the shared shell assign on two pages", %{

@@ -4,6 +4,8 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
   import CodexPooler.PoolerFixtures
   import CodexPooler.AccountsFixtures
 
+  require Phoenix.LiveViewTest
+
   alias CodexPooler.Accounts.Scope
 
   alias CodexPooler.Alerts.Schemas.{
@@ -13,8 +15,42 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
 
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AlertIncidentsReadModel
+  alias CodexPoolerWeb.Admin.AlertsPageComponents.Incidents
+  alias Phoenix.LiveViewTest
 
   setup :register_and_log_in_user
+
+  test "Chinese deleted-channel fallback does not translate a channel with the same name", %{scope: scope} do
+    pool = pool_fixture(%{slug: "alert-channel-locale-#{unique_suffix()}"})
+    rule = alert_rule_fixture(pool)
+    channel = alert_channel_fixture(%{display_name: "Deleted channel"})
+    incident = alert_incident_fixture(pool: pool)
+    alert_incident_target_fixture(incident, rule, pool)
+    named_attempt = delivery_attempt_fixture(incident, channel, status: AlertDeliveryAttempt.sent_status())
+    missing_attempt = delivery_attempt_fixture(incident, channel, status: AlertDeliveryAttempt.sent_status(), attempt_number: 2)
+
+    missing_attempt
+    |> AlertDeliveryAttempt.changeset(%{channel_id: nil, channel_display_name: nil})
+    |> Repo.update!()
+
+    Gettext.put_locale("zh_CN")
+    page = AlertIncidentsReadModel.load(scope, %{})
+    [row] = page.incidents
+    labels = Map.new(row.delivery_summary.attempts, &{&1.id, &1.channel_label})
+
+    assert labels[named_attempt.id] == "Deleted channel"
+    assert labels[missing_attempt.id] == "已删除的渠道"
+
+    html =
+      LiveViewTest.render_component(&Incidents.incident_delivery_summary/1,
+        incident: row,
+        prefix: "locale-channel"
+      )
+
+    document = LazyHTML.from_fragment(html)
+    assert document |> LazyHTML.query("#locale-channel-#{incident.id}-delivery-attempt-#{named_attempt.id} [data-role='incident-delivery-attempt-channel']") |> LazyHTML.text() |> String.trim() == "Deleted channel"
+    assert document |> LazyHTML.query("#locale-channel-#{incident.id}-delivery-attempt-#{missing_attempt.id} [data-role='incident-delivery-attempt-channel']") |> LazyHTML.text() |> String.trim() == "已删除的渠道"
+  end
 
   test "load preserves page, row, linked rule, channel, and delivery shapes", %{scope: scope} do
     pool =

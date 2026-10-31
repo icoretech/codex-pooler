@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.JobFilterForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   @state_options ~w(available scheduled executing retryable completed discarded cancelled suspended)
@@ -177,7 +179,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
       blank?(value) -> {false, nil}
       truthy?(value) -> {true, nil}
       falsey?(value) -> {false, nil}
-      true -> {false, %{field: :show_completed, message: "Show completed must be true or false"}}
+      true -> {false, %{field: :show_completed, message: gettext("Show completed must be true or false")}}
     end
   end
 
@@ -185,13 +187,13 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp parse_state("", _show_completed?), do: {nil, nil}
 
   defp parse_state("completed", false),
-    do: {nil, %{field: :state, message: "Completed jobs require show_completed=true"}}
+    do: {nil, %{field: :state, message: gettext("Completed jobs require show_completed=true")}}
 
   defp parse_state(state, _show_completed?) do
     if state in @state_options do
       {state, nil}
     else
-      {nil, %{field: :state, message: "State filter is not supported"}}
+      {nil, %{field: :state, message: gettext("State filter is not supported")}}
     end
   end
 
@@ -213,20 +215,20 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     if attention in @attention_options do
       {attention, nil}
     else
-      {nil, %{field: :attention, message: "Attention filter is not supported"}}
+      {nil, %{field: :attention, message: gettext("Attention filter is not supported")}}
     end
   end
 
   defp parse_target(%{"target_kind" => "", "target_id" => ""}), do: {nil, nil, []}
 
   defp parse_target(%{"target_kind" => "", "target_id" => target_id}) when target_id != "" do
-    {nil, nil, [%{field: :target_kind, message: "Target kind is required when target id is present"}]}
+    {nil, nil, [%{field: :target_kind, message: gettext("Target kind is required when target id is present")}]}
   end
 
   defp parse_target(%{"target_kind" => target_kind, "target_id" => target_id}) do
     cond do
       target_kind not in @target_kind_options ->
-        {nil, nil, [%{field: :target_kind, message: "Target kind filter is not supported"}]}
+        {nil, nil, [%{field: :target_kind, message: gettext("Target kind filter is not supported")}]}
 
       target_kind in @uuid_target_kinds ->
         parse_uuid_target(target_kind, target_id)
@@ -240,7 +242,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   end
 
   defp parse_uuid_target(_target_kind, "") do
-    {nil, nil, [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
+    {nil, nil, [%{field: :target_id, message: gettext("Target id is required for the selected target kind")}]}
   end
 
   defp parse_uuid_target(target_kind, target_id) do
@@ -253,14 +255,14 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
          [
            %{
              field: :target_id,
-             message: "Target id must be a valid UUID for the selected target kind"
+             message: gettext("Target id must be a valid UUID for the selected target kind")
            }
          ]}
     end
   end
 
   defp parse_rollup_date_target("") do
-    {nil, nil, [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
+    {nil, nil, [%{field: :target_id, message: gettext("Target id is required for the selected target kind")}]}
   end
 
   defp parse_rollup_date_target(target_id) do
@@ -269,14 +271,14 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
         {"rollup_date", Date.to_iso8601(date), []}
 
       {:error, _reason} ->
-        {nil, nil, [%{field: :target_id, message: "Target id must be a valid ISO date for rollup_date"}]}
+        {nil, nil, [%{field: :target_id, message: gettext("Target id must be a valid ISO date for rollup_date")}]}
     end
   end
 
   defp parse_system_target(""), do: {"system", nil, []}
 
   defp parse_system_target(_target_id) do
-    {nil, nil, [%{field: :target_id, message: "Target id must be blank for system jobs"}]}
+    {nil, nil, [%{field: :target_id, message: gettext("Target id must be blank for system jobs")}]}
   end
 
   defp parse_positive_integer(value, field, opts \\ [])
@@ -298,10 +300,10 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   end
 
   defp positive_integer_error(:page),
-    do: %{field: :page, message: "Page must be a positive integer"}
+    do: %{field: :page, message: gettext("Page must be a positive integer")}
 
   defp positive_integer_error(:job_id),
-    do: %{field: :job_id, message: "Job id must be a positive integer"}
+    do: %{field: :job_id, message: gettext("Job id must be a positive integer")}
 
   defp maybe_put_param(params, _key, nil), do: params
   defp maybe_put_param(params, _key, ""), do: params
@@ -331,9 +333,9 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     Enum.find(options, &(&1.value == selected_value)) || fallback
   end
 
-  defp any_state_option, do: [%{label: "Any state", value: "", icon: "hero-queue-list"}]
-  defp any_attention_option, do: %{label: "Any attention", value: "", icon: "hero-sparkles"}
-  defp any_worker_option, do: %{label: "Any worker", value: "", icon: "hero-cube"}
+  defp any_state_option, do: [%{label: gettext("Any state"), value: "", icon: "hero-queue-list"}]
+  defp any_attention_option, do: %{label: gettext("Any attention"), value: "", icon: "hero-sparkles"}
+  defp any_worker_option, do: %{label: gettext("Any worker"), value: "", icon: "hero-cube"}
 
   defp state_option(state), do: %{label: humanize(state), value: state, icon: "hero-queue-list"}
 
@@ -343,6 +345,26 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp target_kind_option(kind),
     do: %{label: humanize(kind), value: kind, icon: target_kind_icon(kind)}
 
+  defp humanize("available"), do: gettext("Available")
+  defp humanize("scheduled"), do: gettext("Scheduled")
+  defp humanize("executing"), do: gettext("Executing")
+  defp humanize("retryable"), do: gettext("Retryable")
+  defp humanize("completed"), do: gettext("Completed")
+  defp humanize("discarded"), do: gettext("Discarded")
+  defp humanize("cancelled"), do: gettext("Cancelled")
+  defp humanize("suspended"), do: gettext("Suspended")
+  defp humanize("active_failure"), do: gettext("Active failure")
+  defp humanize("retry_pressure"), do: gettext("Retry pressure")
+  defp humanize("stuck_executing"), do: gettext("Stuck executing")
+  defp humanize("backlog_pressure"), do: gettext("Backlog pressure")
+  defp humanize("healthy_context"), do: gettext("Healthy context")
+  defp humanize("unknown_state"), do: gettext("Unknown state")
+  defp humanize("assignment"), do: gettext("Assignment")
+  defp humanize("upstream_identity"), do: gettext("Upstream identity")
+  defp humanize("pool"), do: gettext("Pool")
+  defp humanize("api_key"), do: gettext("Api key")
+  defp humanize("rollup_date"), do: gettext("Rollup date")
+  defp humanize("system"), do: gettext("System")
   defp humanize(value), do: value |> String.replace("_", " ") |> String.capitalize()
 
   defp target_kind_icon("assignment"), do: "hero-link"
@@ -352,7 +374,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp target_kind_icon("rollup_date"), do: "hero-calendar-days"
   defp target_kind_icon("system"), do: "hero-cog-6-tooth"
 
-  defp safe_text_message(:worker), do: "Worker filter contains unsupported characters"
+  defp safe_text_message(:worker), do: gettext("Worker filter contains unsupported characters")
 
   defp truthy?(true), do: true
   defp truthy?(value) when is_binary(value), do: value in ["true", "1", "on", "yes"]

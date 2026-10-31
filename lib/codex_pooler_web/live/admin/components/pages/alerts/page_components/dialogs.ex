@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
   attr :rule, :any, default: nil
   attr :form, :any, required: true
 
+  @spec rule_delete_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def rule_delete_dialog(assigns) do
     ~H"""
     <dialog
@@ -24,11 +25,10 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Alert rule</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@rule.display_name}?</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Alert rule")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Delete %{name}?", name: @rule.display_name)}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            The condition stops being evaluated. Incidents it already raised stay available, and the
-            rule can be created again later.
+            {gettext("The condition stops being evaluated. Incidents it already raised stay available, and the rule can be created again later.")}
           </p>
         </div>
 
@@ -45,14 +45,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="alert-rule-delete-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_rule"
             />
             <AdminComponents.action_button
               id="alert-rule-delete-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="alert-rule-delete-form"
               variant={:danger}
@@ -61,7 +61,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_rule">close</button>
+        <button type="button" phx-click="cancel_delete_rule">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -70,6 +70,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
   attr :channel, :any, default: nil
   attr :form, :any, required: true
 
+  @spec channel_delete_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def channel_delete_dialog(assigns) do
     ~H"""
     <dialog
@@ -80,10 +81,10 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Alert channel</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@channel.display_name}?</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Alert channel")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Delete %{name}?", name: @channel.display_name)}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Rules pointing at it stop delivering there. Delivery attempts already made stay available.
+            {gettext("Rules pointing at it stop delivering there. Delivery attempts already made stay available.")}
           </p>
         </div>
 
@@ -100,14 +101,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="alert-channel-delete-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_channel"
             />
             <AdminComponents.action_button
               id="alert-channel-delete-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="alert-channel-delete-form"
               variant={:danger}
@@ -116,7 +117,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_channel">close</button>
+        <button type="button" phx-click="cancel_delete_channel">{gettext("close")}</button>
       </form>
     </dialog>
     """

@@ -154,6 +154,44 @@ defmodule CodexPooler.Alerts.ChannelValidationTest do
     assert %DateTime{} = disabled_again.disabled_at
   end
 
+  test "email channels store supported languages and preserve null on existing rows" do
+    scope = owner_scope()
+    assert {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Chinese alerts", email_to: "alerts@example.com", locale: "zh-CN"})
+    assert channel.locale == "zh-CN"
+    assert Repo.get!(AlertChannel, channel.id).locale == "zh-CN"
+    assert {:ok, updated} = Alerts.update_channel(scope, channel.id, %{locale: "en"})
+    assert updated.locale == "en"
+
+    assert {:ok, channel} = Alerts.create_channel(scope, %{channel_type: "email", display_name: "Default alerts", email_to: "default-alerts@example.com"})
+    assert channel.locale == nil
+  end
+
+  test "email channels reject unsupported languages at changeset and database boundaries" do
+    scope = owner_scope()
+    attrs = %{channel_type: "email", display_name: "Invalid language alerts", email_to: "alerts@example.com", locale: "zh-TW"}
+    assert {:error, changeset} = Alerts.create_channel(scope, attrs)
+    assert "is invalid" in errors_on(changeset).locale
+
+    assert {:ok, channel} = Alerts.create_channel(scope, Map.put(attrs, :locale, "en"))
+    changeset = Repo.get!(AlertChannel, channel.id) |> Ecto.Changeset.change(locale: "zh-TW") |> Ecto.Changeset.check_constraint(:locale, name: :alert_channels_locale_check)
+    assert {:error, changeset} = Repo.update(changeset, mode: :savepoint)
+    assert "is invalid" in errors_on(changeset).locale
+  end
+
+  test "webhook channels reject a submitted email language" do
+    scope = owner_scope()
+    attrs = %{channel_type: "webhook", display_name: "Webhook language", endpoint_url: "https://alerts.example.com/notify", locale: "zh-CN"}
+    assert {:error, changeset} = Alerts.create_channel(scope, attrs)
+    assert "is only available for email channels" in errors_on(changeset).locale
+    assert {:error, empty_changeset} = Alerts.create_channel(scope, Map.put(attrs, :locale, ""))
+    assert "is only available for email channels" in errors_on(empty_changeset).locale
+
+    assert {:ok, channel} = Alerts.create_channel(scope, Map.delete(attrs, :locale))
+    changeset = Repo.get!(AlertChannel, channel.id) |> Ecto.Changeset.change(locale: "zh-CN") |> Ecto.Changeset.check_constraint(:locale, name: :alert_channels_email_locale_check)
+    assert {:error, changeset} = Repo.update(changeset, mode: :savepoint)
+    assert "is invalid" in errors_on(changeset).locale
+  end
+
   defp owner_scope do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     Scope.for_user(owner)

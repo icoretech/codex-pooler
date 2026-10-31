@@ -38,7 +38,7 @@ defmodule CodexPooler.Accounts.OperatorEmailTest do
       |> Enum.join("\n")
 
     assert {:ok, _email} =
-             OperatorEmail.deliver_operator_access(operator_email, temporary_password, true)
+             OperatorEmail.deliver_operator_access(operator_email, temporary_password, true, "en")
 
     assert_email_sent(
       from: sender(),
@@ -55,7 +55,7 @@ defmodule CodexPooler.Accounts.OperatorEmailTest do
     update_login_base_url!("https://operators.example.test")
 
     email =
-      OperatorEmail.temporary_password_email(operator_email, temporary_password, true)
+      OperatorEmail.temporary_password_email(operator_email, temporary_password, true, "en")
 
     assert email.from == sender()
     assert email.to == [{"", operator_email}]
@@ -76,14 +76,14 @@ defmodule CodexPooler.Accounts.OperatorEmailTest do
     update_login_base_url!("https://first.example.test")
 
     first_email =
-      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true)
+      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true, "en")
 
     assert first_email.text_body =~ "Login URL: https://first.example.test/login"
 
     update_login_base_url!("https://second.example.test")
 
     second_email =
-      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true)
+      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true, "en")
 
     assert second_email.text_body =~ "Login URL: https://second.example.test/login"
   end
@@ -92,10 +92,54 @@ defmodule CodexPooler.Accounts.OperatorEmailTest do
     update_login_base_url!("https://codex-pooler.example.com/")
 
     email =
-      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true)
+      OperatorEmail.temporary_password_email("operator@example.com", "TempPass123!", true, "en")
 
     assert email.text_body =~ "Login URL: https://codex-pooler.example.com/login"
     refute email.text_body =~ "https://codex-pooler.example.com//login"
+  end
+
+  test "operator access delivery uses the target account language instead of the administrator locale" do
+    %{user: owner} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    %{user: recipient} = CodexPooler.AccountsFixtures.operator_fixture(owner, %{"email" => "localized-operator@example.com"})
+    {:ok, recipient} = CodexPooler.Accounts.update_user_locale(recipient, "zh-CN")
+    {:ok, recipient} = CodexPooler.Accounts.deactivate_operator(owner, recipient, %{})
+    Gettext.put_locale("en")
+
+    assert {:ok, %{emailed?: true, email_error?: false, temporary_password: password}} =
+             CodexPooler.Accounts.reactivate_operator(owner, recipient, %{"send_email" => true})
+
+    assert_email_sent(fn email ->
+      assert email.to == [{"", recipient.email}]
+      assert email.subject == "Codex Pooler 运营者访问权限"
+      assert email.text_body =~ "临时密码：#{password}"
+      assert email.text_body =~ "登录后，系统会要求您更改此密码。"
+      true
+    end)
+
+    assert Gettext.get_locale() == "en"
+  end
+
+  test "temporary password delivery ignores the administrator locale when the target preference is absent" do
+    %{user: owner} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    %{user: recipient} = CodexPooler.AccountsFixtures.operator_fixture(owner, %{"email" => "default-operator@example.com"})
+    Gettext.put_locale("zh_CN")
+
+    assert {:ok, %{emailed?: true}} =
+             CodexPooler.Accounts.reset_operator_password(owner, recipient, %{"send_email" => true})
+
+    assert_email_sent(subject: "Codex Pooler temporary password")
+    assert Gettext.get_locale() == "zh_CN"
+  end
+
+  test "temporary password renders Chinese and unsupported preferences fall back to English" do
+    email = OperatorEmail.temporary_password_email("recipient@example.com", "TempPass123!", true, "zh-CN")
+    assert email.subject == "Codex Pooler 临时密码"
+    assert email.text_body =~ "临时密码：TempPass123!"
+
+    fallback = OperatorEmail.temporary_password_email("recipient@example.com", "TempPass123!", true, "retired-locale")
+    assert fallback.subject == "Codex Pooler temporary password"
+    assert fallback.text_body =~ "Temporary password: TempPass123!"
+    assert_no_email_sent()
   end
 
   defp sender do

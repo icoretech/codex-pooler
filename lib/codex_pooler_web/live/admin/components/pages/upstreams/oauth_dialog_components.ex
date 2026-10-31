@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   and once one is, the other stays available as a way to switch rather than
   cancel and start again.
   """
+  @spec method_doors(map()) :: Phoenix.LiveView.Rendered.t()
   def method_doors(assigns) do
     ~H"""
     <div class="grid gap-2" data-role="oauth-method-doors">
@@ -30,11 +31,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           id={"#{@id_prefix}-browser-start"}
           event={@browser_event}
           icon="hero-arrow-top-right-on-square"
-          label="via OAuth (browser)"
+          label={gettext("via OAuth (browser)")}
           hint={
             if @active == :device,
-              do: "Switch to pasting a URL.",
-              else: "Approve in a tab, paste the URL back."
+              do: gettext("Switch to pasting a URL."),
+              else: gettext("Approve in a tab, paste the URL back.")
           }
           active={@active == :browser}
           disabled={@disabled}
@@ -43,11 +44,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           id={"#{@id_prefix}-device-start"}
           event={@device_event}
           icon="hero-device-phone-mobile"
-          label="via Device Code"
+          label={gettext("via Device Code")}
           hint={
             if @active == :browser,
-              do: "Switch to a device code.",
-              else: "Approve elsewhere, nothing to paste."
+              do: gettext("Switch to a device code."),
+              else: gettext("Approve elsewhere, nothing to paste.")
           }
           active={@active == :device}
           disabled={@disabled}
@@ -113,6 +114,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :submit_event, :string, required: true
   attr :submit_label, :string, required: true
 
+  @spec browser_authorization_step(map()) :: Phoenix.LiveView.Rendered.t()
   def browser_authorization_step(assigns) do
     assigns =
       assigns
@@ -134,7 +136,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           for={@authorization_url_id}
           class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
         >
-          Authorization page
+          {gettext("Authorization page")}
         </label>
         <div class="grid min-w-0 items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
           <input
@@ -142,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             type="url"
             value={@authorization_url}
             readonly
-            aria-label="OpenAI authorization URL"
+            aria-label={gettext("OpenAI authorization URL")}
             class="input input-bordered h-8 min-h-8 w-full min-w-0 bg-base-200/60 px-2 font-mono text-xs"
           />
           <div class="flex min-w-0 items-stretch gap-2">
@@ -154,13 +156,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
             >
               <.icon name="hero-arrow-top-right-on-square" class="size-3.5 shrink-0" />
-              <span>Open</span>
+              <span>{gettext("Open")}</span>
             </a>
             <AdminComponents.clipboard_button
               id={@authorization_copy_id}
               copy_text={@authorization_url}
-              label="Copy link"
-              aria_label="Copy OpenAI authorization URL"
+              label={gettext("Copy link")}
+              aria_label={gettext("Copy OpenAI authorization URL")}
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
               icon_class="size-3.5"
             />
@@ -180,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             for={@callback_url_id}
             class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
           >
-            Callback URL
+            {gettext("Callback URL")}
           </label>
           <input
             id={@callback_url_id}
@@ -196,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             class="input input-bordered h-8 min-h-8 w-full px-2 font-mono text-xs"
           />
           <p id={@callback_help_id} class="text-xs leading-4 text-base-content/55">
-            After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
+            {gettext("After OpenAI redirects, copy the full URL from the browser address bar and paste it here.")}
           </p>
           <.callback_paste_demo id={@callback_demo_id} />
         </div>
@@ -222,6 +224,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   and under `prefers-reduced-motion` the same drawing holds its finished frame,
   where the selection, the pasted value, and both key pills are already visible.
   """
+  @spec callback_paste_demo(map()) :: Phoenix.LiveView.Rendered.t()
   def callback_paste_demo(assigns) do
     ~H"""
     <figure
@@ -232,7 +235,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
       <svg
         viewBox="0 0 352 126"
         role="img"
-        aria-label="Select the callback URL in the browser address bar, copy it, then paste it into the callback URL field and press Complete link."
+        aria-label={gettext("Select the callback URL in the browser address bar, copy it, then paste it into the callback URL field and press Complete link.")}
         focusable="false"
         class="block w-full"
       >
@@ -243,15 +246,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           <circle cx="29" cy="15" r="2.2" class="opd-dot" />
           <rect x="38" y="8" width="306" height="14" rx="7" class="opd-omnibox" />
           <line x1="1" y1="29" x2="351" y2="29" class="opd-rule" />
-          <text x="13" y="44" class="opd-body-text">This page will not load — that is expected.</text>
+          <text x="13" y="44" class="opd-body-text">{gettext("This page will not load — that is expected.")}</text>
 
           <path d="M176 58 L176 65 M172.6 62 L176 66 L179.4 62" class="opd-arrow" />
 
           <rect x="1" y="70" width="350" height="55" rx="8" class="opd-panel opd-panel--dialog" />
-          <text x="13" y="83" class="opd-field-label">CALLBACK URL</text>
+          <text x="13" y="83" class="opd-field-label">{gettext("CALLBACK URL")}</text>
           <rect x="12" y="89" width="250" height="17" rx="4" class="opd-input" />
           <rect x="270" y="89" width="70" height="17" rx="4" class="opd-submit" />
-          <text x="305" y="100.5" class="opd-submit-label">Complete link</text>
+          <text x="305" y="100.5" class="opd-submit-label">{gettext("Complete link")}</text>
         </g>
 
         <g class="opd-play">
@@ -269,14 +272,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             <rect x="0" y="0" width="47" height="14" rx="7" class="opd-pill-body" />
             <rect x="7" y="4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
             <rect x="9.6" y="3.4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
-            <text x="19" y="9.9" class="opd-pill-text">Copy</text>
+            <text x="19" y="9.9" class="opd-pill-text">{gettext("Copy")}</text>
           </g>
 
           <g class="opd-pill opd-pill--paste">
             <rect x="0" y="0" width="50" height="14" rx="7" class="opd-pill-body" />
             <rect x="7" y="3.4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
             <rect x="9.6" y="4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
-            <text x="19" y="9.9" class="opd-pill-text">Paste</text>
+            <text x="19" y="9.9" class="opd-pill-text">{gettext("Paste")}</text>
           </g>
 
           <path
@@ -305,24 +308,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   beside it. The status line stays here and only here — on this route a poll is
   actually running, and the operator has no other signal for it.
   """
+  @spec device_authorization_step(map()) :: Phoenix.LiveView.Rendered.t()
   def device_authorization_step(assigns) do
     ~H"""
     <section id={"#{@id_prefix}-device-code"} data-role="oauth-device-flow" class="grid gap-4">
       <div class="grid min-w-0 gap-2">
         <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-          Device code
+          {gettext("Device code")}
         </span>
         <p class="text-xs leading-4 text-base-content/55">
-          Open the verification page below and enter this code to approve the account.<span
+          {gettext("Open the verification page below and enter this code to approve the account.")}<span
             :if={@expires_at}
             id={"#{@id_prefix}-device-expires-at"}
             phx-hook="RelativeCountdown"
             data-countdown-at={DateTime.to_iso8601(@expires_at)}
             title={DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
-          > It expires in <span
-            data-role="relative-countdown-value"
-            class="font-semibold text-base-content/75"
-          >{countdown_label(@expires_at)}</span>.</span>
+            data-countdown-label={gettext("It expires in %{duration}.", duration: "%{duration}")}
+            data-countdown-due-label={gettext("due")}
+          >{" "}<span data-role="relative-countdown-value" class="font-semibold text-base-content/75">{gettext("It expires in %{duration}.", duration: countdown_label(@expires_at))}</span></span>
         </p>
         <div class="grid min-w-0 gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -332,8 +335,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             <AdminComponents.clipboard_button
               id={"#{@id_prefix}-device-code-copy"}
               copy_text={@user_code}
-              label="Copy code"
-              aria_label="Copy device code"
+              label={gettext("Copy code")}
+              aria_label={gettext("Copy device code")}
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
               icon_class="size-3.5"
             />
@@ -346,7 +349,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             class="flex items-center gap-1.5 border-t border-base-300/70 pt-2 text-xs font-medium leading-4 text-base-content/55"
           >
             <span class="loading loading-spinner loading-xs shrink-0 text-base-content/40"></span>
-            <span>{@status}{device_recheck_suffix(@interval_seconds)}</span>
+            <span>{device_status_label(@status, @interval_seconds)}</span>
           </p>
         </div>
       </div>
@@ -356,7 +359,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           for={"#{@id_prefix}-device-verification-url"}
           class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
         >
-          Verification page
+          {gettext("Verification page")}
         </label>
         <div class="grid min-w-0 items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
           <input
@@ -364,7 +367,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             type="url"
             value={@verification_uri}
             readonly
-            aria-label="Device verification URL"
+            aria-label={gettext("Device verification URL")}
             class="input input-bordered h-8 min-h-8 w-full min-w-0 bg-base-200/60 px-2 font-mono text-xs"
           />
           <div class="flex min-w-0 items-stretch gap-2">
@@ -376,13 +379,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
             >
               <.icon name="hero-arrow-top-right-on-square" class="size-3.5 shrink-0" />
-              <span>Open</span>
+              <span>{gettext("Open")}</span>
             </a>
             <AdminComponents.clipboard_button
               id={"#{@id_prefix}-device-verification-url-copy"}
               copy_text={@verification_uri}
-              label="Copy link"
-              aria_label="Copy device verification URL"
+              label={gettext("Copy link")}
+              aria_label={gettext("Copy device verification URL")}
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
               icon_class="size-3.5"
             />
@@ -406,7 +409,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
 
     cond do
       seconds <= 0 ->
-        "due"
+        gettext("due")
 
       seconds >= @day ->
         duration_parts([{div(seconds, @day), "d"}, {rem(div(seconds, @hour), 24), "h"}])
@@ -422,7 +425,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     end
   end
 
-  defp countdown_label(_expires_at), do: "due"
+  defp countdown_label(_expires_at), do: gettext("due")
 
   defp hour_label(total_minutes),
     do: duration_parts([{div(total_minutes, 60), "h"}, {rem(total_minutes, 60), "m"}])
@@ -435,10 +438,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
 
   # How often the poll re-checks is the one thing about this wait the operator
   # cannot work out from the screen, and the flow already carries it.
-  defp device_recheck_suffix(seconds) when is_integer(seconds) and seconds > 0,
-    do: ", rechecking every #{seconds}s"
+  defp device_status_label(status, seconds) when is_integer(seconds) and seconds > 0,
+    do: gettext("%{status}, rechecking every %{seconds}s", status: status, seconds: seconds)
 
-  defp device_recheck_suffix(_seconds), do: ""
+  defp device_status_label(status, _seconds), do: status
 
   @doc """
   Id of the callback form, so a dialog footer can submit it from outside.

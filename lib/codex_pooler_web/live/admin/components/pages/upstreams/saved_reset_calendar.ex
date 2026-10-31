@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.SavedResetCalendar do
   One-time iCalendar export of an upstream's reported future banked-reset expirations.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -64,8 +66,8 @@ defmodule CodexPoolerWeb.Admin.SavedResetCalendar do
       "DTSTAMP:#{timestamp(now)}",
       "DTSTART:#{timestamp(expires_at)}",
       "DURATION:PT1M",
-      "SUMMARY:#{escape_text("Banked reset expires — #{label}")}",
-      "DESCRIPTION:#{escape_text("A banked reset for upstream #{label} expires at the start of this one-minute calendar marker.\nOpen the upstream to review its current reset bank. This calendar export is a snapshot and does not update after redemption.")}",
+      "SUMMARY:#{escape_text(gettext("Banked reset expires — %{label}", label: label))}",
+      "DESCRIPTION:#{escape_text(gettext("A banked reset for upstream %{label} expires at the start of this one-minute calendar marker.\nOpen the upstream to review its current reset bank. This calendar export is a snapshot and does not update after redemption.", label: label))}",
       "URL:#{upstream_url}",
       "CLASS:PRIVATE",
       "TRANSP:TRANSPARENT",
@@ -75,12 +77,12 @@ defmodule CodexPoolerWeb.Admin.SavedResetCalendar do
 
   defp upstream_label(%{account_label: label}) when is_binary(label) do
     case String.trim(label) do
-      "" -> "Upstream"
+      "" -> gettext("Upstream")
       label -> label
     end
   end
 
-  defp upstream_label(_identity), do: "Upstream"
+  defp upstream_label(_identity), do: gettext("Upstream")
 
   defp timestamp(datetime) do
     datetime

@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
   attr :card_statuses, :map, required: true
   attr :smtp_test_status, :map, default: nil
 
+  @spec card(map()) :: Phoenix.LiveView.Rendered.t()
   def card(assigns) do
     ~H"""
     <FormControls.settings_card
@@ -24,10 +25,10 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
       <.inputs_for :let={smtp_form} field={@forms["smtp"][:smtp]}>
         <FormControls.settings_group
           id="instance-settings-smtp"
-          eyebrow="SMTP"
-          title="SMTP delivery"
-          description="Delivery-time email settings for operator mail."
-          hint="Leave the SMTP password blank to keep the stored value."
+          eyebrow={gettext("SMTP")}
+          title={gettext("SMTP delivery")}
+          description={gettext("Delivery-time email settings for operator mail.")}
+          hint={gettext("Leave the SMTP password blank to keep the stored value.")}
         >
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <FormControls.scalar_controls
@@ -38,9 +39,9 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
               id="instance-settings-smtp-password"
               name="instance_settings[smtp][password]"
               action_name="instance_settings[smtp][password_action]"
-              label="SMTP password"
-              status_label="Stored password"
-              clear_label="Clear stored password"
+              label={gettext("SMTP password")}
+              status_label={gettext("Stored password")}
+              clear_label={gettext("Clear stored password")}
               action={param_secret_action(@form_params, "smtp", "password_action")}
               status={@settings.smtp.password_status}
             />
@@ -51,12 +52,12 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
           </div>
           <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
             <p class="text-xs leading-5 text-base-content/60">
-              Send a deterministic test email to the signed-in operator with the unsaved SMTP values from this form.
+              {gettext("Send a deterministic test email to the signed-in operator with the unsaved SMTP values from this form.")}
             </p>
             <AdminComponents.action_button
               id="instance-settings-smtp-test"
               icon="hero-paper-airplane"
-              label="Send test email to me"
+              label={gettext("Send test email to me")}
               phx-click="test_smtp"
               variant={:secondary}
             />
@@ -80,30 +81,30 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
         type: :toggle,
         id: "instance-settings-smtp-enabled",
         field: :enabled,
-        label: "SMTP enabled",
-        hint: "Use these settings for operator email."
+        label: gettext("SMTP enabled"),
+        hint: gettext("Use these settings for operator email.")
       },
       %{
         type: :input,
         id: "instance-settings-smtp-host",
         field: :host,
         input_type: "text",
-        label: "SMTP host"
+        label: gettext("SMTP host")
       },
-      %{type: :number, id: "instance-settings-smtp-port", field: :port, label: "SMTP port"},
+      %{type: :number, id: "instance-settings-smtp-port", field: :port, label: gettext("SMTP port")},
       %{
         type: :input,
         id: "instance-settings-smtp-from",
         field: :from,
         input_type: "email",
-        label: "From address"
+        label: gettext("From address")
       },
       %{
         type: :input,
         id: "instance-settings-smtp-username",
         field: :username,
         input_type: "text",
-        label: "SMTP username"
+        label: gettext("SMTP username")
       }
     ]
   end
@@ -114,17 +115,17 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
         type: :select,
         id: "instance-settings-smtp-tls",
         field: :tls,
-        label: "TLS",
-        options: [{"Always", "always"}, {"If available", "if_available"}, {"Never", "never"}]
+        label: gettext("TLS"),
+        options: [{gettext("Always"), "always"}, {gettext("If available"), "if_available"}, {gettext("Never"), "never"}]
       },
       %{
         type: :toggle,
         id: "instance-settings-smtp-ssl",
         field: :ssl,
-        label: "SSL",
-        hint: "Connect with SSL from the start."
+        label: gettext("SSL"),
+        hint: gettext("Connect with SSL from the start.")
       },
-      %{type: :number, id: "instance-settings-smtp-retries", field: :retries, label: "Retries"}
+      %{type: :number, id: "instance-settings-smtp-retries", field: :retries, label: gettext("Retries")}
     ]
   end
 
@@ -135,7 +136,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.SMTP do
     end
   end
 
-  defp smtp_status_message(nil), do: "No SMTP test email has been sent in this form session."
+  defp smtp_status_message(nil), do: gettext("No SMTP test email has been sent in this form session.")
   defp smtp_status_message(%{message: message}), do: message
 
   defp smtp_status_class(nil) do

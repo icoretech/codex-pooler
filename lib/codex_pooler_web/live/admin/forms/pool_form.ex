@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.PoolForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Access
@@ -19,12 +21,15 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
 
   @pool_statuses ["active", "disabled", "archived"]
   @traffic_windows ["1h", "5h", "24h", "7d"]
-  @traffic_window_options [
-    {"Traffic: Last 1 hour", "1h"},
-    {"Traffic: Last 5 hours", "5h"},
-    {"Traffic: Last 24 hours", "24h"},
-    {"Traffic: Last 7 days", "7d"}
-  ]
+  defp traffic_options do
+    [
+      {gettext("Traffic: Last 1 hour"), "1h"},
+      {gettext("Traffic: Last 5 hours"), "5h"},
+      {gettext("Traffic: Last 24 hours"), "24h"},
+      {gettext("Traffic: Last 7 days"), "7d"}
+    ]
+  end
+
   @traffic_window_short_labels %{
     "1h" => "1h",
     "5h" => "5h",
@@ -111,10 +116,10 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   end
 
   @spec filter_status_options() :: [option()]
-  def filter_status_options, do: [{"Status: All", "all"} | status_options()]
+  def filter_status_options, do: [{gettext("Status: All"), "all"} | status_options()]
 
   @spec traffic_window_options() :: [option()]
-  def traffic_window_options, do: @traffic_window_options
+  def traffic_window_options, do: traffic_options()
 
   @spec traffic_window_short_label(String.t()) :: String.t()
   def traffic_window_short_label(window),
@@ -210,6 +215,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     |> to_form(as: :pool_delete)
   end
 
+  @spec upstream_identity_options(CodexPooler.Accounts.Scope.t()) :: {[map()], [map()]}
   def upstream_identity_options(scope) do
     case Upstreams.list_upstream_identities_for_pool_management(scope) do
       {:ok, identities} ->
@@ -222,8 +228,8 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
 
       {:error, reason} ->
         empty_admin_options(:upstream_identity_options, reason, %{
-          title: "Upstream accounts unavailable",
-          message: "Upstream account options could not be loaded. Pool forms may be incomplete."
+          title: gettext("Upstream accounts unavailable"),
+          message: gettext("Upstream account options could not be loaded. Pool forms may be incomplete.")
         })
     end
   end
@@ -256,15 +262,18 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     )
   end
 
-  def status_options, do: Enum.map(@pool_statuses, &{status_label(&1), &1})
+  @spec status_options() :: [option()]
+  def status_options, do: [{gettext("Active"), "active"}, {gettext("Disabled"), "disabled"}, {gettext("Archived"), "archived"}]
 
   # The editor opens only an active Pool; an inactive one is reactivated from
   # its card menu first (findings#206 row 206-318).
-  def edit_title(%{status: "active"}), do: "Edit Pool"
-  def edit_title(_pool), do: "Reactivate the Pool before editing"
+  @spec edit_title(map()) :: String.t()
+  def edit_title(%{status: "active"}), do: gettext("Edit Pool")
+  def edit_title(_pool), do: gettext("Reactivate the Pool before editing")
 
-  def delete_title(%{status: "archived"}), do: "Delete archived Pool"
-  def delete_title(_pool), do: "Archive the Pool before hard deletion"
+  @spec delete_title(map()) :: String.t()
+  def delete_title(%{status: "archived"}), do: gettext("Delete archived Pool")
+  def delete_title(_pool), do: gettext("Archive the Pool before hard deletion")
 
   def changeset_errors(%Ecto.Changeset{} = changeset) do
     Enum.flat_map(changeset.errors, fn {field, errors} ->
@@ -283,8 +292,9 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   def option_value(%{value: value}), do: value
   def option_value({_label, value}), do: value
 
+  @spec option_plan_label(map() | option()) :: String.t()
   def option_plan_label(%{plan_label: label}), do: label
-  def option_plan_label(_option), do: "Plan unknown"
+  def option_plan_label(_option), do: gettext("Plan unknown")
 
   def option_plan_family(%{plan_family: family}), do: family
   def option_plan_family(_option), do: nil
@@ -386,7 +396,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       routable_source_ids: [],
       configured_mode: override.mode,
       available?: false,
-      warning: "#{override.exposed_model_id} is not available in the current routable catalog"
+      warning: gettext("%{model} is not available in the current routable catalog", model: override.exposed_model_id)
     }
   end
 
@@ -400,7 +410,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       configured_mode: "auto",
       effective_mode: "removed",
       source: "removal",
-      effective_badge: %{label: "Will be removed on save", mode: "removed"}
+      effective_badge: %{label: gettext("Will be removed on save"), mode: "removed"}
     })
     |> model_serving_row(index)
   end
@@ -416,7 +426,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       effective_mode: mode,
       source: "override",
       effective_badge: %{
-        label: "Effective: #{String.capitalize(mode)}",
+        label: gettext("Effective: %{mode}", mode: String.capitalize(mode)),
         mode: mode
       }
     })
@@ -437,7 +447,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       effective_mode: resolution.effective_mode,
       source: resolution.source,
       effective_badge: %{
-        label: "Effective: #{String.capitalize(resolution.effective_mode)}",
+        label: gettext("Effective: %{mode}", mode: String.capitalize(resolution.effective_mode)),
         mode: resolution.effective_mode
       }
     })
@@ -565,10 +575,10 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
         }
   defp mode_labels(exposed_model_id) do
     %{
-      fieldset: "Model serving mode for #{exposed_model_id}",
-      auto: "Auto for #{exposed_model_id}",
-      lite: "Lite for #{exposed_model_id}",
-      full: "Full for #{exposed_model_id}"
+      fieldset: gettext("Model serving mode for %{model}", model: exposed_model_id),
+      auto: gettext("Auto for %{model}", model: exposed_model_id),
+      lite: gettext("Lite for %{model}", model: exposed_model_id),
+      full: gettext("Full for %{model}", model: exposed_model_id)
     }
   end
 
@@ -637,14 +647,14 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     else
       {:error, reason} ->
         empty_admin_options(:api_key_options, reason, %{
-          title: "API key options unavailable",
-          message: "API key options could not be loaded. Pool forms may be incomplete."
+          title: gettext("API key options unavailable"),
+          message: gettext("API key options could not be loaded. Pool forms may be incomplete.")
         })
     end
   end
 
   defp upstream_identity_label(identity) do
-    identity.account_label || identity.chatgpt_account_id || "Upstream account"
+    identity.account_label || identity.chatgpt_account_id || gettext("Upstream account")
   end
 
   defp upstream_identity_option(identity) do
@@ -662,9 +672,9 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     pool = Map.get(pool_lookup, api_key.pool_id)
 
     %{
-      label: api_key.display_name || api_key.key_prefix || "API key",
+      label: api_key.display_name || api_key.key_prefix || gettext("API key"),
       value: api_key.id,
-      plan_label: if(pool, do: pool.name, else: "Unknown Pool"),
+      plan_label: if(pool, do: pool.name, else: gettext("Unknown Pool")),
       badge_kind: :metadata,
       status: api_key.status
     }
@@ -678,14 +688,14 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   end
 
   defp plan_label(%{plan_family: _family} = identity), do: plan_family_label(identity)
-  defp plan_label(_identity), do: "Plan unknown"
+  defp plan_label(_identity), do: gettext("Plan unknown")
 
   defp plan_family_label(%{plan_family: family}) when is_binary(family) do
     family
     |> String.trim()
     |> case do
       "" ->
-        "Plan unknown"
+        gettext("Plan unknown")
 
       value ->
         value
@@ -695,7 +705,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     end
   end
 
-  defp plan_family_label(_identity), do: "Plan unknown"
+  defp plan_family_label(_identity), do: gettext("Plan unknown")
 
   defp plan_family(%{plan_family: family}) when is_binary(family) do
     family
@@ -711,10 +721,21 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   defp identity_status(%{status: status}) when is_binary(status), do: status
   defp identity_status(_identity), do: "unknown"
 
-  defp status_label("active"), do: "Active"
-  defp status_label("disabled"), do: "Disabled"
-  defp status_label("archived"), do: "Archived"
-  defp status_label(status), do: status
+  @spec status_label(String.t()) :: String.t()
+  def status_label("active"), do: gettext("active")
+  def status_label("disabled"), do: gettext("disabled")
+  def status_label("archived"), do: gettext("archived")
+  def status_label("paused"), do: gettext("paused")
+  def status_label("revoked"), do: gettext("revoked")
+  def status_label("pending"), do: gettext("pending")
+  def status_label("refresh_due"), do: gettext("refresh_due")
+  def status_label("refreshing"), do: gettext("refreshing")
+  def status_label("refresh_failed"), do: gettext("refresh_failed")
+  def status_label("reauth_required"), do: gettext("reauth_required")
+  def status_label("deleted"), do: gettext("deleted")
+  def status_label("errored"), do: gettext("errored")
+  def status_label("unknown"), do: gettext("unknown")
+  def status_label(status), do: status
 
   defp empty_admin_options(loader, reason, warning) do
     OptionLoaderFallback.empty_options(

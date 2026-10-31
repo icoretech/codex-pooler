@@ -21,7 +21,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     socket =
       socket
       |> assign(
-        page_title: "Alerts",
+        page_title: gettext("Alerts"),
         selected_tab: @default_tab,
         current_params: %{},
         rule_form_mode: :create,
@@ -136,7 +136,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       |> close_if(lost_channel?.(socket.assigns.deleting_channel), &cancel_delete_channel/1)
 
     socket = if new_rule_on_lost_pool?(socket), do: reset_rule_form(socket), else: socket
-    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+    {:noreply, if(closed?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
   end
 
   defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
@@ -165,6 +165,8 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:alerts}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -172,8 +174,8 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       <section id="admin-alerts-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="alerts-page-header"
-          title="Alerts"
-          description="Rules that watch Pools and upstream accounts, delivering incidents by email or signed webhook."
+          title={gettext("Alerts")}
+          description={gettext("Rules that watch Pools and upstream accounts, delivering incidents by email or signed webhook.")}
         />
 
         <section id="alerts-workspace" class="grid gap-4">
@@ -246,12 +248,12 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       {:ok, _incident} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:info, "Alert incident acknowledged")
+        |> put_flash(:info, gettext("Alert incident acknowledged"))
 
       {:error, _reason} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert incident could not be acknowledged")
+        |> put_flash(:error, gettext("Alert incident could not be acknowledged"))
     end
   end
 
@@ -260,12 +262,12 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       {:ok, _incident} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:info, "Alert incident resolved")
+        |> put_flash(:info, gettext("Alert incident resolved"))
 
       {:error, _reason} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert incident could not be resolved")
+        |> put_flash(:error, gettext("Alert incident could not be resolved"))
     end
   end
 
@@ -283,7 +285,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       nil ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule was not found")
+        |> put_flash(:error, gettext("Alert rule was not found"))
     end
   end
 
@@ -334,17 +336,17 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         socket
         |> assign_alert_state()
         |> refresh_disabled_rule_editor(rule)
-        |> put_flash(:info, "Alert rule disabled")
+        |> put_flash(:info, gettext("Alert rule disabled"))
 
       {:error, %{code: :stale_update}} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule changed. Reopen it before disabling")
+        |> put_flash(:error, gettext("Alert rule changed. Reopen it before disabling"))
 
       {:error, _reason} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule could not be disabled")
+        |> put_flash(:error, gettext("Alert rule could not be disabled"))
     end
   end
 
@@ -363,7 +365,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       nil ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule was not found")
+        |> put_flash(:error, gettext("Alert rule was not found"))
     end
   end
 
@@ -378,19 +380,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> assign(deleting_rule: nil, rule_delete_form: AlertRuleForm.delete_form(nil))
         |> assign_alert_state()
         |> reset_rule_form()
-        |> put_flash(:info, "Alert rule deleted")
+        |> put_flash(:info, gettext("Alert rule deleted"))
 
       {:error, %{code: :stale_update}} ->
         socket
         |> assign(deleting_rule: nil, rule_delete_form: AlertRuleForm.delete_form(nil))
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule changed before it could be deleted. Reopen the dialog to review the latest values")
+        |> put_flash(:error, gettext("Alert rule changed before it could be deleted. Reopen the dialog to review the latest values"))
 
       {:error, _reason} ->
         socket
         |> assign(deleting_rule: nil, rule_delete_form: AlertRuleForm.delete_form(nil))
         |> assign_alert_state()
-        |> put_flash(:error, "Alert rule could not be deleted")
+        |> put_flash(:error, gettext("Alert rule could not be deleted"))
     end
   end
 
@@ -408,7 +410,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       nil ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel was not found")
+        |> put_flash(:error, gettext("Alert channel was not found"))
     end
   end
 
@@ -457,17 +459,17 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         socket
         |> assign_alert_state()
         |> refresh_disabled_channel_editor(channel)
-        |> put_flash(:info, "Alert channel disabled")
+        |> put_flash(:info, gettext("Alert channel disabled"))
 
       {:error, %{code: :stale_update}} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel changed. Reopen it before disabling")
+        |> put_flash(:error, gettext("Alert channel changed. Reopen it before disabling"))
 
       {:error, _reason} ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel could not be disabled")
+        |> put_flash(:error, gettext("Alert channel could not be disabled"))
     end
   end
 
@@ -492,7 +494,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
       nil ->
         socket
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel was not found")
+        |> put_flash(:error, gettext("Alert channel was not found"))
     end
   end
 
@@ -510,19 +512,19 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> assign(deleting_channel: nil, channel_delete_form: AlertChannelForm.delete_form(nil))
         |> assign_alert_state()
         |> reset_channel_form()
-        |> put_flash(:info, "Alert channel deleted")
+        |> put_flash(:info, gettext("Alert channel deleted"))
 
       {:error, %{code: :stale_update}} ->
         socket
         |> assign(deleting_channel: nil, channel_delete_form: AlertChannelForm.delete_form(nil))
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel changed before it could be deleted. Reopen the dialog to review the latest values")
+        |> put_flash(:error, gettext("Alert channel changed before it could be deleted. Reopen the dialog to review the latest values"))
 
       {:error, _reason} ->
         socket
         |> assign(deleting_channel: nil, channel_delete_form: AlertChannelForm.delete_form(nil))
         |> assign_alert_state()
-        |> put_flash(:error, "Alert channel could not be deleted")
+        |> put_flash(:error, gettext("Alert channel could not be deleted"))
     end
   end
 
@@ -613,11 +615,11 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   defp refresh_after_stale_update(socket, :stale_update), do: assign_alert_state(socket)
   defp refresh_after_stale_update(socket, _code), do: socket
 
-  defp success_message(:edit), do: "Alert rule updated"
-  defp success_message(_mode), do: "Alert rule created"
+  defp success_message(:edit), do: gettext("Alert rule updated")
+  defp success_message(_mode), do: gettext("Alert rule created")
 
-  defp channel_success_message(:edit), do: "Alert channel updated"
-  defp channel_success_message(_mode), do: "Alert channel created"
+  defp channel_success_message(:edit), do: gettext("Alert channel updated")
+  defp channel_success_message(_mode), do: gettext("Alert channel created")
 
   defp find_visible_rule(rules, rule_id), do: Enum.find(rules, &(&1.id == rule_id))
 
@@ -635,11 +637,11 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   defp access_errors(_code), do: [display_name: {"Rule could not be saved", []}]
 
-  defp access_error_message(:capability_denied), do: "Pool is not available for this operator"
-  defp access_error_message(:rule_not_found), do: "Alert rule was not found"
-  defp access_error_message(:channel_not_found), do: "Delivery channel was not found"
-  defp access_error_message(:stale_update), do: "Alert rule changed. Reopen it before saving"
-  defp access_error_message(_code), do: "Alert rule could not be saved"
+  defp access_error_message(:capability_denied), do: gettext("Pool is not available for this operator")
+  defp access_error_message(:rule_not_found), do: gettext("Alert rule was not found")
+  defp access_error_message(:channel_not_found), do: gettext("Delivery channel was not found")
+  defp access_error_message(:stale_update), do: gettext("Alert rule changed. Reopen it before saving")
+  defp access_error_message(_code), do: gettext("Alert rule could not be saved")
 
   defp channel_access_errors(:channel_not_found),
     do: [display_name: {"Channel is not available", []}]
@@ -648,7 +650,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   defp channel_access_errors(_code), do: [display_name: {"Channel could not be saved", []}]
 
-  defp channel_access_error_message(:channel_not_found), do: "Alert channel was not found"
-  defp channel_access_error_message(:stale_update), do: "Alert channel changed. Reopen it before saving"
-  defp channel_access_error_message(_code), do: "Alert channel could not be saved"
+  defp channel_access_error_message(:channel_not_found), do: gettext("Alert channel was not found")
+  defp channel_access_error_message(:stale_update), do: gettext("Alert channel changed. Reopen it before saving")
+  defp channel_access_error_message(_code), do: gettext("Alert channel could not be saved")
 end

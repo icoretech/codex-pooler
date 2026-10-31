@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
   attr :budget_usage, :map, default: nil
   attr :budget_usage_loading?, :boolean, default: false
 
+  @spec api_key_limits_step(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_limits_step(assigns) do
     assigns = assign(assigns, :retained_model_policies, ApiKeyPolicyForm.retained_model_policies(assigns.form.params))
 
@@ -22,21 +23,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       >
         <div class="grid gap-1">
           <h3 id="api-key-key-wide-title" class="text-sm font-semibold text-base-content">
-            Key-wide limits
+            {gettext("Key-wide limits")}
           </h3>
           <p id="api-key-active-requests-hint" class="text-xs leading-5 text-base-content/65">
-            Across all models. Blank disables the cap. Counts active executions, not idle sockets.
-            Lowering the cap lets current requests finish. This is not a hard token ceiling.
+            {gettext("Across all models. Blank disables the cap. Counts active executions, not idle sockets. Lowering the cap lets current requests finish. This is not a hard token ceiling.")}
           </p>
         </div>
         <.input
           field={@form[:max_active_requests]}
           type="number"
-          label="Maximum active requests"
+          label={gettext("Maximum active requests")}
           min="1"
           max="2147483647"
           step="1"
-          placeholder="Disabled"
+          placeholder={gettext("Disabled")}
           aria-describedby="api-key-active-requests-hint"
           aria-invalid={@form[:max_active_requests].errors != []}
         />
@@ -48,9 +48,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       >
         <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h3 id="api-key-default-limits-title" class="text-sm font-semibold text-base-content">
-            Default policy
+            {gettext("Default policy")}
           </h3>
-          <p class="text-xs text-base-content/60">Blank fields have no saved cap.</p>
+          <p class="text-xs text-base-content/60">{gettext("Blank fields have no saved cap.")}</p>
         </div>
         <.policy_grid
           id="api-key-default-limits-grid"
@@ -67,10 +67,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       >
         <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h3 id="api-key-model-limits-title" class="text-sm font-semibold text-base-content">
-            Model override
+            {gettext("Model override")}
           </h3>
           <p class="text-xs text-base-content/60">
-            Optional limits for one model; key-wide limits still apply.
+            {gettext("Optional limits for one model; key-wide limits still apply.")}
           </p>
         </div>
         <.policy_grid
@@ -89,9 +89,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       >
         <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h3 id="api-key-retained-model-limits-title" class="text-sm font-semibold text-base-content">
-            Other model overrides
+            {gettext("Other model overrides")}
           </h3>
-          <p class="text-xs text-base-content/60">Kept as saved when this key is updated.</p>
+          <p class="text-xs text-base-content/60">{gettext("Kept as saved when this key is updated.")}</p>
         </div>
         <ul class="grid gap-1 text-xs">
           <li
@@ -106,8 +106,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       </section>
 
       <p id="api-key-admission-estimate-hint" class="px-3 text-xs leading-5 text-base-content/60">
-        Output estimate floors are 512 tokens for ordinary requests and 2,048 tokens for opaque-context requests.
-        Output limits are admission checks, not guaranteed provider output caps.
+        {gettext("Output estimate floors are 512 tokens for ordinary requests and 2,048 tokens for opaque-context requests. Output limits are admission checks, not guaranteed provider output caps.")}
       </p>
       <div
         :if={@budget_usage_loading?}
@@ -116,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         role="status"
       >
         <.icon name="hero-arrow-path" class="admin-loading-icon size-4" />
-        <span>Loading current usage</span>
+        <span>{gettext("Loading current usage")}</span>
       </div>
       <.budget_breakdown :if={@budget_usage} usage={@budget_usage} />
     </section>
@@ -138,8 +137,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         :if={@prefix == "model"}
         field={@form[:model_policy_model_identifier]}
         type="text"
-        label="Model identifier"
-        placeholder="Model identifier"
+        label={gettext("Model identifier")}
+        placeholder={gettext("Model identifier")}
       />
       <.limit_input :for={field <- @fields} form={@form} field={field} prefix={@prefix} />
     </div>
@@ -150,6 +149,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
   attr :field, :string, required: true
   attr :prefix, :string, required: true
 
+  @spec limit_input(map()) :: Phoenix.LiveView.Rendered.t()
   def limit_input(assigns) do
     assigns = assign(assigns, :field_atom, String.to_atom("#{assigns.prefix}_#{assigns.field}"))
 
@@ -168,21 +168,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
     fields
     |> Enum.flat_map(fn field ->
       case policy[field] do
-        value when is_integer(value) -> ["#{limit_field_label(field)} #{format_tokens(value)}"]
+        value when is_integer(value) -> [gettext("%{limit} %{value}", limit: limit_field_label(field), value: format_tokens(value))]
         _blank -> []
       end
     end)
     |> case do
-      [] -> "No caps"
+      [] -> gettext("No caps")
       limits -> Enum.join(limits, " · ")
     end
   end
 
-  def limit_field_label("max_requests_per_minute"), do: "Requests per minute"
-  def limit_field_label("max_tokens_per_day"), do: "Tokens per day"
-  def limit_field_label("max_tokens_per_week"), do: "Tokens per week"
-  def limit_field_label("max_input_tokens_per_request"), do: "Input tokens per request"
-  def limit_field_label("max_output_tokens_per_request"), do: "Output tokens per request"
+  @spec limit_field_label(String.t()) :: String.t()
+  def limit_field_label("max_requests_per_minute"), do: gettext("Requests per minute")
+  def limit_field_label("max_tokens_per_day"), do: gettext("Tokens per day")
+  def limit_field_label("max_tokens_per_week"), do: gettext("Tokens per week")
+  def limit_field_label("max_input_tokens_per_request"), do: gettext("Input tokens per request")
+  def limit_field_label("max_output_tokens_per_request"), do: gettext("Output tokens per request")
 
   attr :usage, :map, required: true
 
@@ -195,12 +196,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
     >
       <div class="flex flex-wrap items-baseline justify-between gap-2">
         <h3 id="api-key-budget-title" class="text-sm font-semibold text-base-content">
-          Budget usage
+          {gettext("Budget usage")}
         </h3>
-        <p class="text-xs text-base-content/60">Snapshot when editor opened</p>
+        <p class="text-xs text-base-content/60">{gettext("Snapshot when editor opened")}</p>
       </div>
       <div
-        :for={{window, label} <- [{:daily, "Today (UTC)"}, {:weekly, "Last 7 days"}]}
+        :for={{window, label} <- [{:daily, gettext("Today (UTC)")}, {:weekly, gettext("Last 7 days")}]}
         id={"api-key-budget-#{window}"}
         class="grid min-w-0 gap-2 text-xs sm:grid-cols-[7rem_minmax(0,1fr)]"
       >
@@ -208,10 +209,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         <dl class="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div :for={
             {field, name, suffix} <- [
-              {:known_total_tokens, "Known", "known"},
-              {:provisional_total_tokens, "Provisional", "provisional"},
-              {:pending_total_tokens, "Pending", "pending"},
-              {:effective_total_tokens, "Effective", "effective"}
+              {:known_total_tokens, gettext("Known"), "known"},
+              {:provisional_total_tokens, gettext("Provisional"), "provisional"},
+              {:pending_total_tokens, gettext("Pending"), "pending"},
+              {:effective_total_tokens, gettext("Effective"), "effective"}
             ]
           }>
             <dt class="text-base-content/60">{name}</dt>
@@ -225,7 +226,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         </dl>
       </div>
       <p class="text-xs leading-5 text-base-content/60">
-        Effective = known usage + provisional usage without a final count + pending reservations. Estimates do not change measured token burn.
+        {gettext("Effective = known usage + provisional usage without a final count + pending reservations. Estimates do not change measured token burn.")}
       </p>
     </section>
     """

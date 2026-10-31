@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
   attr :incident_total_count, :integer, required: true
   attr :incident_page_size, :integer, required: true
 
+  @spec incidents_section(map()) :: Phoenix.LiveView.Rendered.t()
   def incidents_section(assigns) do
     ~H"""
     <div
@@ -40,7 +41,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
       >
         <PoolFilterComponents.pool_filter_dropdown
           id="alerts-incident-pool-filter"
-          label="Impacted Pool"
+          label={gettext("Impacted Pool")}
           hidden_id="filters_pool_id"
           event="select_incident_pool_filter"
           selected_value={@incident_filter_values["pool_id"] || ""}
@@ -48,7 +49,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         />
         <.incident_filter_dropdown
           id="alerts-incident-severity-filter"
-          label="Severity"
+          label={gettext("Severity")}
           field_name="severity"
           hidden_id="filters_severity"
           role="severity-filter"
@@ -57,7 +58,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         />
         <.incident_filter_dropdown
           id="alerts-incident-state-filter"
-          label="State"
+          label={gettext("State")}
           field_name="state"
           hidden_id="filters_state"
           role="state-filter"
@@ -66,7 +67,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         />
         <.incident_filter_dropdown
           id="alerts-incident-rule-filter"
-          label="Rule"
+          label={gettext("Rule")}
           field_name="rule_id"
           hidden_id="filters_rule_id"
           role="rule-filter"
@@ -75,7 +76,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         />
         <.incident_filter_dropdown
           id="alerts-incident-channel-filter"
-          label="Channel"
+          label={gettext("Channel")}
           field_name="channel_id"
           hidden_id="filters_channel_id"
           role="channel-filter"
@@ -91,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
       >
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <div>
-          <p class="font-semibold">Some filters were ignored</p>
+          <p class="font-semibold">{gettext("Some filters were ignored")}</p>
           <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
             <li
               :for={error <- @incident_filter_errors}
@@ -105,16 +106,16 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
 
       <AdminComponents.admin_surface
         id="alerts-incidents-list"
-        title="Incidents"
-        description="Recent alert incidents projected through the current operator's Pool visibility."
+        title={gettext("Incidents")}
+        description={gettext("Recent alert incidents projected through the current operator's Pool visibility.")}
         count={incident_count_label(@incident_total_count, @incident_page_size)}
         overflow={:visible}
       >
         <AdminComponents.empty_state
           :if={@incidents == []}
           id="alerts-incidents-empty-state"
-          title="No alert incidents"
-          description="No visible alert incidents match the selected filters."
+          title={gettext("No alert incidents")}
+          description={gettext("No visible alert incidents match the selected filters.")}
           icon="hero-bell-alert"
         />
 
@@ -127,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
             id="alerts-incident-table"
             class="admin-ledger-table table table-sm admin-log-table lg:min-w-[60rem]"
           >
-            <caption class="sr-only">Alert incidents</caption>
+            <caption class="sr-only">{gettext("Alert incidents")}</caption>
             <colgroup>
               <col />
               <col style="width: 12rem;" />
@@ -137,11 +138,11 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
             </colgroup>
             <thead>
               <tr>
-                <th class="whitespace-nowrap">Incident</th>
-                <th class="whitespace-nowrap">Status</th>
-                <th class="whitespace-nowrap">Delivery</th>
-                <th class="whitespace-nowrap">Last seen</th>
-                <th class="whitespace-nowrap text-right">Actions</th>
+                <th class="whitespace-nowrap">{gettext("Incident")}</th>
+                <th class="whitespace-nowrap">{gettext("Status")}</th>
+                <th class="whitespace-nowrap">{gettext("Delivery")}</th>
+                <th class="whitespace-nowrap">{gettext("Last seen")}</th>
+                <th class="whitespace-nowrap text-right">{gettext("Actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -223,17 +224,16 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
     """
   end
 
-  defp incident_count_label(0, _page_size), do: "0 incidents"
-  defp incident_count_label(1, _page_size), do: "1 incident"
-
   defp incident_count_label(total, page_size) when total > page_size,
-    do: "#{page_size} of #{total} incidents"
+    do: ngettext("%{shown} of %{count} incident", "%{shown} of %{count} incidents", total, shown: page_size)
 
-  defp incident_count_label(total, _page_size), do: "#{total} incidents"
+  defp incident_count_label(total, _page_size),
+    do: ngettext("%{count} incident", "%{count} incidents", total)
 
   attr :incident, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec impacted_pool_list(map()) :: Phoenix.LiveView.Rendered.t()
   def impacted_pool_list(assigns) do
     ~H"""
     <div
@@ -247,7 +247,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         data-role="incident-no-visible-impacted-pools"
         class="text-[11px] text-base-content/55"
       >
-        No visible impacted Pools
+        {gettext("No visible impacted Pools")}
       </span>
       <span
         :for={pool <- @incident.impacted_pools}
@@ -272,6 +272,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
   attr :incident, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec incident_action_controls(map()) :: Phoenix.LiveView.Rendered.t()
   def incident_action_controls(assigns) do
     ~H"""
     <div id={"#{@prefix}-#{@incident.id}-actions"} class="flex flex-wrap justify-end gap-2 lg:flex-nowrap">
@@ -279,7 +280,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         :if={@incident.state == AlertIncident.open_state()}
         id={incident_action_id(@prefix, @incident.id, "acknowledge")}
         icon="hero-hand-raised"
-        label="Acknowledge"
+        label={gettext("Acknowledge")}
         phx-click="acknowledge_incident"
         phx-value-id={@incident.id}
       />
@@ -287,7 +288,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         :if={@incident.state != AlertIncident.resolved_state()}
         id={incident_action_id(@prefix, @incident.id, "resolve")}
         icon="hero-check-circle"
-        label="Resolve"
+        label={gettext("Resolve")}
         phx-click="resolve_incident"
         phx-value-id={@incident.id}
         variant={:primary}
@@ -297,7 +298,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
         id={"#{@prefix}-#{@incident.id}-actions-resolved"}
         class="text-xs font-medium text-base-content/50"
       >
-        No pending actions
+        {gettext("No pending actions")}
       </span>
     </div>
     """
@@ -306,6 +307,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
   attr :incident, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec incident_delivery_summary(map()) :: Phoenix.LiveView.Rendered.t()
   def incident_delivery_summary(assigns) do
     ~H"""
     <div class="grid gap-1.5">
@@ -347,11 +349,11 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
             data-role="incident-delivery-attempt-meta"
             class="text-[11px] leading-4 tabular-nums text-base-content/55"
           >
-            Delivery attempt {attempt.attempt_number} · {format_datetime(attempt.attempted_at || attempt.completed_at)}
+            {ngettext("Delivery attempt %{count} · %{time}", "Delivery attempt %{count} · %{time}", attempt.attempt_number, time: format_datetime(attempt.attempted_at || attempt.completed_at))}
           </p>
           <details :if={attempt.details != []} class="text-[11px] leading-4 text-base-content/55">
             <summary class="w-fit cursor-pointer select-none text-base-content/60 hover:text-base-content">
-              Details
+              {gettext("Details")}
             </summary>
             <dl
               id={"#{@prefix}-#{@incident.id}-delivery-attempt-#{attempt.id}-details"}
@@ -469,13 +471,13 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
   defp severity_icon("info"), do: "hero-information-circle"
   defp severity_icon(_severity), do: "hero-minus-circle"
 
-  def format_datetime(nil), do: "not recorded"
+  @spec format_datetime(DateTime.t() | nil) :: String.t()
+  def format_datetime(nil), do: gettext("not recorded")
 
   def format_datetime(%DateTime{} = datetime),
     do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
 
-  defp hidden_pool_count_label(1), do: "1 hidden impacted Pool"
-  defp hidden_pool_count_label(count), do: "#{count} hidden impacted Pools"
+  defp hidden_pool_count_label(count), do: ngettext("%{count} hidden impacted Pool", "%{count} hidden impacted Pools", count)
 
   defp incident_action_id("alert-incident-card", incident_id, action),
     do: "alert-incident-card-#{action}-#{incident_id}"

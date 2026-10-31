@@ -4,6 +4,8 @@ defmodule CodexPooler.Accounts.User do
 
   import Ecto.Changeset
 
+  alias CodexPooler.SupportedLocales
+
   @derive {Inspect, except: [:password, :password_hash]}
 
   @email_max_length 160
@@ -20,6 +22,7 @@ defmodule CodexPooler.Accounts.User do
     field :password_change_required, :boolean, default: false
     field :datetime_format, :string
     field :timezone, :string
+    field :locale, :string
     field :last_login_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
@@ -59,6 +62,14 @@ defmodule CodexPooler.Accounts.User do
     |> cast(attrs, [:email, :display_name, :password_change_required])
     |> validate_email()
     |> validate_display_name()
+  end
+
+  @spec locale_changeset(t(), map()) :: Ecto.Changeset.t()
+  def locale_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:locale])
+    |> validate_inclusion(:locale, SupportedLocales.tags(), allow_nil: true)
+    |> check_constraint(:locale, name: :users_locale_check)
   end
 
   def operator_temporary_password_changeset(user, attrs) do

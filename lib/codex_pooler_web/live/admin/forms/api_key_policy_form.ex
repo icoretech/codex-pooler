@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Access.APIKey
@@ -83,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   def expiry_errors(params) do
     case parsed_expiry(params) do
       {:ok, _datetime} -> []
-      {:error, reason} -> [expires_at: {expiry_error(reason, expiry_timezone(params)), []}]
+      {:error, reason} -> [expires_at: expiry_error(reason, expiry_timezone(params))]
     end
   end
 
@@ -94,17 +96,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   def expiry_summary(params, now \\ DateTime.utc_now()) do
     case parsed_expiry(params) do
       {:ok, nil} ->
-        "Never"
+        gettext("Never")
 
       {:ok, datetime} ->
         description = DateTimeInput.describe(datetime, expiry_timezone(params))
 
         if DateTime.compare(datetime, now) != :gt,
-          do: "Expires immediately on save (#{description})",
-          else: description <> " (in #{expiry_duration(DateTime.diff(datetime, now))})"
+          do: gettext("Expires immediately on save (%{description})", description: description),
+          else: gettext("%{description} (in %{duration})", description: description, duration: expiry_duration(DateTime.diff(datetime, now)))
 
       {:error, reason} ->
-        expiry_error(reason, expiry_timezone(params))
+        reason |> expiry_error(expiry_timezone(params)) |> CodexPoolerWeb.CoreComponents.translate_error()
     end
   end
 
@@ -184,15 +186,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @spec review_errors(params()) :: [String.t()]
   def review_errors(params) do
     []
-    |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, "Display name is required")
-    |> maybe_add_error(blank_to_nil(params["pool_id"]) == nil, "Pool is required")
+    |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, gettext("Display name is required"))
+    |> maybe_add_error(blank_to_nil(params["pool_id"]) == nil, gettext("Pool is required"))
     |> maybe_add_error(
       active_request_errors(params) != [],
-      "Active request limit must be a positive whole number"
+      gettext("Active request limit must be a positive whole number")
     )
     |> maybe_add_error(
       invalid_dashboard_access?(params["dashboard_access"]),
-      "Observatory access must be enabled or disabled"
+      gettext("Observatory access must be enabled or disabled")
     )
     |> maybe_add_error(
       expiry_errors(params) != [],
@@ -200,17 +202,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     )
     |> maybe_add_error(
       params["model_mode"] == "selected_models" and policy_model_identifiers(params) == [],
-      "Selected model mode needs at least one model"
+      gettext("Selected model mode needs at least one model")
     )
-    |> maybe_add_error(enforced_model_conflict?(params), "Enforced model must be allowed")
+    |> maybe_add_error(enforced_model_conflict?(params), gettext("Enforced model must be allowed"))
     |> add_duplicate_model_override_error(params)
     |> maybe_add_error(
       incomplete_reasoning_policy?(params),
-      "Allow up to needs a maximum reasoning effort"
+      gettext("Allow up to needs a maximum reasoning effort")
     )
     |> maybe_add_error(
       incomplete_exact_reasoning_policy?(params),
-      "Always use needs a reasoning effort"
+      gettext("Always use needs a reasoning effort")
     )
     |> Enum.reverse()
   end
@@ -218,28 +220,28 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @spec reasoning_effort_options() :: [option()]
   def reasoning_effort_options do
     [
-      {"Do not enforce", ""},
-      {"None (request no reasoning)", "none"},
-      {"Minimal", "minimal"},
-      {"Low", "low"},
-      {"Medium", "medium"},
-      {"High", "high"},
-      {"Extra high", "xhigh"},
-      {"Max", "max"},
-      {"Ultra", "ultra"}
+      {gettext("Do not enforce"), ""},
+      {gettext("None (request no reasoning)"), "none"},
+      {gettext("Minimal"), "minimal"},
+      {gettext("Low"), "low"},
+      {gettext("Medium"), "medium"},
+      {gettext("High"), "high"},
+      {gettext("Extra high"), "xhigh"},
+      {gettext("Max"), "max"},
+      {gettext("Ultra"), "ultra"}
     ]
   end
 
   @spec service_tier_options() :: [option()]
   def service_tier_options do
     [
-      {"Leave unchanged", ""},
-      {"Auto - upstream chooses", "auto"},
-      {"Default - standard capacity", "default"},
-      {"Flex - flexible capacity", "flex"},
-      {"Fast/Priority mode", "priority"},
-      {"Ultrafast mode", "ultrafast"},
-      {"Scale - scale capacity", "scale"}
+      {gettext("Leave unchanged"), ""},
+      {gettext("Auto - upstream chooses"), "auto"},
+      {gettext("Default - standard capacity"), "default"},
+      {gettext("Flex - flexible capacity"), "flex"},
+      {gettext("Fast/Priority mode"), "priority"},
+      {gettext("Ultrafast mode"), "ultrafast"},
+      {gettext("Scale - scale capacity"), "scale"}
     ]
   end
 
@@ -256,16 +258,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       |> Enum.uniq()
       |> Enum.sort()
 
-    [{"Do not enforce", ""} | Enum.map(selected_values, &{&1, &1})]
+    [{gettext("Do not enforce"), ""} | Enum.map(selected_values, &{&1, &1})]
   end
 
   @spec review_sections(Phoenix.HTML.Form.t(), selector_state(), Pool.t() | nil) ::
           [review_section()]
   def review_sections(form, selector_state, selected_pool) do
     [
-      {"Basics", basics_review_rows(form, selected_pool)},
-      {"Models", model_review_rows(form, selector_state)},
-      {"Limits", limit_review_rows(form)}
+      {gettext("Basics"), basics_review_rows(form, selected_pool)},
+      {gettext("Models"), model_review_rows(form, selector_state)},
+      {gettext("Limits"), limit_review_rows(form)}
     ]
   end
 
@@ -334,7 +336,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
     case duplicate do
       nil -> errors
-      policy -> ["#{policy["model_identifier"]} already has its own model override" | errors]
+      policy -> [gettext("%{model} already has its own model override", model: policy["model_identifier"]) | errors]
     end
   end
 
@@ -377,20 +379,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   defp expiry_review_error(params) do
     case expiry_errors(params) do
-      [expires_at: {message, _opts}] -> "Expiry " <> message
+      [expires_at: error] -> gettext("Expiry %{message}", message: CodexPoolerWeb.CoreComponents.translate_error(error))
       [] -> ""
     end
   end
 
-  defp expiry_error(:ambiguous, timezone), do: "occurs twice in #{timezone}; choose a time outside the repeated hour"
-  defp expiry_error(:gap, timezone), do: "does not exist in #{timezone} because the clocks move forward"
-  defp expiry_error(:unknown_timezone, _timezone), do: "needs a valid account timezone"
-  defp expiry_error(:invalid, _timezone), do: "must be a valid date and time"
+  defp expiry_error(:ambiguous, timezone), do: {"occurs twice in %{timezone}; choose a time outside the repeated hour", [timezone: timezone]}
+  defp expiry_error(:gap, timezone), do: {"does not exist in %{timezone} because the clocks move forward", [timezone: timezone]}
+  defp expiry_error(:unknown_timezone, _timezone), do: {"needs a valid account timezone", []}
+  defp expiry_error(:invalid, _timezone), do: {"must be a valid date and time", []}
 
-  defp expiry_duration(seconds) when seconds < 60, do: "less than a minute"
-  defp expiry_duration(seconds) when seconds < 3_600, do: "#{div(seconds, 60)} min"
-  defp expiry_duration(seconds) when seconds < 86_400, do: "#{div(seconds, 3_600)} h #{div(rem(seconds, 3_600), 60)} min"
-  defp expiry_duration(seconds), do: "#{div(seconds, 86_400)} days"
+  defp expiry_duration(seconds) when seconds < 60, do: gettext("less than a minute")
+  defp expiry_duration(seconds) when seconds < 3_600, do: gettext("%{minutes} min", minutes: div(seconds, 60))
+  defp expiry_duration(seconds) when seconds < 86_400, do: gettext("%{hours} h %{minutes} min", hours: div(seconds, 3_600), minutes: div(rem(seconds, 3_600), 60))
+  defp expiry_duration(seconds), do: ngettext("%{count} days", "%{count} days", div(seconds, 86_400))
 
   defp split_allow_list_text(value) when is_binary(value) do
     value
@@ -554,21 +556,21 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   defp basics_review_rows(form, selected_pool) do
     [
-      {"Name", blank_to_nil(form[:display_name].value) || "Missing"},
-      {"Pool", selected_pool_name(selected_pool)},
-      {"Status", form[:status].value || "active"},
-      {"Observatory access", dashboard_access_label(form[:dashboard_access].value)},
-      {"Expires", expiry_summary(form.params)}
+      {gettext("Name"), blank_to_nil(form[:display_name].value) || gettext("Missing")},
+      {gettext("Pool"), selected_pool_name(selected_pool)},
+      {gettext("Status"), status_label(form[:status].value || "active")},
+      {gettext("Observatory access"), dashboard_access_label(form[:dashboard_access].value)},
+      {gettext("Expires"), expiry_summary(form.params)}
     ]
   end
 
   defp model_review_rows(form, selector_state) do
     [
-      {"Mode", model_mode_label(form[:model_mode].value)},
-      {"Selected", model_selection_summary(form, selector_state)},
-      {"Enforced model", blank_to_nil(form[:enforced_model_identifier].value) || "Not enforced"},
-      {"Reasoning", reasoning_policy_label(form)},
-      {"Service tier", blank_to_nil(form[:enforced_service_tier].value) || "Not enforced"}
+      {gettext("Mode"), model_mode_label(form[:model_mode].value)},
+      {gettext("Selected"), model_selection_summary(form, selector_state)},
+      {gettext("Enforced model"), blank_to_nil(form[:enforced_model_identifier].value) || gettext("Not enforced")},
+      {gettext("Reasoning"), reasoning_policy_label(form)},
+      {gettext("Service tier"), blank_to_nil(form[:enforced_service_tier].value) || gettext("Not enforced")}
     ]
   end
 
@@ -577,32 +579,32 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       @limit_fields
       |> Enum.flat_map(fn field ->
         [
-          {"Default #{limit_field_label(field)}", normalized_limit_value(form[String.to_atom("default_#{field}")].value)},
-          {"Model #{limit_field_label(field)}", normalized_limit_value(form[String.to_atom("model_#{field}")].value)}
+          {gettext("Default %{limit}", limit: limit_field_label(field)), normalized_limit_value(form[String.to_atom("default_#{field}")].value)},
+          {gettext("Model %{limit}", limit: limit_field_label(field)), normalized_limit_value(form[String.to_atom("model_#{field}")].value)}
         ]
       end)
       |> Enum.reject(fn {_label, value} -> is_nil(value) end)
 
     key_wide =
-      {"Active requests across all models", normalized_limit_value(form[:max_active_requests].value) || "Disabled"}
+      {gettext("Active requests across all models"), normalized_limit_value(form[:max_active_requests].value) || gettext("Disabled")}
 
     model = blank_to_nil(form[:model_policy_model_identifier].value)
-    model_rows = if model, do: [{"Model override", model}], else: []
+    model_rows = if model, do: [{gettext("Model override"), model}], else: []
 
     model_rows =
       case form.params |> retained_model_policies() |> Enum.map(& &1["model_identifier"]) do
         [] -> model_rows
-        models -> model_rows ++ [{"Other model overrides", Enum.join(models, ", ") <> " (kept as saved)"}]
+        models -> model_rows ++ [{gettext("Other model overrides"), gettext("%{models} (kept as saved)", models: Enum.join(models, ", "))}]
       end
 
     case values do
-      [] -> [key_wide | model_rows] ++ [{"Token and rate limits", "No caps configured"}]
+      [] -> [key_wide | model_rows] ++ [{gettext("Token and rate limits"), gettext("No caps configured")}]
       rows -> [key_wide | model_rows] ++ rows
     end
   end
 
   defp selected_pool_name(%Pool{name: name}), do: name
-  defp selected_pool_name(_pool), do: "Missing"
+  defp selected_pool_name(_pool), do: gettext("Missing")
 
   defp normalized_limit_value(value) do
     case value |> blank_to_nil() |> parse_integer() do
@@ -628,32 +630,43 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     |> String.reverse()
   end
 
-  defp model_mode_label("selected_models"), do: "Selected models"
-  defp model_mode_label("deny_all_models"), do: "Deny all models"
-  defp model_mode_label(_mode), do: "All models"
+  defp model_mode_label("selected_models"), do: gettext("Selected models")
+  defp model_mode_label("deny_all_models"), do: gettext("Deny all models")
+  defp model_mode_label(_mode), do: gettext("All models")
 
   defp reasoning_policy_label(form) do
     case form[:reasoning_policy_mode].value do
       "allow_up_to" ->
-        reasoning_policy_value("Allow up to", form[:maximum_reasoning_effort].value)
+        reasoning_policy_value(:allow_up_to, form[:maximum_reasoning_effort].value)
 
       "always_use" ->
-        reasoning_policy_value("Always use", form[:enforced_reasoning_effort].value)
+        reasoning_policy_value(:always_use, form[:enforced_reasoning_effort].value)
 
       _other ->
-        "Unrestricted"
+        gettext("Unrestricted")
     end
   end
 
-  defp reasoning_policy_value(prefix, value) do
+  defp reasoning_policy_value(mode, value) do
     case blank_to_nil(value) do
-      nil -> prefix
-      effort -> "#{prefix} #{reasoning_effort_label(effort)}"
+      nil ->
+        if mode == :allow_up_to, do: gettext("Allow up to"), else: gettext("Always use")
+
+      effort ->
+        if mode == :allow_up_to,
+          do: gettext("Allow up to %{effort}", effort: reasoning_effort_label(effort)),
+          else: gettext("Always use %{effort}", effort: reasoning_effort_label(effort))
     end
   end
 
-  defp reasoning_effort_label("xhigh"), do: "Extra high"
-  defp reasoning_effort_label("none"), do: "None"
+  defp reasoning_effort_label("xhigh"), do: gettext("Extra high")
+  defp reasoning_effort_label("none"), do: gettext("None")
+  defp reasoning_effort_label("minimal"), do: gettext("Minimal")
+  defp reasoning_effort_label("low"), do: gettext("Low")
+  defp reasoning_effort_label("medium"), do: gettext("Medium")
+  defp reasoning_effort_label("high"), do: gettext("High")
+  defp reasoning_effort_label("max"), do: gettext("Max")
+  defp reasoning_effort_label("ultra"), do: gettext("Ultra")
   defp reasoning_effort_label(effort), do: String.capitalize(effort)
 
   defp model_selection_summary(form, selector_state) do
@@ -664,24 +677,31 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       |> Enum.uniq()
       |> length()
 
-    cond do
-      form[:model_mode].value == "all_models" -> "All current and future models"
-      form[:model_mode].value == "deny_all_models" -> "No model access"
-      count == 1 -> "1 selected model"
-      true -> "#{count} selected models"
-    end <> unavailable_suffix(selector_state)
+    selection =
+      cond do
+        form[:model_mode].value == "all_models" -> gettext("All current and future models")
+        form[:model_mode].value == "deny_all_models" -> gettext("No model access")
+        true -> ngettext("%{count} selected model", "%{count} selected models", count)
+      end
+
+    model_selection_with_unavailable(selection, selector_state)
   end
 
-  defp unavailable_suffix(%{selected_unavailable_chips: []}), do: ""
+  defp model_selection_with_unavailable(selection, %{selected_unavailable_chips: []}), do: selection
 
-  defp unavailable_suffix(%{selected_unavailable_chips: chips}),
-    do: " · #{length(chips)} unavailable saved"
+  defp model_selection_with_unavailable(selection, %{selected_unavailable_chips: chips}),
+    do: gettext("%{selection} · %{unavailable}", selection: selection, unavailable: ngettext("%{count} unavailable saved", "%{count} unavailable saved", length(chips)))
 
-  defp limit_field_label("max_requests_per_minute"), do: "Requests per minute"
-  defp limit_field_label("max_tokens_per_day"), do: "Tokens per day"
-  defp limit_field_label("max_tokens_per_week"), do: "Tokens per week"
-  defp limit_field_label("max_input_tokens_per_request"), do: "Input tokens per request"
-  defp limit_field_label("max_output_tokens_per_request"), do: "Output tokens per request"
+  defp status_label("active"), do: gettext("active")
+  defp status_label("paused"), do: gettext("paused")
+  defp status_label("revoked"), do: gettext("revoked")
+  defp status_label(status), do: status
+
+  defp limit_field_label("max_requests_per_minute"), do: gettext("Requests per minute")
+  defp limit_field_label("max_tokens_per_day"), do: gettext("Tokens per day")
+  defp limit_field_label("max_tokens_per_week"), do: gettext("Tokens per week")
+  defp limit_field_label("max_input_tokens_per_request"), do: gettext("Input tokens per request")
+  defp limit_field_label("max_output_tokens_per_request"), do: gettext("Output tokens per request")
 
   # An empty note stays empty: the textarea shows its own placeholder, and a
   # placeholder seeded as the value was saved as the note on the next edit
@@ -732,9 +752,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   defp dashboard_access_label(value) do
     case parse_dashboard_access(value) do
-      {:ok, true} -> "Enabled"
-      {:ok, false} -> "Disabled"
-      :error -> "Invalid"
+      {:ok, true} -> gettext("Enabled")
+      {:ok, false} -> gettext("Disabled")
+      :error -> gettext("Invalid")
     end
   end
 

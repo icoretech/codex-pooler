@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
   attr :costs, :list, required: true
   attr :model_usage, :list, default: []
 
+  @spec traffic_charts(map()) :: Phoenix.LiveView.Rendered.t()
   def traffic_charts(assigns) do
     model_usage = Map.get(assigns, :model_usage, [])
 
@@ -34,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
               id="stats-traffic-chart-heading"
               class="text-base font-semibold leading-5 text-base-content"
             >
-              Traffic over time
+              {gettext("Traffic over time")}
             </h2>
             <span
               id="stats-traffic-chart-total"
@@ -43,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
               {@traffic_chart.total_label}
             </span>
           </div>
-          <.chart_mode_control chart_id="stats-traffic-chart" label="Traffic chart mode" />
+          <.chart_mode_control chart_id="stats-traffic-chart" label={gettext("Traffic chart mode")} />
         </header>
         <div
           id="stats-traffic-chart-scroll"
@@ -62,6 +63,11 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
             data-chart-series={@traffic_chart.series}
             data-chart-unit="tokens"
             data-chart-units={@traffic_chart.units}
+            data-chart-unit-labels={@traffic_chart.unit_labels}
+            data-chart-default-series-label={gettext("Value")}
+            data-chart-series-label={gettext("Series %{index}", index: "%{index}")}
+            data-chart-interval-description={gettext("Showing interval values for each time bucket.")}
+            data-chart-cumulative-description={gettext("Showing cumulative running totals through each time bucket.")}
             data-chart-value-kinds={@traffic_chart.value_kinds}
             data-chart-yaxis={@traffic_chart.yaxis}
             data-chart-height="292"
@@ -77,21 +83,21 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
           >
           </div>
         </div>
-        <p id="stats-traffic-chart-title" class="sr-only">Traffic over time</p>
+        <p id="stats-traffic-chart-title" class="sr-only">{gettext("Traffic over time")}</p>
         <p id="stats-traffic-chart-desc" class="sr-only">
           {TrafficChart.description(@traffic_chart.points)}
         </p>
         <p id="stats-traffic-chart-mode-description" class="sr-only" aria-live="polite">
-          Showing interval values for each time bucket.
+          {gettext("Showing interval values for each time bucket.")}
         </p>
         <ul
           id="stats-traffic-chart-interval-values"
           class="sr-only"
           data-chart-source="interval"
-          aria-label="Underlying interval values for Traffic over time"
+          aria-label={gettext("Underlying interval values for Traffic over time")}
         >
           <li :for={point <- @traffic_chart.points}>
-            {point.label}: {point.tokens} tokens, {point.requests} requests
+            {traffic_point_description(point)}
           </li>
         </ul>
       </section>
@@ -106,7 +112,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
               id="stats-token-cost-chart-heading"
               class="text-base font-semibold leading-5 text-base-content"
             >
-              Tokens vs cost
+              {gettext("Tokens vs cost")}
             </h2>
             <span
               id="stats-token-cost-chart-total"
@@ -115,7 +121,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
               {@token_cost_chart.total_label}
             </span>
           </div>
-          <.chart_mode_control chart_id="stats-token-cost-chart" label="Tokens vs cost chart mode" />
+          <.chart_mode_control chart_id="stats-token-cost-chart" label={gettext("Tokens vs cost chart mode")} />
         </header>
         <div
           id="stats-token-cost-chart-scroll"
@@ -134,6 +140,11 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
             data-chart-series={@token_cost_chart.series}
             data-chart-unit="tokens"
             data-chart-units={@token_cost_chart.units}
+            data-chart-unit-labels={@token_cost_chart.unit_labels}
+            data-chart-default-series-label={gettext("Value")}
+            data-chart-series-label={gettext("Series %{index}", index: "%{index}")}
+            data-chart-interval-description={gettext("Showing interval values for each time bucket.")}
+            data-chart-cumulative-description={gettext("Showing cumulative running totals through each time bucket.")}
             data-chart-value-kinds={@token_cost_chart.value_kinds}
             data-chart-yaxis={@token_cost_chart.yaxis}
             data-chart-bar-radius="0"
@@ -148,21 +159,21 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
           >
           </div>
         </div>
-        <p id="stats-token-cost-chart-title" class="sr-only">Tokens vs cost</p>
+        <p id="stats-token-cost-chart-title" class="sr-only">{gettext("Tokens vs cost")}</p>
         <p id="stats-token-cost-chart-desc" class="sr-only">
           {TokenCostChart.description(@token_cost_chart.points)}
         </p>
         <p id="stats-token-cost-chart-mode-description" class="sr-only" aria-live="polite">
-          Showing interval values for each time bucket.
+          {gettext("Showing interval values for each time bucket.")}
         </p>
         <ul
           id="stats-token-cost-chart-interval-values"
           class="sr-only"
           data-chart-source="interval"
-          aria-label="Underlying interval values for Tokens vs cost"
+          aria-label={gettext("Underlying interval values for Tokens vs cost")}
         >
           <li :for={point <- @token_cost_chart.points}>
-            {point.label}: {point.total_tokens} tokens, {point.cached_input_tokens} cached input tokens, {point.standard_output_tokens} standard output tokens, {point.reasoning_tokens} reasoning tokens, {Format.money_from_micros(point.cost_micros)} cost
+            {token_cost_point_description(point)}
           </li>
         </ul>
       </section>
@@ -170,11 +181,30 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
     """
   end
 
+  defp traffic_point_description(point) do
+    gettext("%{time}: %{tokens}, %{requests}",
+      time: point.label,
+      tokens: ngettext("%{count} token", "%{count} tokens", point.tokens),
+      requests: ngettext("%{count} request", "%{count} requests", point.requests)
+    )
+  end
+
+  defp token_cost_point_description(point) do
+    gettext("%{time}: %{tokens}, %{cached_input}, %{standard_output}, %{reasoning}, %{cost} cost",
+      time: point.label,
+      tokens: ngettext("%{count} token", "%{count} tokens", point.total_tokens),
+      cached_input: ngettext("%{count} cached input token", "%{count} cached input tokens", point.cached_input_tokens),
+      standard_output: ngettext("%{count} standard output token", "%{count} standard output tokens", point.standard_output_tokens),
+      reasoning: ngettext("%{count} reasoning token", "%{count} reasoning tokens", point.reasoning_tokens),
+      cost: Format.money_from_micros(point.cost_micros)
+    )
+  end
+
   attr :chart_id, :string, required: true
   attr :label, :string, required: true
 
   defp chart_mode_control(assigns) do
-    assigns = assign(assigns, :modes, [{"Interval", "interval"}, {"Cumulative", "cumulative"}])
+    assigns = assign(assigns, :modes, [{gettext("Interval"), "interval"}, {gettext("Cumulative"), "cumulative"}])
 
     ~H"""
     <div

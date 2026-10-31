@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.StatsPresentation.BucketLabel
 
@@ -45,21 +47,26 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
 
     token_total = Enum.sum(token_values)
     request_total = Enum.sum(request_values)
-    series = column_series ++ [%{name: "Requests", type: "line", data: request_values}]
+    series = column_series ++ [%{name: gettext("Requests"), type: "line", data: request_values}]
 
     %{
       categories: CodexPooler.JSON.encode!(labels),
       series: CodexPooler.JSON.encode!(series),
       units: CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["requests"]),
+      unit_labels: CodexPooler.JSON.encode!(List.duplicate(gettext("tokens"), length(column_series)) ++ [gettext("requests")]),
       value_kinds: CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["integer"]),
       yaxis:
         CodexPooler.JSON.encode!([
-          %{seriesName: token_axis_series, title: "tokens", valueKind: "tokens"},
-          %{seriesName: "Requests", title: "requests", opposite: true, valueKind: "integer"}
+          %{seriesName: token_axis_series, title: gettext("tokens"), valueKind: "tokens"},
+          %{seriesName: gettext("Requests"), title: gettext("requests"), opposite: true, valueKind: "integer"}
         ]),
       colors: CodexPooler.JSON.encode!(colors),
       points: points,
-      total_label: "#{Format.token_count(token_total)} tokens / #{Format.integer(request_total)} requests"
+      total_label:
+        gettext("%{tokens} / %{requests}",
+          tokens: ngettext("%{tokens} token", "%{tokens} tokens", token_total, tokens: Format.token_count(token_total)),
+          requests: ngettext("%{requests} request", "%{requests} requests", request_total, requests: Format.integer(request_total))
+        )
     }
   end
 
@@ -68,13 +75,23 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
     token_total = Enum.reduce(points, 0, &(&1.tokens + &2))
     request_total = Enum.reduce(points, 0, &(&1.requests + &2))
 
-    "#{length(points)} time buckets with #{token_total} total tokens and #{request_total} total requests. Requests counts every admitted request status. Other models, when present, combines positive-token usage outside the top five."
+    tokens = ngettext("%{count} total token", "%{count} total tokens", token_total)
+    requests = ngettext("%{count} total request", "%{count} total requests", request_total)
+
+    ngettext(
+      "%{count} time bucket with %{tokens} and %{requests}. Requests counts every admitted request status. Other models, when present, combines positive-token usage outside the top five.",
+      "%{count} time buckets with %{tokens} and %{requests}. Requests counts every admitted request status. Other models, when present, combines positive-token usage outside the top five.",
+      length(points),
+      tokens: tokens,
+      requests: requests
+    )
   end
 
   defp series_config([], labels, tokens_by_label) do
     token_values = Enum.map(labels, &Map.get(tokens_by_label, &1, 0))
 
-    {[%{name: "Tokens", type: "column", data: token_values}], token_values, "Tokens", ["var(--color-primary)", "var(--admin-chart-requests)"]}
+    token_label = gettext("Tokens")
+    {[%{name: token_label, type: "column", data: token_values}], token_values, token_label, ["var(--color-primary)", "var(--admin-chart-requests)"]}
   end
 
   defp series_config(model_series, _labels, _tokens_by_label) do
@@ -107,7 +124,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
   end
 
   defp series_name(nil), do: ""
-  defp series_name("Other"), do: "Other models"
+  defp series_name("Other"), do: gettext("Other models")
 
   defp series_name(value) do
     value
@@ -117,10 +134,12 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
   end
 
   defp model_series_colors(model_series) do
+    other_models_label = gettext("Other models")
+
     model_series
     |> Enum.with_index()
     |> Enum.map(fn
-      {%{name: "Other models"}, _index} ->
+      {%{name: ^other_models_label}, _index} ->
         "var(--admin-chart-other-models)"
 
       {_series, index} ->

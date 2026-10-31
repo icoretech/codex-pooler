@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
   Browser/admin datetime display policy for operator-facing UI.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Accounts.User
 
   @default_format "default"
@@ -52,7 +54,7 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
         Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
 
       "long" ->
-        "#{Calendar.strftime(datetime, "%b %-d, %Y %H:%M:%S")} #{timezone_label(datetime)}"
+        "#{long_date(datetime)} #{Calendar.strftime(datetime, "%H:%M:%S")} #{timezone_label(datetime)}"
 
       "iso8601" ->
         datetime
@@ -91,7 +93,7 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
 
       "long" ->
         %{
-          date: Calendar.strftime(datetime, "%b %-d, %Y"),
+          date: long_date(datetime),
           time: "#{Calendar.strftime(datetime, "%H:%M:%S")} #{timezone_label(datetime)}"
         }
 
@@ -117,10 +119,10 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
   @spec format_options() :: [{String.t(), String.t()}]
   def format_options do
     [
-      {"Default", "default"},
-      {"Short", "short"},
-      {"Long", "long"},
-      {"ISO 8601", "iso8601"}
+      {gettext("Default"), "default"},
+      {gettext("Short"), "short"},
+      {gettext("Long"), "long"},
+      {gettext("ISO 8601"), "iso8601"}
     ]
   end
 
@@ -150,6 +152,13 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
       |> Enum.sort()
 
     Enum.map([@default_timezone | zones], &{&1, &1})
+  end
+
+  defp long_date(datetime) do
+    case Gettext.get_locale() do
+      "zh_CN" -> Calendar.strftime(datetime, "%Y年%-m月%-d日")
+      _locale -> Calendar.strftime(datetime, "%b %-d, %Y")
+    end
   end
 
   @spec normalize_format(String.t() | nil | term()) :: String.t()

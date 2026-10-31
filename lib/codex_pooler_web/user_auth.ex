@@ -1,28 +1,29 @@
 defmodule CodexPoolerWeb.UserAuth do
   @moduledoc false
   use CodexPoolerWeb, :verified_routes
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   import Plug.Conn
   import Phoenix.Controller
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.{Scope, SessionNotifier}
-  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
+  alias CodexPoolerWeb.{Locale, Plugs.TrustedProxyRemoteIp, SafeRedirect}
 
   @session_key :user_token
-  # Mirrors Phoenix's local-path validation because this session value is untrusted.
-  @unsafe_return_to_path_fragments ["\\", "/%09", "/\t", "\n", "\r"]
 
+  @spec log_in_user(Plug.Conn.t(), Accounts.User.t(), binary()) :: Plug.Conn.t()
   def log_in_user(conn, user, token) when is_binary(token) do
     user_return_to = get_session(conn, :user_return_to)
 
     redirect_to =
       if password_change_required?(user),
         do: ~p"/password/change-required",
-        else: safe_return_to_path(user_return_to) || signed_in_path(user)
+        else: SafeRedirect.local_path(user_return_to) || signed_in_path(user)
 
     conn
     |> put_user_session(user, token)
+    |> mirror_locale_cookie(user)
     |> redirect(to: redirect_to)
   end
 
@@ -101,7 +102,7 @@ defmodule CodexPoolerWeb.UserAuth do
     else
       socket =
         socket
-        |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
+        |> Phoenix.LiveView.put_flash(:error, gettext("You must log in to access this page."))
         |> Phoenix.LiveView.redirect(to: ~p"/login")
 
       {:halt, socket}
@@ -115,7 +116,7 @@ defmodule CodexPoolerWeb.UserAuth do
       is_nil(socket.assigns.current_scope) or is_nil(socket.assigns.current_scope.user) ->
         socket =
           socket
-          |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
+          |> Phoenix.LiveView.put_flash(:error, gettext("You must log in to access this page."))
           |> Phoenix.LiveView.redirect(to: ~p"/login")
 
         {:halt, socket}
@@ -136,7 +137,7 @@ defmodule CodexPoolerWeb.UserAuth do
       conn
     else
       conn
-      |> put_flash(:error, "You must log in to access this page.")
+      |> put_flash(:error, gettext("You must log in to access this page."))
       |> maybe_store_return_to()
       |> redirect(to: ~p"/login")
       |> halt()
@@ -263,15 +264,12 @@ defmodule CodexPoolerWeb.UserAuth do
 
   defp maybe_store_return_to(conn), do: conn
 
-  defp safe_return_to_path(return_to) when is_binary(return_to) do
-    if String.starts_with?(return_to, "/") and
-         not String.starts_with?(return_to, "//") and
-         not String.contains?(return_to, @unsafe_return_to_path_fragments) do
-      return_to
+  defp mirror_locale_cookie(conn, %{locale: preference}) do
+    case Locale.normalize(preference) do
+      nil -> conn
+      tag -> put_resp_cookie(conn, Locale.cookie_name(), tag, Locale.cookie_options(conn))
     end
   end
-
-  defp safe_return_to_path(_return_to), do: nil
 
   defp password_change_required?(%{password_change_required: true}), do: true
   defp password_change_required?(_user), do: false

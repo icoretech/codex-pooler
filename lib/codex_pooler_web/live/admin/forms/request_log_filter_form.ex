@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPoolerWeb.DateTimeInput
 
   @status_options ~w(accepted in_progress succeeded failed client_cancelled rejected)
@@ -57,7 +59,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
     if blank?(pool_id) do
       {nil, nil}
     else
-      {nil, %{field: :pool_id, message: "Pool filter did not match an available Pool"}}
+      {nil, %{field: :pool_id, message: gettext("Pool filter did not match an available Pool")}}
     end
   end
 
@@ -70,7 +72,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
         {pool, nil}
 
       true ->
-        {nil, %{field: :pool_id, message: "Pool filter did not match an available Pool"}}
+        {nil, %{field: :pool_id, message: gettext("Pool filter did not match an available Pool")}}
     end
   end
 
@@ -111,7 +113,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
     if status in @status_options do
       {status, nil}
     else
-      {nil, %{field: :status, message: "Status filter is not supported"}}
+      {nil, %{field: :status, message: gettext("Status filter is not supported")}}
     end
   end
 
@@ -124,7 +126,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
       {nil,
        %{
          field: :upstream_identity_id,
-         message: "Upstream account filter did not match a visible upstream account"
+         message: gettext("Upstream account filter did not match a visible upstream account")
        }}
     end
   end
@@ -137,18 +139,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogFilterForm do
         {datetime, nil}
 
       {:error, :gap} ->
-        {nil, %{field: field, message: "#{date_label(field)} does not exist in the selected timezone"}}
+        {nil, %{field: field, message: gettext("%{date} does not exist in the selected timezone", date: date_label(field))}}
 
       {:error, :unknown_timezone} ->
-        {nil, %{field: field, message: "#{date_label(field)} timezone is unavailable; update your timezone in Settings"}}
+        {nil, %{field: field, message: gettext("%{date} timezone is unavailable; update your timezone in Settings", date: date_label(field))}}
 
       {:error, _reason} ->
-        {nil, %{field: field, message: "#{date_label(field)} must be a valid date"}}
+        {nil, %{field: field, message: gettext("%{date} must be a valid date", date: date_label(field))}}
     end
   end
 
-  defp date_label(:date_from), do: "Date from"
-  defp date_label(:date_to), do: "Date to"
+  defp date_label(:date_from), do: gettext("Date from")
+  defp date_label(:date_to), do: gettext("Date to")
 
   defp string_param(params, key), do: params |> Map.get(key) |> blank_to_nil()
 end

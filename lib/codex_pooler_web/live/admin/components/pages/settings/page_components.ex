@@ -3,19 +3,22 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
 
   use CodexPoolerWeb, :html
 
+  import CodexPoolerWeb.Components.LanguageSwitcher, only: [language_switcher: 1]
+
   alias CodexPoolerWeb.Admin.SettingsPageComponents.{Account, MCP, Security}
 
   attr :tabs, :list, required: true
   attr :selected_tab, :string, required: true
 
+  @spec tab_picker(map()) :: Phoenix.LiveView.Rendered.t()
   def tab_picker(assigns) do
     ~H"""
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-base-content/45">
-          Operator settings
+          {gettext("Operator settings")}
         </p>
-        <h2 class="text-lg font-semibold text-base-content">Choose what to configure</h2>
+        <h2 class="text-lg font-semibold text-base-content">{gettext("Choose what to configure")}</h2>
       </div>
       <div id="settings-tabs" class="tabs tabs-border" role="tablist">
         <.link
@@ -33,6 +36,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
     """
   end
 
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
+  attr :current_scope, :any, default: nil
+
+  @spec appearance_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def appearance_panel(assigns) do
     ~H"""
     <section
@@ -42,17 +50,28 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
       <div class="grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
         <div class="grid gap-2">
           <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-            Theme
+            {gettext("Theme")}
           </p>
-          <h3 class="text-xl font-semibold text-base-content">Admin appearance</h3>
+          <h3 class="text-xl font-semibold text-base-content">{gettext("Admin appearance")}</h3>
           <p class="text-sm leading-6 text-base-content/65">
-            Choose system, light, or dark mode for this browser. The preference stays local to this device.
+            {gettext("Choose system, light, or dark mode for this browser. The preference stays local to this device.")}
           </p>
         </div>
         <Layouts.theme_toggle
           id="settings-theme-toggle"
           class="relative flex h-10 w-40 flex-row items-center rounded-full border border-base-300 bg-base-300 md:justify-self-end"
         />
+      </div>
+      <div id="settings-language-row" class="mt-5 grid gap-5 border-t border-base-300 pt-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div class="grid gap-2">
+          <h3 class="text-xl font-semibold text-base-content">{gettext("Language")}</h3>
+          <p class="text-sm leading-6 text-base-content/65">
+            {if @current_scope,
+              do: gettext("Used for this account on every device"),
+              else: gettext("Used only in this browser until you sign in")}
+          </p>
+        </div>
+        <.language_switcher id="settings-language-switcher" locale={@locale} preference={@locale_preference} align="start" placement="top" compact={false} class="md:justify-self-end md:[&_details]:dropdown-end" />
       </div>
     </section>
     """

@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   attr :oauth_relink_error, :map, default: nil
   attr :datetime_preferences, :map, default: %{}
 
+  @spec oauth_relink_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def oauth_relink_dialog(assigns) do
     assigns = assign(assigns, :oauth_docs_url, @oauth_docs_url)
 
@@ -69,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               authorization_url={@oauth_relink_authorization_url}
               form={@oauth_relink_form}
               submit_event="submit_oauth_relink_callback"
-              submit_label="Complete relink"
+              submit_label={gettext("Complete relink")}
             />
           </section>
 
@@ -97,7 +98,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               :if={oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)}
               id={UpstreamOAuthDialogComponents.callback_submit_id("oauth-relink")}
               icon="hero-check"
-              label="Complete relink"
+              label={gettext("Complete relink")}
               type="submit"
               form={UpstreamOAuthDialogComponents.callback_form_id("oauth-relink")}
               variant={:primary}
@@ -106,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_oauth_relink">close</button>
+        <button type="button" phx-click="cancel_oauth_relink">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -115,6 +116,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   attr :account, :map, default: nil
   attr :form, :any, default: nil
 
+  @spec rename_account_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def rename_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
@@ -128,10 +130,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p id="cockpit-rename-upstream-account-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">Upstream account · {@account.label}</p>
-          <h2 id="cockpit-rename-upstream-account-dialog-title" class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
+          <p id="cockpit-rename-upstream-account-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">{gettext("Upstream account · %{label}", label: @account.label)}</p>
+          <h2 id="cockpit-rename-upstream-account-dialog-title" class="mt-1 text-2xl font-bold text-base-content">{gettext("Rename upstream account")}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Update the operator label shown on this page and on the upstream account list.
+            {gettext("Update the operator label shown on this page and on the upstream account list.")}
           </p>
         </div>
         <.form
@@ -142,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           autocomplete="off"
           class="grid gap-5 p-5 sm:p-6"
         >
-          <.input field={@form[:account_label]} type="text" label="Label" required />
+          <.input field={@form[:account_label]} type="text" label={gettext("Label")} required />
         </.form>
 
         <AdminComponents.dialog_footer
@@ -152,14 +154,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="cockpit-rename-upstream-account-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_rename_account"
             />
             <AdminComponents.action_button
               id="cockpit-rename-upstream-account-submit"
               icon="hero-pencil-square"
-              label="Rename"
+              label={gettext("Rename")}
               type="submit"
               form="cockpit-rename-upstream-account-form"
               variant={:primary}
@@ -168,7 +170,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_rename_account">close</button>
+        <button type="button" phx-click="cancel_rename_account">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -177,6 +179,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   attr :account, :map, default: nil
   attr :form, :any, required: true
 
+  @spec delete_account_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def delete_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
@@ -189,11 +192,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Upstream account</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@account.label}?</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Upstream account")}</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Delete %{label}?", label: @account.label)}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            This permanently removes the account, credentials, quotas, Pool assignments, and account-specific statistics from the database.
-            Shared request accounting remains without an account association. This cannot be undone.
+            {gettext("This permanently removes the account, credentials, quotas, Pool assignments, and account-specific statistics from the database. Shared request accounting remains without an account association. This cannot be undone.")}
           </p>
         </div>
         <.form
@@ -212,7 +214,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@account.label}</span> to confirm
+              <span class="font-semibold text-base-content">{gettext("Type %{label} to confirm", label: @account.label)}</span>
             </:label_content>
           </.input>
         </.form>
@@ -224,14 +226,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="cockpit-delete-upstream-account-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete_account"
             />
             <AdminComponents.action_button
               id="cockpit-delete-upstream-account-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="cockpit-delete-upstream-account-form"
               variant={:danger}
@@ -240,7 +242,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete_account">close</button>
+        <button type="button" phx-click="cancel_delete_account">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -276,26 +278,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   # link of its own - `OAuthRelinkWorkflow.complete/3` refreshes the page already
   # underneath it.
   defp oauth_relink_title(account_label, %{status: "completed"}),
-    do: "#{account_label} reauthorized"
+    do: gettext("%{label} reauthorized", label: account_label)
 
-  defp oauth_relink_title(account_label, _flow), do: "Relink #{account_label}"
+  defp oauth_relink_title(account_label, _flow), do: gettext("Relink %{label}", label: account_label)
 
   defp oauth_relink_description(%{status: "completed"}) do
-    "This page already shows the refreshed authorization."
+    gettext("This page already shows the refreshed authorization.")
   end
 
   defp oauth_relink_description(%{flow_kind: "browser", status: "pending"}) do
-    "Authorize with OpenAI, then paste the returned callback URL to finish."
+    gettext("Authorize with OpenAI, then paste the returned callback URL to finish.")
   end
 
   defp oauth_relink_description(%{flow_kind: "device", status: "pending"}) do
-    "Finish the device authorization in your browser. This dialog updates when the account is ready."
+    gettext("Finish the device authorization in your browser. This dialog updates when the account is ready.")
   end
 
   defp oauth_relink_description(_flow) do
-    "Reconnect this upstream identity with browser authorization or a device code."
+    gettext("Reconnect this upstream identity with browser authorization or a device code.")
   end
 
-  defp oauth_relink_dialog_dismiss_label(%{status: "completed"}), do: "Close"
-  defp oauth_relink_dialog_dismiss_label(_flow), do: "Cancel"
+  defp oauth_relink_dialog_dismiss_label(%{status: "completed"}), do: gettext("Close")
+  defp oauth_relink_dialog_dismiss_label(_flow), do: gettext("Cancel")
 end

@@ -3,15 +3,19 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   Builds the bounded, holder-facing render model for the API Key Observatory.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
   alias CodexPooler.Accounting.ClientIdentity
   alias CodexPoolerWeb.Admin.RequestLogsDisplay
   alias CodexPoolerWeb.Observatory.Presentation.Safety
 
   @endpoint_classes ["responses", "chat_completions", "completions", "embeddings", "compaction", "models", "usage", "files", "audio"]
   @windows [{"1h", "1h"}, {"5h", "5h"}, {"24h", "24h"}, {"7d", "7d"}]
+  @spec window_options() :: [{String.t(), String.t()}]
   def window_options, do: @windows
+  @spec valid_window?(term()) :: boolean()
   def valid_window?(key), do: Enum.any?(@windows, fn {window, _} -> window == key end)
 
+  @spec build(term()) :: map()
   def build(value) do
     p = map(value)
     totals = map(get(p, :totals))
@@ -66,7 +70,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
           max(total - cancelled, 0),
           success_detail,
           Safety.trend(get(trends, :success_rate), :percentage_points),
-          if(cancelled > 0, do: success_detail, else: "not available")
+          if(cancelled > 0, do: success_detail, else: gettext("not available"))
         )
         |> with_grade(:success),
       cache_rate:
@@ -93,14 +97,14 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   # Qualitative tiers for the two rate cards. The cut-offs are generic reading
   # aids, not service levels: a request log that fails one in ten is poor for
   # anyone, while a low cache rate only says the prompts share little prefix.
-  @success_tiers [{99.0, "Excellent", :success}, {95.0, "Good", :info}, {90.0, "Fair", :warning}]
-  @cache_tiers [{80.0, "Excellent", :success}, {50.0, "Good", :info}, {25.0, "Fair", :warning}]
+  defp success_tiers, do: [{99.0, gettext("Excellent"), :success}, {95.0, gettext("Good"), :info}, {90.0, gettext("Fair"), :warning}]
+  defp cache_tiers, do: [{80.0, gettext("Excellent"), :success}, {50.0, gettext("Good"), :info}, {25.0, gettext("Fair"), :warning}]
 
   defp with_grade(%{percent: percent} = rate, kind), do: Map.put(rate, :grade, grade(kind, percent))
 
   defp grade(_kind, nil), do: nil
-  defp grade(:success, percent), do: tier(percent, @success_tiers, {"Poor", :error})
-  defp grade(:cache, percent), do: tier(percent, @cache_tiers, {"Low", :neutral})
+  defp grade(:success, percent), do: tier(percent, success_tiers(), {gettext("Poor"), :error})
+  defp grade(:cache, percent), do: tier(percent, cache_tiers(), {gettext("Low"), :neutral})
 
   defp tier(percent, tiers, {label, tone}) do
     case Enum.find(tiers, fn {floor, _label, _tone} -> percent >= floor end) do
@@ -109,32 +113,32 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     end
   end
 
-  defp request_detail(1), do: "1 request"
-  defp request_detail(count), do: "#{grouped_integer(count)} requests"
+  defp request_detail(count), do: ngettext("%{requests} request", "%{requests} requests", count, requests: grouped_integer(count))
 
   defp cache_detail(cached, input),
-    do: "#{token_label(cached)} of #{token_label(input)} input tokens served from cache"
+    do: gettext("%{cached} of %{input} input tokens served from cache", cached: token_label(cached), input: token_label(input))
 
-  defp rate(part, total, detail, trend, unavailable_detail \\ "not available") do
+  defp rate(part, total, detail, trend, unavailable_detail \\ nil) do
     percent = percentage(part, total)
 
     %{
       percent: percent,
       measure: percent_measure(percent),
-      detail: if(percent, do: detail, else: unavailable_detail),
+      detail: if(percent, do: detail, else: unavailable_detail || gettext("not available")),
       minibar: percent || 0.0,
       trend: trend
     }
   end
 
   defp success_detail(succeeded, failed, cancelled) do
-    "#{grouped_integer(succeeded)} succeeded · #{grouped_integer(failed)} failed" <> cancelled_detail(cancelled)
+    if cancelled > 0 do
+      gettext("%{succeeded} succeeded · %{failed} failed · %{cancelled} client cancelled", succeeded: grouped_integer(succeeded), failed: grouped_integer(failed), cancelled: grouped_integer(cancelled))
+    else
+      gettext("%{succeeded} succeeded · %{failed} failed", succeeded: grouped_integer(succeeded), failed: grouped_integer(failed))
+    end
   end
 
-  defp cancelled_detail(count) when count > 0, do: " · #{grouped_integer(count)} client cancelled"
-  defp cancelled_detail(_count), do: ""
-
-  defp percent_measure(nil), do: %{value: "not available", unit: nil}
+  defp percent_measure(nil), do: %{value: gettext("not available"), unit: nil}
   defp percent_measure(percent), do: %{value: "#{percent}", unit: "%"}
 
   @chart_model_colors ["var(--color-primary)", "var(--color-info)", "var(--color-warning)", "var(--color-reset-bank)", "var(--admin-chart-requests)"]
@@ -172,13 +176,14 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
     Map.new(
       categories: CodexPooler.JSON.encode!(Enum.map(rows, & &1.label)),
-      series: CodexPooler.JSON.encode!(column_series ++ [%{"name" => "Cost", "type" => "line", "data" => cost_values}]),
+      series: CodexPooler.JSON.encode!(column_series ++ [%{"name" => gettext("Cost"), "type" => "line", "data" => cost_values}]),
       units: CodexPooler.JSON.encode!(token_kinds ++ ["USD"]),
       value_kinds: CodexPooler.JSON.encode!(token_kinds ++ ["usd"]),
+      unit_labels: CodexPooler.JSON.encode!(List.duplicate(gettext("tokens"), length(column_series)) ++ ["USD"]),
       yaxis:
         CodexPooler.JSON.encode!([
-          %{seriesName: series_names, title: "tokens", valueKind: "tokens"},
-          %{seriesName: "Cost", title: "cost", opposite: true, valueKind: "usd"}
+          %{seriesName: series_names, title: gettext("tokens"), valueKind: "tokens"},
+          %{seriesName: gettext("Cost"), title: gettext("cost"), opposite: true, valueKind: "usd"}
         ]),
       colors: CodexPooler.JSON.encode!(chart_colors(model_series) ++ [@chart_cost_color])
     )
@@ -197,7 +202,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
       |> Enum.reject(fn %{data: data} -> Enum.sum(data) == 0 end)
 
     case base do
-      [] -> [%{name: "Tokens", color: @chart_other_color, data: totals}]
+      [] -> [%{name: gettext("Tokens"), color: @chart_other_color, data: totals}]
       series -> append_other(series, totals)
     end
   end
@@ -213,7 +218,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
         max(total - covered, 0)
       end)
 
-    if Enum.sum(other) > 0, do: series ++ [%{name: "Other", color: @chart_other_color, data: other}], else: series
+    if Enum.sum(other) > 0, do: series ++ [%{name: gettext("Other"), color: @chart_other_color, data: other}], else: series
   end
 
   defp chart_models(models) when is_list(models) do
@@ -295,8 +300,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
   defp models(_value, _total_tokens), do: []
 
-  defp request_short(1), do: "1 req"
-  defp request_short(count), do: "#{grouped_integer(count)} reqs"
+  defp request_short(count), do: ngettext("%{requests} req", "%{requests} reqs", count, requests: grouped_integer(count))
 
   defp model_share_label(value) when is_number(value), do: "#{value}%"
   defp model_share_label(_value), do: "—"
@@ -338,7 +342,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
       cost: cost,
       effort: if(model_applicable?, do: Safety.sanitize_text(get(row, :reasoning_effort), nil)),
       endpoint: endpoint,
-      model: if(model_applicable?, do: display_model_name(get(row, :model_display_name), get(row, :model)), else: "Not applicable"),
+      model: if(model_applicable?, do: display_model_name(get(row, :model_display_name), get(row, :model)), else: gettext("Not applicable")),
       model_color: if(model_applicable?, do: outcome_model_color(get(row, :model), colors)),
       speed_level: if(model_applicable?, do: speed_level(row, cost)),
       status: status(get(row, :status), code),
@@ -360,13 +364,13 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     })
   end
 
-  defp display_model_name(name, code), do: Safety.sanitize_text(name, Safety.sanitize_text(code, "Unknown model"))
+  defp display_model_name(name, code), do: Safety.sanitize_text(name, Safety.sanitize_text(code, gettext("Unknown model")))
 
   defp outcome_client(value) do
     identity = ClientIdentity.from_kind(get(value, :kind))
 
     if identity.kind == "unknown" do
-      %{identity | label: ClientIdentity.compact_user_agent(get(value, :label)) || "Unknown client"}
+      %{identity | label: ClientIdentity.compact_user_agent(get(value, :label)) || gettext("Unknown client")}
     else
       identity
     end
@@ -412,16 +416,16 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     %{status | label: status_label(status.label, code)}
   end
 
-  defp status("succeeded"), do: %{data_status: "ok", tone: :success, label: "Succeeded"}
-  defp status("failed"), do: %{data_status: "err", tone: :error, label: "Failed"}
-  defp status("rejected"), do: %{data_status: "err", tone: :error, label: "Rejected"}
+  defp status("succeeded"), do: %{data_status: "ok", tone: :success, label: gettext("Succeeded")}
+  defp status("failed"), do: %{data_status: "err", tone: :error, label: gettext("Failed")}
+  defp status("rejected"), do: %{data_status: "err", tone: :error, label: gettext("Rejected")}
 
-  defp status("accepted"), do: %{data_status: "warn", tone: :warning, label: "Accepted"}
-  defp status("in_progress"), do: %{data_status: "warn", tone: :warning, label: "In progress"}
+  defp status("accepted"), do: %{data_status: "warn", tone: :warning, label: gettext("Accepted")}
+  defp status("in_progress"), do: %{data_status: "warn", tone: :warning, label: gettext("In progress")}
 
-  defp status("client_cancelled"), do: %{data_status: "warn", tone: :warning, label: "Client cancelled"}
+  defp status("client_cancelled"), do: %{data_status: "warn", tone: :warning, label: gettext("Client cancelled")}
 
-  defp status(_value), do: %{data_status: "neutral", tone: :neutral, label: "Unknown"}
+  defp status(_value), do: %{data_status: "neutral", tone: :neutral, label: gettext("Unknown")}
 
   defp endpoint(value), do: if(value in @endpoint_classes, do: value, else: "other")
 
@@ -436,12 +440,12 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   end
 
   defp cost_detail(%{status: "estimated", label: label}),
-    do: "+ #{label} estimated, awaiting settlement"
+    do: gettext("+ %{label} estimated, awaiting settlement", label: label)
 
-  defp cost_detail(_estimated), do: "not available"
+  defp cost_detail(_estimated), do: gettext("not available")
 
   defp status_label(label, nil), do: label
-  defp status_label(label, code), do: "#{label} · #{Safety.failure_label(code)}"
+  defp status_label(label, code), do: gettext("%{status} · %{reason}", status: label, reason: Safety.failure_label(code))
 
   defp confidence(value, _total) when value in ["settled", "estimated", "partial", "unavailable"],
     do: value
@@ -452,7 +456,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   defp percentage(part, total), do: Float.round(non_negative(part) * 100 / total, 1)
 
   defp traffic_label(tokens, cost_micros),
-    do: "#{token_label(tokens)} tokens · #{money_label(cost_micros)}"
+    do: ngettext("%{tokens} token · %{cost}", "%{tokens} tokens · %{cost}", tokens, tokens: token_label(tokens), cost: money_label(cost_micros))
 
   defp grouped_integer(value),
     do: Regex.replace(~r/\d(?=(\d{3})+$)/, Integer.to_string(value), &(&1 <> ","))
@@ -473,8 +477,13 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
   defp category(%DateTime{} = value), do: Calendar.strftime(value, "%m-%d %H:%M")
   defp category(_value), do: ""
-  defp outcome_timestamp(%DateTime{} = value), do: Calendar.strftime(value, "%b %d, %H:%M:%S")
-  defp outcome_timestamp(_value), do: "not recorded"
+
+  defp outcome_timestamp(%DateTime{} = value) do
+    pattern = if Gettext.get_locale() == "zh_CN", do: "%m月%d日 %H:%M:%S", else: "%b %d, %H:%M:%S"
+    Calendar.strftime(value, pattern)
+  end
+
+  defp outcome_timestamp(_value), do: gettext("not recorded")
 
   defp non_negative(value), do: max(integer(value), 0)
   defp integer(value) when is_integer(value), do: value

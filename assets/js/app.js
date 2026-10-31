@@ -12,9 +12,22 @@ import {
 	adminEscapeTarget,
 	shouldDismissOpenPopoverFromPointer,
 } from "./admin_overlay_dismissal.mjs";
+import { CallyDatePicker, createTotpSetupToolsHook } from "./browser_tools.mjs";
+import {
+	buildChartTooltip,
+	chartDisplayUnits,
+	chartIntervalSeries,
+	chartModeDescription,
+	formatChartValue,
+	parseChartJSON,
+	quotaPressureLabel,
+} from "./chart_presentation.mjs";
+import { ClipboardCopy } from "./clipboard_copy.mjs";
 import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { HoldToLaunch } from "./hold_to_launch.mjs";
+import { readHookLabels } from "./hook_labels.mjs";
+import { initLanguageDropdowns } from "./language_dropdown.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
 import {
 	LiveUpdatesToggle,
@@ -37,6 +50,7 @@ import {
 	connectionFooterParts,
 	connectionHint,
 	connectionTimelineSteps,
+	connectionVisualLabel,
 	initialConnectionHistory,
 	recordRoundTrip,
 	recordSocketError,
@@ -57,148 +71,6 @@ const resolveCssColor = (root, color) => {
 	probe.remove();
 
 	return resolved || color;
-};
-const parseChartJSON = (value, fallback) => {
-	try {
-		return JSON.parse(value || "");
-	} catch (_error) {
-		return fallback;
-	}
-};
-const formatChartNumber = (value) => {
-	const number = Number(value || 0);
-
-	if (!Number.isFinite(number)) return "0";
-
-	return new Intl.NumberFormat(undefined, {
-		maximumFractionDigits: Number.isInteger(number) ? 0 : 1,
-	}).format(number);
-};
-const compactNumberScales = [
-	{ value: 1_000_000_000, suffix: "B" },
-	{ value: 1_000_000, suffix: "M" },
-	{ value: 1_000, suffix: "k" },
-];
-const formatCompactNumber = (value) => {
-	const number = Number(value || 0);
-
-	if (!Number.isFinite(number)) return "0";
-
-	const sign = number < 0 ? "-" : "";
-	const absolute = Math.abs(number);
-	const scale = compactNumberScales.find((item) => absolute >= item.value);
-
-	if (!scale) return `${sign}${formatChartNumber(absolute)}`;
-
-	const scaled = (absolute / scale.value).toFixed(1).replace(/\.0$/, "");
-
-	return `${sign}${scaled}${scale.suffix}`;
-};
-const formatMoneyNumber = (value) => {
-	const number = Number(value || 0);
-
-	if (!Number.isFinite(number)) return "$0.00";
-
-	const sign = number < 0 ? "-" : "";
-	const formatted = new Intl.NumberFormat(undefined, {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	}).format(Math.abs(number));
-
-	return `${sign}$${formatted}`;
-};
-const formatChartValue = (value, kind) => {
-	switch (kind) {
-		case "money":
-		case "usd":
-			return formatMoneyNumber(value);
-		case "token":
-		case "tokens":
-			return formatCompactNumber(value);
-		case "integer":
-			return formatChartNumber(Math.round(Number(value || 0)));
-		default:
-			return formatChartNumber(value);
-	}
-};
-const escapeChartHTML = (value) =>
-	String(value ?? "")
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#39;");
-const buildChartTooltip = ({
-	categories,
-	series,
-	unit,
-	units,
-	valueKinds,
-	safeTooltip,
-	colors,
-}) => {
-	const tooltip = {
-		shared: true,
-		intersect: false,
-		x: { show: true },
-		y: {
-			formatter: (value, { seriesIndex }) => {
-				const valueKind = valueKinds[seriesIndex] || units[seriesIndex] || unit;
-				const formattedValue = formatChartValue(value, valueKind);
-
-				if (["money", "usd"].includes(valueKind)) return formattedValue;
-
-				return `${formattedValue} ${units[seriesIndex] || unit}`;
-			},
-			title: { formatter: (seriesName) => `${seriesName}: ` },
-		},
-	};
-
-	if (!safeTooltip) return tooltip;
-
-	return {
-		...tooltip,
-		custom: ({ series: values, dataPointIndex, w }) => {
-			const configSeries = w?.config?.series || series;
-			const rows = configSeries.map((item, index) => {
-				const value = Number(values?.[index]?.[dataPointIndex] || 0);
-				const valueKind = valueKinds[index] || units[index] || unit;
-				const formattedValue = formatChartValue(value, valueKind);
-				const suffix = ["money", "usd"].includes(valueKind)
-					? ""
-					: ` ${units[index] || unit}`;
-
-				return {
-					name: item.name || `Series ${index + 1}`,
-					value,
-					label: `${formattedValue}${suffix}`,
-					color: colors[index] || "",
-				};
-			});
-			const visibleRows = rows.filter((row) => row.value !== 0);
-			const renderedRows = visibleRows.length ? visibleRows : rows;
-			const title = categories[dataPointIndex] || "";
-
-			return `
-        <div class="px-3 py-2 text-xs">
-          <div class="mb-1 font-semibold">${escapeChartHTML(title)}</div>
-          ${renderedRows
-						.map(
-							(row) => `
-            <div class="flex items-center justify-between gap-4">
-              <span class="flex min-w-0 items-center gap-2">
-                <span aria-hidden="true" class="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style="background-color: ${escapeChartHTML(row.color)}"></span>
-                <span class="truncate">${escapeChartHTML(row.name)}</span>
-              </span>
-              <span class="font-semibold">${escapeChartHTML(row.label)}</span>
-            </div>
-          `,
-						)
-						.join("")}
-        </div>
-      `;
-		},
-	};
 };
 const AssignmentTools = {
 	mounted() {
@@ -288,37 +160,6 @@ const ModelServingTools = {
 		this.el.removeEventListener("click", this.onClick);
 	},
 };
-const ClipboardCopy = {
-	mounted() {
-		this.el.addEventListener("click", async () => {
-			const icon = this.el.querySelector(".copy-icon");
-			const label = this.el.querySelector("[data-copy-label]");
-			window.clearTimeout(this.timeout);
-			await navigator.clipboard.writeText(this.el.dataset.copyText);
-
-			if (label) {
-				label.textContent = this.el.dataset.copiedLabel || "Copied";
-			}
-
-			icon?.classList.remove("hero-clipboard-document");
-			icon?.classList.add("hero-check");
-			this.el.classList.add("btn-success");
-
-			this.timeout = window.setTimeout(() => {
-				icon?.classList.remove("hero-check");
-				icon?.classList.add("hero-clipboard-document");
-				this.el.classList.remove("btn-success");
-
-				if (label) {
-					label.textContent = this.el.dataset.copyLabel || "Copy";
-				}
-			}, 1400);
-		});
-	},
-	destroyed() {
-		window.clearTimeout(this.timeout);
-	},
-};
 const WorkerFailureMarker = {
 	mounted() {
 		this.handleClick = (event) => {
@@ -346,111 +187,7 @@ const WorkerFailureMarker = {
 		this.el.removeEventListener("click", this.handleClick);
 	},
 };
-const TotpSetupTools = {
-	mounted() {
-		this.renderQr();
-	},
-	updated() {
-		this.renderQr();
-	},
-	renderQr() {
-		const target = this.el.querySelector("[data-totp-qr]");
-		const uri = this.el.dataset.otpauthUri;
-
-		if (!target || !uri) return;
-
-		try {
-			const size = Number.parseInt(target.dataset.qrSize || "176", 10);
-			const svg = renderSVG(uri, { border: 1 })
-				.replaceAll('fill="white"', 'fill="#f7f7f7"')
-				.replaceAll('fill="black"', 'fill="#0e0e0e"');
-
-			target.innerHTML = svg;
-
-			const rendered = target.querySelector("svg");
-			rendered?.setAttribute("width", size.toString());
-			rendered?.setAttribute("height", size.toString());
-			rendered?.setAttribute("role", "img");
-			rendered?.setAttribute("aria-label", "Authenticator app QR code");
-		} catch (_error) {
-			target.replaceWith(
-				Object.assign(document.createElement("p"), {
-					className: "text-sm text-error",
-					textContent: "QR code could not be rendered",
-				}),
-			);
-		}
-	},
-};
-const CallyDatePicker = {
-	mounted() {
-		this.input = this.el.querySelector("input[type='hidden']");
-		this.calendar = this.el.querySelector("calendar-date");
-		this.label = this.el.querySelector("[data-role='cally-date-label']");
-		this.popover = this.el.querySelector("[popover]");
-		this.placeholder = this.el.dataset.placeholder || "dd/mm/yyyy";
-		this.handleChange = (event) => this.selectDate(event.target.value);
-		this.handleClear = () => this.selectDate("");
-		this.handleCancel = () => this.close();
-
-		this.calendar?.addEventListener("change", this.handleChange);
-		this.el
-			.querySelector("[data-role='cally-clear']")
-			?.addEventListener("click", this.handleClear);
-		this.el
-			.querySelector("[data-role='cally-cancel']")
-			?.addEventListener("click", this.handleCancel);
-		this.sync();
-	},
-	updated() {
-		this.sync();
-	},
-	destroyed() {
-		this.calendar?.removeEventListener("change", this.handleChange);
-		this.el
-			.querySelector("[data-role='cally-clear']")
-			?.removeEventListener("click", this.handleClear);
-		this.el
-			.querySelector("[data-role='cally-cancel']")
-			?.removeEventListener("click", this.handleCancel);
-	},
-	selectDate(value) {
-		if (!this.input) return;
-
-		this.input.value = value || "";
-		this.sync();
-		this.input.dispatchEvent(new Event("input", { bubbles: true }));
-		this.input.dispatchEvent(new Event("change", { bubbles: true }));
-		this.close();
-	},
-	sync() {
-		const value = this.input?.value || "";
-
-		if (this.calendar && this.calendar.value !== value) {
-			this.calendar.value = value;
-		}
-
-		if (this.label) {
-			this.label.textContent = value
-				? this.formatDate(value)
-				: this.placeholder;
-		}
-	},
-	close() {
-		this.popover?.hidePopover?.();
-	},
-	formatDate(value) {
-		const [year, month, day] = value.split("-").map(Number);
-
-		if (!year || !month || !day) return value;
-
-		return new Intl.DateTimeFormat("en-GB", {
-			day: "2-digit",
-			month: "2-digit",
-			year: "numeric",
-		}).format(new Date(year, month - 1, day));
-	},
-};
+const TotpSetupTools = createTotpSetupToolsHook(renderSVG);
 const closeFilterDropdowns = (root, except = null) => {
 	root.querySelectorAll("details.dropdown[open]").forEach((details) => {
 		if (details !== except) details.removeAttribute("open");
@@ -512,7 +249,7 @@ const QuotaPressureChart = {
 		const boundedValue = Number.isFinite(value)
 			? Math.max(0, Math.min(100, value))
 			: 0;
-		const label = this.el.dataset.label || "remaining";
+		const label = quotaPressureLabel(this.el.dataset);
 		const color = resolveCssColor(
 			this.el,
 			this.el.dataset.color || "var(--color-success)",
@@ -578,6 +315,7 @@ function buildChartYaxis({
 	compact,
 	axisColor,
 	units,
+	unitLabels,
 	valueKinds,
 	yaxisConfig,
 }) {
@@ -597,7 +335,7 @@ function buildChartYaxis({
 				show: !compact,
 				labels: chartAxisLabels({ compact, axisColor, valueKind }),
 				title: {
-					text: compact ? undefined : axis.title || units[index],
+					text: compact ? undefined : axis.title || unitLabels[index],
 					style: {
 						color: axisColor,
 						fontSize: "11px",
@@ -676,20 +414,12 @@ const ApexTimeSeriesChart = {
 		);
 
 		if (description) {
-			description.textContent =
-				this.chartMode === "cumulative"
-					? "Showing cumulative running totals through each time bucket."
-					: "Showing interval values for each time bucket.";
+			description.textContent = chartModeDescription(this.chartMode, this.el.dataset);
 		}
 	},
 	renderChart() {
 		const categories = parseChartJSON(this.el.dataset.chartCategories, []);
-		const intervalSeries = parseChartJSON(this.el.dataset.chartSeries, [
-			{ name: "Value", data: [] },
-		]).map((item) => ({
-			...item,
-			type: item.type || "column",
-		}));
+		const intervalSeries = chartIntervalSeries(this.el.dataset);
 		const series =
 			this.chartMode === "cumulative"
 				? cumulativeChartSeries(intervalSeries)
@@ -699,6 +429,7 @@ const ApexTimeSeriesChart = {
 			this.el.dataset.chartUnits,
 			series.map(() => unit),
 		);
+		const sourceUnitLabels = chartDisplayUnits(this.el.dataset, sourceUnits, unit);
 		const sourceValueKinds = parseChartJSON(
 			this.el.dataset.chartValueKinds,
 			sourceUnits,
@@ -735,6 +466,7 @@ const ApexTimeSeriesChart = {
 			compact,
 			axisColor,
 			units: sourceUnits,
+			unitLabels: sourceUnitLabels,
 			valueKinds: sourceValueKinds,
 			yaxisConfig,
 		});
@@ -816,9 +548,11 @@ const ApexTimeSeriesChart = {
 				series,
 				unit,
 				units: sourceUnits,
+				unitLabels: sourceUnitLabels,
 				valueKinds: sourceValueKinds,
 				safeTooltip,
 				colors: sourceColors,
+				labels: this.el.dataset,
 			}),
 			xaxis: {
 				tooltip: { enabled: false },
@@ -1010,32 +744,24 @@ const CONNECTION_VISUAL_STATES = {
 		icon: "hero-wifi",
 		toneClass: "text-base-content/45",
 		buttonToneClass: "text-base-content/60",
-		label: "Live updates: syncing",
-		stateText: "Syncing",
 	},
 	websocketConnected: {
 		dataState: "connected",
 		icon: "hero-wifi",
 		toneClass: "text-success",
 		buttonToneClass: "text-success",
-		label: "Live updates: live",
-		stateText: "Live",
 	},
 	longPollFallback: {
 		dataState: "fallback",
 		icon: "hero-exclamation-triangle",
 		toneClass: "text-warning",
 		buttonToneClass: "text-warning",
-		label: "Live updates: fallback connection",
-		stateText: "Fallback",
 	},
 	disconnected: {
 		dataState: "disconnected",
 		icon: "hero-x-circle",
 		toneClass: "text-error",
 		buttonToneClass: "text-error",
-		label: "Live updates: offline",
-		stateText: "Offline",
 	},
 };
 const CONNECTION_TONE_CLASSES = Object.values(CONNECTION_VISUAL_STATES).flatMap(
@@ -1146,8 +872,12 @@ const updateConnectionIndicator = () => {
 
 	const liveSocket = window.liveSocket;
 	const socket = liveSocket?.socket;
-	const connection = classifyLiveSocketConnection(liveSocket, socket);
-	const visualState = CONNECTION_VISUAL_STATES[connection.visualState];
+	const labels = readHookLabels(root.dataset.wsLabels);
+	const connection = classifyLiveSocketConnection(liveSocket, socket, labels);
+	const visualState = {
+		...CONNECTION_VISUAL_STATES[connection.visualState],
+		label: connectionVisualLabel(connection.visualState, labels),
+	};
 
 	connectionIndicator.history = trackConnectionTransition(
 		connectionIndicator.history,
@@ -1165,10 +895,12 @@ const updateConnectionIndicator = () => {
 		connectionTimelineSteps(
 			connection.visualState,
 			connectionIndicator.history,
+			Date.now(),
+			labels,
 		),
 	);
 
-	const hint = connectionHint(connection.visualState);
+	const hint = connectionHint(connection.visualState, labels);
 	const hintEl = popover.querySelector("[data-ws-hint]");
 	if (hintEl) {
 		setTextIfChanged(hintEl, hint || "");
@@ -1179,8 +911,8 @@ const updateConnectionIndicator = () => {
 		endPoint: socket?.endPoint,
 		heartbeatIntervalMs: socket?.heartbeatIntervalMs,
 		online: navigator.onLine,
-	});
-	const actionLabel = connectionActionLabel(connection.visualState);
+	}, labels);
+	const actionLabel = connectionActionLabel(connection.visualState, labels);
 
 	const metaEl = popover.querySelector("[data-ws-meta]");
 	if (metaEl) setTextIfChanged(metaEl, footer.meta);
@@ -1344,6 +1076,7 @@ const dismissOpenModelInfoPopoverFromPointer = (event) => {
 };
 
 forgetMemorizedLongPollFallback();
+initLanguageDropdowns(document);
 document.addEventListener("cancel", dismissAdminDialogFromKeyboard, true);
 document.addEventListener("keydown", dismissTopAdminDialogFromEscape, true);
 document.addEventListener(

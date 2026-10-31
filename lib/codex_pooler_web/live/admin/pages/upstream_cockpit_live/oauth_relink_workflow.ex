@@ -1,11 +1,14 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
 
   alias CodexPooler.Upstreams.Auth.OAuthCallback
   alias CodexPooler.Upstreams.OAuth, as: UpstreamOAuth
   alias CodexPooler.Upstreams.Schemas.OAuthFlow
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
 
   @reason "admin_upstream_cockpit"
 
@@ -167,12 +170,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
        ) do
     socket
     |> cancel_poll_timer()
-    |> assign_pending(flow, "Browser authorization pending", authorization_url)
+    |> assign_pending(flow, gettext("Browser authorization pending"), authorization_url)
   end
 
   defp assign_device_started(socket, %{flow: %OAuthFlow{} = flow}) do
     socket
-    |> assign_pending(flow, "Device authorization pending", nil)
+    |> assign_pending(flow, gettext("Device authorization pending"), nil)
     |> schedule_device_poll(flow)
   end
 
@@ -183,7 +186,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
 
       {:ok, %{status: :pending, flow: %OAuthFlow{} = flow}} ->
         socket
-        |> assign_pending(flow, "Device authorization pending", nil)
+        |> assign_pending(flow, gettext("Device authorization pending"), nil)
         |> refresh_fun.()
         |> schedule_device_poll(flow)
 
@@ -203,7 +206,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
     |> assign(
       oauth_relink_flow: flow,
       oauth_relink_authorization_url: nil,
-      oauth_relink_result: %{message: "OpenAI account relinked"},
+      oauth_relink_result: %{message: gettext("OpenAI account relinked")},
       oauth_relink_error: nil,
       oauth_relink_form: form()
     )
@@ -244,13 +247,5 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
   defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value, default), do: default
 
-  defp error_message(%Ecto.Changeset{} = changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
-    |> Enum.join(", ")
-  end
-
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Operation failed"
+  defp error_message(reason), do: WorkflowError.message(reason)
 end

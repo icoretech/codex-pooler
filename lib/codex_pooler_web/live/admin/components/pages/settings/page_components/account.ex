@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
   attr :datetime_format_options, :list, required: true
   attr :timezone_options, :list, required: true
 
+  @spec profile_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def profile_panel(assigns) do
     ~H"""
     <section
@@ -17,11 +18,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
     >
       <div class="border-base-300 lg:border-r lg:pr-5">
         <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-          Identity
+          {gettext("Identity")}
         </p>
-        <h3 class="mt-1 text-xl font-semibold text-base-content">Operator profile</h3>
+        <h3 class="mt-1 text-xl font-semibold text-base-content">{gettext("Operator profile")}</h3>
         <p class="mt-2 text-sm leading-6 text-base-content/65">
-          Update the account details shown in this admin session.
+          {gettext("Update the account details shown in this admin session.")}
         </p>
       </div>
       <.form
@@ -36,14 +37,14 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
             id="settings-account-email"
             field={@account_form[:email]}
             type="email"
-            label="Email"
+            label={gettext("Email")}
             required
           />
           <.input
             id="settings-account-display-name"
             field={@account_form[:display_name]}
             type="text"
-            label="Display name"
+            label={gettext("Display name")}
           />
         </div>
         <div class="grid gap-4 md:grid-cols-2">
@@ -51,7 +52,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
             id="settings-account-datetime-format"
             field={@account_form[:datetime_format]}
             type="select"
-            label="Time format"
+            label={gettext("Time format")}
             options={@datetime_format_options}
             required
           />
@@ -59,7 +60,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
             id="settings-account-timezone"
             field={@account_form[:timezone]}
             type="select"
-            label="Timezone"
+            label={gettext("Timezone")}
             options={@timezone_options}
             required
           />
@@ -68,7 +69,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
           <AdminComponents.action_button
             id="settings-account-submit"
             icon="hero-check"
-            label="Save account"
+            label={gettext("Save account")}
             type="submit"
             variant={:primary}
           />

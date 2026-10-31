@@ -17,7 +17,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
     {:ok,
      socket
      |> assign(
-       page_title: "Operators",
+       page_title: gettext("Operators"),
        operator_filters: OperatorForm.filter(),
        operator_filter_form: OperatorForm.filter_form(),
        operator_panel_views: %{},
@@ -48,14 +48,14 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
       {:ok, result} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Operator created")
+         |> put_flash(:info, gettext("Operator created"))
          |> assign(:creating_operator, true)
          |> assign(:create_form, OperatorForm.create_form())
          |> clear_editing()
          |> clear_resetting()
          |> assign(
            :temporary_password_receipt,
-           OperatorForm.temporary_password_receipt(result, "Operator created")
+           OperatorForm.temporary_password_receipt(result, gettext("Operator created"))
          )
          |> reload_operators()}
 
@@ -144,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
          |> assign(:temporary_password_receipt, nil)}
 
       nil ->
-        {:noreply, put_flash(socket, :error, "Operator was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Operator was not found"))}
     end
   end
 
@@ -164,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
       {:ok, _operator} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Operator updated")
+         |> put_flash(:info, gettext("Operator updated"))
          |> clear_editing()
          |> assign(:temporary_password_receipt, nil)
          |> reload_operators()}
@@ -275,7 +275,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
       {:ok, _operator} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Operator deactivated")
+         |> put_flash(:info, gettext("Operator deactivated"))
          |> clear_editing()
          |> clear_resetting()
          |> assign(:temporary_password_receipt, nil)
@@ -338,6 +338,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:operators}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -345,15 +347,15 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
       <section id="admin-operators-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="operators-page-header"
-          title="Operators"
-          description="The accounts that can sign in to this admin area, with their roles and assigned Pools."
+          title={gettext("Operators")}
+          description={gettext("The accounts that can sign in to this admin area, with their roles and assigned Pools.")}
         >
           <:actions>
             <AdminComponents.action_button
               :if={!@operator_management_denied?}
               id="operator-page-create-action"
               icon="hero-user-plus"
-              label="Create operator"
+              label={gettext("Create operator")}
               phx-click="open_create_operator"
               size={:md}
               variant={:primary}
@@ -368,9 +370,9 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         >
           <.icon name="hero-lock-closed" class="size-5" />
           <div class="grid gap-1">
-            <p class="font-semibold">Only instance owners can manage operators.</p>
+            <p class="font-semibold">{gettext("Only instance owners can manage operators.")}</p>
             <p class="text-sm">
-              Ask an instance owner to create, update, deactivate, or reset local operator accounts.
+              {gettext("Ask an instance owner to create, update, deactivate, or reset local operator accounts.")}
             </p>
           </div>
         </div>
@@ -447,13 +449,13 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
          |> assign(:temporary_password_receipt, nil)}
 
       nil ->
-        {:noreply, put_flash(socket, :error, "Operator was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Operator was not found"))}
     end
   end
 
   defp reject_self_operator_action(socket, operator_id) do
     if self_operator_id?(operator_id, socket.assigns.current_scope) do
-      {:error, "Use account settings to change your own password."}
+      {:error, gettext("Use account settings to change your own password.")}
     else
       :ok
     end
@@ -590,30 +592,36 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   defp self_operator_id?(operator_id, %{user: %{id: operator_id}}), do: true
   defp self_operator_id?(_operator_id, _current_scope), do: false
 
-  defp error_message(:last_active_owner), do: "At least one active instance owner must remain."
-  defp error_message(:last_active_admin), do: "At least one active instance owner must remain."
-  defp error_message(:invalid_operator_role), do: "Role must be instance owner or instance admin."
-  defp error_message(:invalid_pool_assignment), do: "Assigned Pools were not valid."
-  defp error_message(:invalid_operator), do: "Operator was not found"
-  defp error_message(:self_operator_password_change), do: "Use account settings to change your own password."
+  defp error_message(:last_active_owner), do: gettext("At least one active instance owner must remain.")
+  defp error_message(:last_active_admin), do: gettext("At least one active instance owner must remain.")
+  defp error_message(:invalid_operator_role), do: gettext("Role must be instance owner or instance admin.")
+  defp error_message(:invalid_pool_assignment), do: gettext("Assigned Pools were not valid.")
+  defp error_message(:invalid_operator), do: gettext("Operator was not found")
+  defp error_message(:self_operator_password_change), do: gettext("Use account settings to change your own password.")
 
   defp error_message(:operator_management_denied),
-    do: "Only instance owners can manage operators."
-
-  defp error_message(%{message: message}) when is_binary(message), do: message
+    do: gettext("Only instance owners can manage operators.")
 
   defp error_message(%Ecto.Changeset{} = changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(&translate_error/1)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
+    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &gettext("%{field} %{message}", field: operator_field_label(field), message: &1)) end)
     |> List.first()
     |> case do
-      nil -> "Operator was not saved"
+      nil -> gettext("Operator was not saved")
       message -> message
     end
   end
 
-  defp error_message(_reason), do: "Operator action failed"
+  defp error_message(_reason), do: gettext("Operator action failed")
+
+  defp operator_field_label(:email), do: gettext("email")
+  defp operator_field_label(:display_name), do: gettext("display_name")
+  defp operator_field_label(:password), do: gettext("password")
+  defp operator_field_label(:password_change_required), do: gettext("password_change_required")
+  defp operator_field_label(:role), do: gettext("role")
+  defp operator_field_label(:pool_ids), do: gettext("pool_ids")
+  defp operator_field_label(field), do: to_string(field)
 
   defp operator_metadata, do: %{}
 end

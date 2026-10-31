@@ -396,6 +396,17 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   describe "authenticated stats dashboard" do
     setup :register_and_log_in_user
 
+    test "Chinese stats dashboard translates headings, filters, and empty state", %{conn: conn} do
+      {:ok, view, _html} = live_stats(put_locale(conn, "zh-CN"), ~p"/admin/stats")
+
+      assert page_title(view) == "统计 - Codex Pooler"
+      assert has_element?(view, "#stats-page-header", "用量")
+      assert has_element?(view, "#stats-kpi-requests", "请求")
+      assert has_element?(view, "#stats-kpi-cache-rate", "没有输入 Token")
+      assert has_element?(view, "#stats-time-filter-control [data-role='window-filter-trigger']", "过去 24 小时")
+      assert has_element?(view, "#stats-upstream-empty-state", "没有上游身份")
+    end
+
     setup do
       test_pid = self()
       handler_id = {__MODULE__, test_pid, make_ref()}
@@ -818,7 +829,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-avg-latency", "1000 ms")
       assert has_element?(view, "#stats-kpi-avg-latency", "Mean response time")
       assert has_element?(view, "#stats-kpi-active-sessions", "1")
-      assert has_element?(view, "#stats-kpi-active-sessions", "1 turns")
+      assert has_element?(view, "#stats-kpi-active-sessions", "1 turn")
       assert has_element?(view, "#stats-kpi-cache-rate", "Cache rate")
       assert has_element?(view, "#stats-kpi-cache-rate", "16.7%")
       assert has_element?(view, "#stats-kpi-cache-rate", "10 of 60 input cached")
@@ -1080,7 +1091,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(
                view,
                "#stats-traffic-chart [data-role='chart-heading-group'] > #stats-traffic-chart-heading + #stats-traffic-chart-total",
-               "13 tokens / 1 requests"
+               "13 tokens / 1 request"
              )
 
       assert has_element?(

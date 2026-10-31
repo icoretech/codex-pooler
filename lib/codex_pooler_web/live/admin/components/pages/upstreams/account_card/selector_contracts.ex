@@ -5,14 +5,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
 
   attr :account, :map, required: true
 
+  @spec refresh_status(map()) :: Phoenix.LiveView.Rendered.t()
   def refresh_status(assigns) do
     ~H"""
     <div class="hidden">
       <div id={"upstream-account-#{@account.identity.id}-refresh-status"}>
-        Refresh: {@account.refresh_status}
-        <span :if={@account.refresh_job_state}>
-          · job {@account.refresh_job_state}
-        </span>
+        {refresh_status_label(@account.refresh_status, @account.refresh_job_state)}
       </div>
     </div>
     """
@@ -21,11 +19,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
   attr :account, :map, required: true
   attr :routing_readiness, :map, required: true
 
+  @spec selector_contracts(map()) :: Phoenix.LiveView.Rendered.t()
   def selector_contracts(assigns) do
     ~H"""
     <div class="hidden" data-role="upstream-account-selector-contracts">
       <section id={"upstream-account-#{@account.identity.id}-routing-readiness-contract"}>
-        routing readiness
+        {gettext("routing readiness")}
         <span id={"upstream-account-#{@account.identity.id}-routing-readiness-state"}>
           {@routing_readiness.state}
         </span>
@@ -42,7 +41,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
         data-quota-tone={@account.quota_readiness.tone}
         data-routing-ready-now={to_string(@account.quota_readiness.routing_ready_now?)}
       >
-        quota readiness
+        {gettext("quota readiness")}
         <span id={"upstream-account-#{@account.identity.id}-quota-readiness-state"}>
           {@account.quota_readiness.state}
         </span>
@@ -52,7 +51,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
       </section>
 
       <section id={"upstream-account-#{@account.identity.id}-auth-health"}>
-        Auth health
+        {gettext("Auth health")}
         <span id={"upstream-account-#{@account.identity.id}-auth-fresh"}>
           {@account.auth_fresh_label}
         </span>
@@ -68,7 +67,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
       </section>
 
       <section>
-        quota refresh {@account.quota_refresh_status}
+        {gettext("quota refresh %{status}", status: @account.quota_refresh_status)}
       </section>
 
       <section>
@@ -84,9 +83,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SelectorContra
             {assignment.quota_priming_label}
           </span>
         </div>
-        <p :if={@account.assignments == []}>No active Pool assignments</p>
+        <p :if={@account.assignments == []}>{gettext("No active Pool assignments")}</p>
       </section>
     </div>
     """
   end
+
+  defp refresh_status_label(status, nil),
+    do: gettext("Refresh: %{status}", status: status)
+
+  defp refresh_status_label(status, job_state),
+    do: gettext("Refresh: %{status} · job %{job}", status: status, job: job_state)
 end

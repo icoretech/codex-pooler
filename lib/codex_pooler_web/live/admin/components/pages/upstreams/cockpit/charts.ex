@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
   attr :saved_reset_policy_form, :any, required: true
   attr :datetime_preferences, :map, required: true
 
+  @spec quota_section(map()) :: Phoenix.LiveView.Rendered.t()
   def quota_section(assigns) do
     assigns =
       assign(assigns, :reported_limits, reported_quota_limits(assigns.cockpit.quota_limits))
@@ -27,13 +28,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
     ~H"""
     <section
       id="upstream-quota"
-      aria-label="Quota and banked resets"
+      aria-label={gettext("Quota and banked resets")}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
           <h2 class="text-base font-semibold leading-5 text-base-content">
-            Quota &amp; banked resets
+            {gettext("Quota & banked resets")}
           </h2>
           <p class="text-xs leading-5 text-base-content/60">
             {quota_description(@cockpit.charts.quota_health)}
@@ -67,12 +68,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         id="upstream-quota-limits-empty"
         class="px-4 py-4 text-sm text-base-content/60"
       >
-        No quota windows are reported for this account yet.
+        {gettext("No quota windows are reported for this account yet.")}
       </p>
       <div :if={not Map.get(@cockpit.provider_credits_summary, :display_row?, false) and @cockpit.can_manage_provider_credits? and @cockpit.identity.status != "deleted"} class="px-4 pb-4">
         <AdminComponents.action_button
           id="provider-credits-policy-open"
-          label="Provider credits policy"
+          label={gettext("Provider credits policy")}
           icon="hero-currency-dollar"
           phx-click={JS.push_focus() |> JS.push("open_provider_credits_policy")}
           aria-controls="provider-credits-policy-dialog"
@@ -108,7 +109,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
               saved_resets={@cockpit.saved_resets}
               calendar_path={~p"/admin/upstreams/#{@cockpit.identity.id}/saved-reset-expirations.ics"}
               datetime_preferences={@datetime_preferences}
-              empty_label="No expiration dates reported for the available saved resets yet."
+              empty_label={gettext("No expiration dates reported for the available saved resets yet.")}
             />
           </div>
         </div>
@@ -120,7 +121,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         data-preserve-open
       >
         <summary class="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
-          <span>Auto redeem policy</span>
+          <span>{gettext("Auto redeem policy")}</span>
           <span class={[
             AdminBadges.metadata_chip_class(policy_tone(@cockpit.saved_reset_policy)),
             "!px-2 !py-0.5 !text-[10px] uppercase"
@@ -143,9 +144,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
             class="flex cursor-pointer items-center justify-between gap-3"
           >
             <span class="grid gap-0.5">
-              <span class="text-sm font-semibold text-base-content">Auto redeem saved resets</span>
+              <span class="text-sm font-semibold text-base-content">{gettext("Auto redeem saved resets")}</span>
               <span class="text-xs leading-5 text-base-content/60">
-                Spend banked resets without operator action; the cards below decide when.
+                {gettext("Spend banked resets without operator action; the cards below decide when.")}
               </span>
             </span>
             <input type="hidden" name="saved_reset_policy[auto_redeem_enabled]" value="false" />
@@ -166,7 +167,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
               id="saved-reset-policy-submit"
               data-saved-reset-action="save-policy"
               data-server-disabled={to_string(@cockpit.assignments.empty?)}
-              label="Save policy"
+              label={gettext("Save policy")}
               icon="hero-check"
               type="submit"
               variant={:primary}
@@ -190,6 +191,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
   attr :request_metrics_loading?, :boolean, default: false
   attr :request_metrics_running?, :boolean, default: false
 
+  @spec request_section(map()) :: Phoenix.LiveView.Rendered.t()
   def request_section(assigns) do
     assigns =
       assign(assigns, :model, request_health_chart_model(assigns.cockpit.charts.request_health))
@@ -197,15 +199,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
     ~H"""
     <section
       id="request-health-chart"
-      aria-label="Request health"
+      aria-label={gettext("Request health")}
       aria-busy={to_string(@request_metrics_loading? || @request_metrics_running?)}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
-          <h2 class="text-base font-semibold leading-5 text-base-content">Request health</h2>
+          <h2 class="text-base font-semibold leading-5 text-base-content">{gettext("Request health")}</h2>
           <p class="text-xs leading-5 text-base-content/60">
-            Traffic routed through this account · last 7 days
+            {gettext("Traffic routed through this account · last 7 days")}
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -220,18 +222,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
             id="upstream-refresh-data-button"
             type="button"
             phx-click="refresh_data"
-            title="Traffic, contribution, and activity data refresh on page load or on demand"
+            title={gettext("Traffic, contribution, and activity data refresh on page load or on demand")}
             class="btn btn-ghost btn-xs gap-1.5 text-base-content/65"
           >
             <.icon name="hero-arrow-path" class="size-3.5" />
-            <span class="admin-control-label">Refresh</span>
+            <span class="admin-control-label">{gettext("Refresh")}</span>
           </button>
           <.link
             id="request-health-chart-logs-link"
             href={Formatting.request_logs_path(@cockpit)}
             class="btn btn-ghost btn-xs gap-1.5 text-base-content/65"
           >
-            <span class="admin-control-label">Request logs</span>
+            <span class="admin-control-label">{gettext("Request logs")}</span>
             <.icon name="hero-arrow-right" class="size-3" />
           </.link>
         </div>
@@ -250,13 +252,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           }
           title={
             if @request_metrics_loading?,
-              do: "Loading request metrics",
-              else: "Request metrics are not available"
+              do: gettext("Loading request metrics"),
+              else: gettext("Request metrics are not available")
           }
           description={
             if @request_metrics_loading?,
-              do: "Building request health and Pool contribution for this account.",
-              else: "Refresh the account data to try again."
+              do: gettext("Building request health and Pool contribution for this account."),
+              else: gettext("Refresh the account data to try again.")
           }
           icon={if @request_metrics_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}
           loading?={@request_metrics_loading?}
@@ -268,31 +270,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         class="flex flex-wrap gap-x-7 gap-y-2 px-4 pb-1 pt-3"
       >
         <.health_fact
-          label="24h requests"
+          label={gettext("24h requests")}
           value={@cockpit.charts.request_health.kpis.total_requests_24h}
         />
         <.health_fact
-          label="24h failed"
+          label={gettext("24h failed")}
           value={@cockpit.charts.request_health.kpis.failed_requests_24h}
         />
         <.health_fact
           id="request-health-client-cancelled"
-          label="24h client cancelled"
+          label={gettext("24h client cancelled")}
           value={@cockpit.charts.request_health.kpis.client_cancelled_requests_24h}
-          title="Requests the client closed before the response finished; not counted as failures"
+          title={gettext("Requests the client closed before the response finished; not counted as failures")}
         />
         <.health_fact
-          label="Failure rate"
+          label={gettext("Failure rate")}
           value={@model.failure_rate_label}
-          title="Failed requests over the requests that were not cancelled by the client"
+          title={gettext("Failed requests over the requests that were not cancelled by the client")}
         />
         <.health_fact
-          label="7d requests"
+          label={gettext("7d requests")}
           value={@cockpit.charts.request_health.kpis.total_requests_7d}
         />
         <.health_fact
           :if={@model.p50_latency_label}
-          label="p50 latency"
+          label={gettext("p50 latency")}
           value={@model.p50_latency_label}
         />
       </div>
@@ -312,6 +314,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           data-chart-series={@model.series}
           data-chart-unit="requests"
           data-chart-units={@model.units}
+          data-chart-unit-label={gettext("requests")}
+          data-chart-unit-labels={@model.unit_labels}
+          data-chart-interval-description={gettext("Showing interval values for each time bucket.")}
+          data-chart-cumulative-description={gettext("Showing cumulative running totals through each time bucket.")}
+          data-chart-default-series-label={gettext("Value")}
+          data-chart-series-label={gettext("Series %{index}", index: "%{index}")}
           data-chart-yaxis={@model.yaxis}
           data-chart-height="220"
           data-chart-colors={@model.colors}
@@ -320,13 +328,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           data-chart-wheel-scroll="page"
         >
         </div>
-        <p id="request-health-chart-title" class="sr-only">Request health</p>
+        <p id="request-health-chart-title" class="sr-only">{gettext("Request health")}</p>
         <p id="request-health-chart-summary" class="sr-only" data-role="chart-sr-summary">
           {@model.summary}
         </p>
         <ul class="sr-only">
           <li :for={point <- @model.points}>
-            {point.label}: {point.success_count} succeeded, {point.failure_count} failed, {point.client_cancelled_count} client cancelled, {point.total_count} total requests
+            {ngettext("%{date}: %{succeeded} succeeded, %{failed} failed, %{cancelled} client cancelled, %{count} total request", "%{date}: %{succeeded} succeeded, %{failed} failed, %{cancelled} client cancelled, %{count} total requests", point.total_count, date: point.label, succeeded: point.success_count, failed: point.failure_count, cancelled: point.client_cancelled_count)}
           </li>
         </ul>
       </div>
@@ -381,20 +389,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
   defp reported_quota_limit?(_limit), do: false
 
   defp quota_description(%{state: "missing_evidence"}),
-    do: "Quota evidence is missing for this account"
+    do: gettext("Quota evidence is missing for this account")
 
-  defp quota_description(_quota_health), do: "Account-level windows and the saved-reset bank"
+  defp quota_description(_quota_health), do: gettext("Account-level windows and the saved-reset bank")
 
-  defp quota_state_label(%{state: "missing_evidence"}), do: "Quota missing"
-  defp quota_state_label(%{state: "weekly_only"}), do: "Weekly-only"
+  defp quota_state_label(%{state: "missing_evidence"}), do: gettext("Quota missing")
+  defp quota_state_label(%{state: "weekly_only"}), do: gettext("Weekly-only")
   defp quota_state_label(%{state: state}), do: Formatting.humanize_state(state)
 
   defp policy_tone(%{enabled?: true}), do: :success
   defp policy_tone(_policy), do: :neutral
 
-  defp policy_state_label(%{enabled?: true, trigger_mode: "threshold"}), do: "on · near limit"
-  defp policy_state_label(%{enabled?: true}), do: "on · blocked/expiring"
-  defp policy_state_label(_policy), do: "off"
+  defp policy_state_label(%{enabled?: true, trigger_mode: "threshold"}), do: gettext("on · near limit")
+  defp policy_state_label(%{enabled?: true}), do: gettext("on · blocked/expiring")
+  defp policy_state_label(_policy), do: gettext("off")
 
   defp form_checkbox_checked?(field) do
     Form.normalize_value("checkbox", field.value)
@@ -411,17 +419,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
       categories: CodexPooler.JSON.encode!(Enum.map(points, & &1.label)),
       series:
         CodexPooler.JSON.encode!([
-          %{name: "Succeeded", type: "column", data: success_values},
-          %{name: "Failed", type: "column", data: failure_values},
-          %{name: "Client cancelled", type: "column", data: client_cancelled_values}
+          %{name: gettext("Succeeded"), type: "column", data: success_values},
+          %{name: gettext("Failed"), type: "column", data: failure_values},
+          %{name: gettext("Client cancelled"), type: "column", data: client_cancelled_values}
         ]),
       units: CodexPooler.JSON.encode!(["requests", "failures", "cancellations"]),
-      yaxis: CodexPooler.JSON.encode!([%{seriesName: "Succeeded", title: "requests"}]),
+      unit_labels: CodexPooler.JSON.encode!([gettext("requests"), gettext("failures"), gettext("cancellations")]),
+      yaxis: CodexPooler.JSON.encode!([%{seriesName: gettext("Succeeded"), title: gettext("requests")}]),
       colors: CodexPooler.JSON.encode!(["var(--color-success)", "var(--color-error)", "var(--color-warning)"]),
       failure_rate_label: rate_percent_label(chart.kpis.failure_rate_24h),
       p50_latency_label: latency_label(chart.kpis.p50_latency_ms_24h),
       error_breakdown: Enum.map(chart.kpis.error_breakdown_24h, &error_breakdown_entry/1),
-      summary: "#{Formatting.pluralize_count(chart.kpis.total_requests_7d, "request", "requests")} over seven days; #{chart.kpis.failed_requests_24h} failed in the last 24h; failure rate #{rate_percent_label(chart.kpis.failure_rate_24h)}; #{chart.kpis.client_cancelled_requests_24h} cancelled by the client, not counted as failures."
+      summary: ngettext("%{count} request over seven days; %{failed} failed in the last 24h; failure rate %{rate}; %{cancelled} cancelled by the client, not counted as failures.", "%{count} requests over seven days; %{failed} failed in the last 24h; failure rate %{rate}; %{cancelled} cancelled by the client, not counted as failures.", chart.kpis.total_requests_7d || 0, failed: chart.kpis.failed_requests_24h, rate: rate_percent_label(chart.kpis.failure_rate_24h), cancelled: chart.kpis.client_cancelled_requests_24h)
     }
   end
 
@@ -441,7 +450,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.join(" · ")
       |> case do
-        "" -> "unclassified failure"
+        "" -> gettext("unclassified failure")
         label -> label
       end
 

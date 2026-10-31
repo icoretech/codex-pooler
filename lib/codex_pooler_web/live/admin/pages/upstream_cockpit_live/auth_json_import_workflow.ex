@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
 
   import Phoenix.LiveView,
@@ -8,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
 
   alias CodexPooler.Upstreams
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
 
   @spec open(Phoenix.LiveView.Socket.t(), String.t() | nil) :: Phoenix.LiveView.Socket.t()
   def open(socket, pool_id) do
@@ -50,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
 
       {:error, message, socket} ->
         socket
-        |> put_flash(:error, "Codex auth.json could not be imported")
+        |> put_flash(:error, gettext("Codex auth.json could not be imported"))
         |> assign(
           auth_json_form:
             UpstreamAuthJsonImport.form_with_error(
@@ -89,18 +92,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
   defp do_import(socket, pool, auth_json_params, content, reload_fun) do
     case Upstreams.import_codex_auth_json(socket.assigns.current_scope, pool, content) do
       {:ok, %{status: :created}} ->
-        import_success(socket, "Codex auth.json imported", reload_fun)
+        import_success(socket, gettext("Codex auth.json imported"), reload_fun)
 
       {:ok, %{status: :existing}} ->
         import_success(
           socket,
-          "Codex auth.json matched an existing account; tokens updated",
+          gettext("Codex auth.json matched an existing account; tokens updated"),
           reload_fun
         )
 
       {:error, %Ecto.Changeset{} = changeset} ->
         socket
-        |> put_flash(:error, "Codex auth.json could not be imported")
+        |> put_flash(:error, gettext("Codex auth.json could not be imported"))
         |> assign(
           importing_auth_json: true,
           auth_json_form: to_form(changeset, as: :auth_json)
@@ -155,14 +158,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
         if byte_size(content) <= UpstreamAuthJsonImport.upload_limit_bytes() do
           {:ok, content, socket}
         else
-          {:error, "File must be #{UpstreamAuthJsonImport.upload_limit_label()} or smaller", socket}
+          {:error, gettext("File must be %{limit} or smaller", limit: UpstreamAuthJsonImport.upload_limit_label()), socket}
         end
 
       [] ->
-        {:error, "Paste auth.json or upload one .json file", socket}
+        {:error, gettext("Paste auth.json or upload one .json file"), socket}
 
       _entries ->
-        {:error, "Uploaded auth.json could not be read", socket}
+        {:error, gettext("Uploaded auth.json could not be read"), socket}
     end
   end
 
@@ -177,6 +180,5 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
   defp default_pool_id(%{assignments: %{items: [%{pool_id: pool_id} | _items]}}), do: pool_id
   defp default_pool_id(_cockpit), do: nil
 
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Operation failed"
+  defp error_message(reason), do: WorkflowError.message(reason)
 end

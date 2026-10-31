@@ -33,6 +33,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
   end
 
   test "empty usage renders the authenticated safe boundary", %{conn: conn} do
+    conn = put_locale(conn, "zh-CN")
     %{conn: conn, pool: pool, api_key: api_key, raw_key: raw_key} = authenticated_conn(conn)
     cookie_value = response_cookie_value(conn)
 
@@ -56,6 +57,28 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     assert has_element?(view, "#observatory-state-empty[role='status'][aria-live='polite']")
     refute has_element?(view, "#observatory-widgets")
     refute_sensitive_or_forbidden(html, raw_key, cookie_value, api_key, pool)
+  end
+
+  test "Chinese locale persists through usage refresh and presentation", %{conn: conn} do
+    conn = put_locale(conn, "zh-CN")
+    %{conn: conn, pool: pool, api_key: api_key} = authenticated_conn(conn)
+    observed_at = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:microsecond)
+
+    request_fixture(%{pool: pool, api_key: api_key}, %{
+      status: "succeeded",
+      requested_model: "safe-zh-model",
+      completed_at: observed_at
+    })
+    |> Ecto.Changeset.change(%{admitted_at: observed_at, completed_at: observed_at})
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, @observatory_path)
+    activate_initial_refresh(view)
+
+    assert has_element?(view, "#observatory-wordmark", "观测台")
+    assert has_element?(view, "#observatory-outcomes-heading", "最近结果")
+    assert has_element?(view, "[data-role='outcome-status']", "成功")
+    assert has_element?(view, "#observatory-pause[aria-label='暂停自动刷新']")
   end
 
   test "seeded usage renders the dashboard and keeps controls coherent", %{conn: conn} do

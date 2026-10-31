@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamNaming do
   may fall back to what the row recorded.
   """
 
-  @fallback "Upstream account"
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   @doc """
   Names an upstream account from anything carrying its identity fields.
@@ -28,10 +28,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamNaming do
   def account_name(identity) when is_map(identity) do
     present(Map.get(identity, :account_label)) ||
       present(Map.get(identity, :chatgpt_account_id)) ||
-      @fallback
+      gettext("Upstream account")
   end
 
-  def account_name(_identity), do: @fallback
+  def account_name(_identity), do: gettext("Upstream account")
 
   @doc """
   Returns the string when it carries something, `nil` when it is blank or absent.

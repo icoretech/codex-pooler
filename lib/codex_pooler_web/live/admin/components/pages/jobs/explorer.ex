@@ -35,9 +35,9 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
       class="grid min-w-0 gap-3"
     >
       <header class="sr-only">
-        <h2>Jobs explorer</h2>
+        <h2>{gettext("Jobs explorer")}</h2>
         <p>
-          Global background job records from the current filters. Completed jobs stay hidden unless the visibility filter includes them.
+          {gettext("Global background job records from the current filters. Completed jobs stay hidden unless the visibility filter includes them.")}
         </p>
       </header>
 
@@ -52,7 +52,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
       <LogPagination.pager
         :if={@explorer.items != []}
         id="admin-jobs-explorer-pagination"
-        label="Jobs explorer pagination"
+        label={gettext("Jobs explorer pagination")}
         page={@page}
         previous_path={@previous_path}
         next_path={@next_path}
@@ -61,8 +61,8 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
       <AdminComponents.empty_state
         :if={@explorer.items == []}
         id="admin-jobs-empty-state"
-        title="No jobs match these filters"
-        description="Adjust the filters or include completed jobs to widen the explorer result set."
+        title={gettext("No jobs match these filters")}
+        description={gettext("Adjust the filters or include completed jobs to widen the explorer result set.")}
         icon="hero-queue-list"
       />
 
@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
           a caption written anywhere else is reparented by the parser rather
           than rendered where it stands. --%>
           <caption class="sr-only">
-            Jobs explorer, {explorer_total(@explorer)}
+            {gettext("Jobs explorer, %{total}", total: explorer_total(@explorer))}
           </caption>
           <colgroup>
             <col style="width: 24rem;" />
@@ -91,11 +91,11 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
           </colgroup>
           <thead>
             <tr>
-              <th class="whitespace-nowrap">Job</th>
-              <th class="whitespace-nowrap">Target</th>
-              <th class="whitespace-nowrap">Last event</th>
-              <th class="whitespace-nowrap">Attempts</th>
-              <th class="whitespace-nowrap">Failure</th>
+              <th class="whitespace-nowrap">{gettext("Job")}</th>
+              <th class="whitespace-nowrap">{gettext("Target")}</th>
+              <th class="whitespace-nowrap">{gettext("Last event")}</th>
+              <th class="whitespace-nowrap">{gettext("Attempts")}</th>
+              <th class="whitespace-nowrap">{gettext("Failure")}</th>
             </tr>
           </thead>
           <tbody>
@@ -172,7 +172,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
       <span
         data-role="job-meta"
         class="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-tight text-base-content/50 max-lg:hidden"
-        title={"Job ##{@job.id} · #{job_state_label(@job.state)}"}
+        title={gettext("Job #%{id} · %{state}", id: @job.id, state: job_state_label(@job.state))}
       >
         <span class="shrink-0">#{@job.id}</span>
         <span aria-hidden="true">·</span>
@@ -308,8 +308,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
   defp explorer_page_path(current_params, page, true = _enabled),
     do: ~p"/admin/jobs?#{page_query_params(current_params, page)}"
 
-  defp explorer_total(%{total: 1}), do: "1 job"
-  defp explorer_total(%{total: total}), do: "#{total} jobs"
+  defp explorer_total(%{total: total}), do: ngettext("%{count} job", "%{count} jobs", total)
 
   defp job_event_summary(job, datetime_preferences) do
     job
@@ -324,7 +323,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
         }
 
       nil ->
-        %{label: "Observed", timestamp: "-", clock: nil}
+        %{label: pgettext("timestamp label", "Observed"), timestamp: "-", clock: nil}
     end
   end
 
@@ -339,49 +338,49 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
 
   defp job_event_candidates(%{state: "completed"} = job) do
     [
-      {"Completed", job.completed_at},
-      {"Attempted", job.attempted_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Completed"), job.completed_at},
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 
   defp job_event_candidates(%{state: "discarded"} = job) do
     [
-      {"Discarded", job.discarded_at},
-      {"Attempted", job.attempted_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Discarded"), job.discarded_at},
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 
   defp job_event_candidates(%{state: "cancelled"} = job) do
     [
-      {"Cancelled", job.cancelled_at},
-      {"Attempted", job.attempted_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Cancelled"), job.cancelled_at},
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 
   defp job_event_candidates(%{state: state} = job) when state in ["scheduled", "retryable"] do
     [
-      {"Scheduled", job.scheduled_at},
-      {"Attempted", job.attempted_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Scheduled"), job.scheduled_at},
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 
   defp job_event_candidates(%{state: "executing"} = job) do
     [
-      {"Attempted", job.attempted_at},
-      {"Scheduled", job.scheduled_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Scheduled"), job.scheduled_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 
   defp job_event_candidates(job) do
     [
-      {"Scheduled", job.scheduled_at},
-      {"Attempted", job.attempted_at},
-      {"Inserted", job.inserted_at}
+      {pgettext("timestamp label", "Scheduled"), job.scheduled_at},
+      {pgettext("timestamp label", "Attempted"), job.attempted_at},
+      {pgettext("timestamp label", "Inserted"), job.inserted_at}
     ]
   end
 

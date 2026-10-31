@@ -4,6 +4,8 @@ defmodule CodexPoolerWeb.Layouts do
   """
   use CodexPoolerWeb, :html
 
+  import CodexPoolerWeb.Components.LanguageSwitcher, only: [language_switcher: 1]
+
   @dev_features_build_enabled Application.compile_env(
                                 :codex_pooler,
                                 :dev_features_build_enabled,
@@ -26,9 +28,12 @@ defmodule CodexPoolerWeb.Layouts do
 
   attr :auth_surface, :boolean, default: false
   attr :chrome, :atom, default: :default, values: [:default, :admin, :invite, :observatory]
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
 
   slot :inner_block, required: true
 
+  @spec app(map()) :: Phoenix.LiveView.Rendered.t()
   def app(assigns) do
     ~H"""
     <%= cond do %>
@@ -41,7 +46,7 @@ defmodule CodexPoolerWeb.Layouts do
           <div class="flex-1">
             {render_slot(@inner_block)}
           </div>
-          <.public_footer id="invite-footer" />
+          <.public_footer id="invite-footer" locale={@locale} locale_preference={@locale_preference} />
         </main>
       <% @chrome == :observatory -> %>
         <main
@@ -57,7 +62,7 @@ defmodule CodexPoolerWeb.Layouts do
           <div class={["mx-auto w-full max-w-5xl space-y-4", @auth_surface && "flex-1"]}>
             {render_slot(@inner_block)}
           </div>
-          <.public_footer :if={@auth_surface} id="auth-footer" />
+          <.public_footer id="auth-footer" locale={@locale} locale_preference={@locale_preference} />
         </main>
     <% end %>
 
@@ -66,6 +71,8 @@ defmodule CodexPoolerWeb.Layouts do
   end
 
   attr :id, :string, required: true
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
 
   defp public_footer(assigns) do
     assigns = assign(assigns, :app_version, app_version())
@@ -73,32 +80,35 @@ defmodule CodexPoolerWeb.Layouts do
     ~H"""
     <footer
       id={@id}
-      class="footer footer-center flex flex-col items-center justify-center gap-2 border-t border-base-300/70 bg-base-100/90 px-4 py-4 text-xs text-base-content/65 sm:flex-row sm:gap-3"
+      class="flex items-center justify-between gap-3 border-t border-base-300/70 bg-base-100/90 px-4 py-2 text-xs text-base-content/65 sm:justify-center sm:py-4"
     >
-      <aside class="flex flex-col items-center gap-2 sm:flex-row sm:gap-3">
+      <aside class="flex min-w-0 items-center gap-2 whitespace-nowrap sm:gap-3">
         <.link
           href="https://www.codex-pooler.com/"
           target="_blank"
           rel="noopener noreferrer"
           class="font-medium text-base-content/75 hover:text-base-content"
         >
-          Codex Pooler {@app_version}
+          <span class="sr-only sm:not-sr-only">Codex Pooler {@app_version}</span><span class="sm:hidden" aria-hidden="true">v{@app_version}</span>
         </.link>
         <span
-          class="hidden h-1 w-1 rounded-full bg-base-content/30 sm:inline-block"
+          class="h-1 w-1 shrink-0 rounded-full bg-base-content/30"
           aria-hidden="true"
         />
-        <span>&copy; {copyright_year()} iCoreTech, Inc.</span>
+        <span>&copy; {copyright_year()} iCoreTech<span class="sr-only sm:not-sr-only">, Inc.</span></span>
       </aside>
-      <.link
-        href="https://github.com/icoretech/codex-pooler"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Codex Pooler on GitHub"
-        class="btn btn-ghost btn-circle btn-sm text-base-content/65 hover:text-base-content"
-      >
-        <.github_icon class="size-4 fill-current" />
-      </.link>
+      <div class="flex shrink-0 items-center gap-1 sm:gap-3">
+        <.link
+          href="https://github.com/icoretech/codex-pooler"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={gettext("Codex Pooler on GitHub")}
+          class="btn btn-ghost btn-circle btn-sm text-base-content/65 hover:text-base-content"
+        >
+          <.github_icon class="size-4 fill-current" />
+        </.link>
+        <.language_switcher id={@id <> "-language-switcher"} locale={@locale} preference={@locale_preference} placement="top" variant="footer" />
+      </div>
     </footer>
     """
   end
@@ -190,6 +200,7 @@ defmodule CodexPoolerWeb.Layouts do
 
   attr :class, :any, default: "card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full"
 
+  @spec theme_toggle(map()) :: Phoenix.LiveView.Rendered.t()
   def theme_toggle(assigns) do
     ~H"""
     <div id={@id} class={@class}>
@@ -199,6 +210,8 @@ defmodule CodexPoolerWeb.Layouts do
         class="flex h-full w-1/3 cursor-pointer items-center justify-center p-2"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="system"
+        aria-label={gettext("System theme")}
+        title={gettext("System theme")}
       >
         <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>
@@ -207,6 +220,8 @@ defmodule CodexPoolerWeb.Layouts do
         class="flex h-full w-1/3 cursor-pointer items-center justify-center p-2"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="light"
+        aria-label={gettext("Light theme")}
+        title={gettext("Light theme")}
       >
         <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>
@@ -215,6 +230,8 @@ defmodule CodexPoolerWeb.Layouts do
         class="flex h-full w-1/3 cursor-pointer items-center justify-center p-2"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
+        aria-label={gettext("Dark theme")}
+        title={gettext("Dark theme")}
       >
         <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>

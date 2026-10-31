@@ -1,0 +1,27 @@
+#. A short action label, distinct from a state.
+#: lib/codex_pooler_web/components/sample.ex:1
+#, elixir-autogen, elixir-format
+msgctxt "button"
+msgid "Open"
+msgstr ""
+
+#. A state, not the action above.
+msgctxt "state"
+msgid "Open"
+msgstr ""
+
+msgid "Hello %{name}, 100% ready"
+msgstr ""
+
+msgid "%{count} request for %{name}"
+msgid_plural "%{count} requests for %{name}"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "OpenAI is reporting an incident"
+msgid_plural "OpenAI is reporting %{count} incidents"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "First line\nSecond \"quoted\" line"
+msgstr ""

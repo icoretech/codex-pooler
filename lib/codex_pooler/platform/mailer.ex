@@ -1,16 +1,17 @@
 defmodule CodexPooler.Mailer do
   use Swoosh.Mailer, otp_app: :codex_pooler
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Swoosh.Email
 
   require Logger
 
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Mailer.Config
+  alias CodexPooler.SupportedLocales
 
   @default_sender_name "Codex Pooler"
-  @smtp_test_email_subject "Codex Pooler SMTP test email"
-  @smtp_test_email_body "This test email confirms Codex Pooler can send email with the current SMTP settings."
 
   @spec deliver(Swoosh.Email.t(), Keyword.t()) :: {:ok, term()} | {:error, term()}
   def deliver(email, config) do
@@ -47,17 +48,21 @@ defmodule CodexPooler.Mailer do
     end
   end
 
-  @spec send_smtp_test_email(String.t(), %{
-          required(:adapter_config) => Keyword.t(),
-          required(:from) => String.t()
-        }) ::
+  @spec send_smtp_test_email(
+          String.t(),
+          %{
+            required(:adapter_config) => Keyword.t(),
+            required(:from) => String.t()
+          },
+          String.t() | nil
+        ) ::
           {:ok, map()} | {:error, map()}
-  def send_smtp_test_email(recipient_email, %{adapter_config: adapter_config, from: from})
+  def send_smtp_test_email(recipient_email, %{adapter_config: adapter_config, from: from}, locale)
       when is_binary(recipient_email) and is_list(adapter_config) and is_binary(from) do
     recipient_email = String.trim(recipient_email)
 
     recipient_email
-    |> smtp_test_email(from)
+    |> smtp_test_email(from, locale)
     |> deliver(adapter_config)
     |> case do
       {:ok, _receipt} ->
@@ -155,12 +160,14 @@ defmodule CodexPooler.Mailer do
     end
   end
 
-  defp smtp_test_email(recipient_email, from) do
-    new()
-    |> from(sender_for_from(from))
-    |> to(recipient_email)
-    |> subject(@smtp_test_email_subject)
-    |> text_body(@smtp_test_email_body)
+  defp smtp_test_email(recipient_email, from, locale) do
+    Gettext.with_locale(SupportedLocales.gettext_locale(locale), fn ->
+      new()
+      |> from(sender_for_from(from))
+      |> to(recipient_email)
+      |> subject(dgettext("emails", "Codex Pooler SMTP test email"))
+      |> text_body(dgettext("emails", "This test email confirms Codex Pooler can send email with the current SMTP settings."))
+    end)
   end
 
   defp sender_for_from(from) do

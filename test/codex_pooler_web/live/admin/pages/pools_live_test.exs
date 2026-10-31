@@ -41,6 +41,40 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   setup :register_and_log_in_user
 
+  test "Chinese Pool inventory, wizard, and deletion dialog retain translated labels", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "locale-pool", name: "Locale Pool"})
+    {:ok, pool} = Pools.change_pool_status(scope, pool, "archived")
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-page-header", "创建 Pool")
+    assert has_element?(view, "#pool-status-filter", "状态：全部")
+    assert has_element?(view, "#pool-row-#{pool.id}-status", "已归档")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "过去 24h 内没有流量")
+
+    open_create_dialog(view)
+    assert has_element?(view, "#pool-create-dialog", "Pool 详情")
+    assert has_element?(view, "#pool-create-dialog-tab-routing", "路由")
+    assert has_element?(view, "#pool-create-form label", "名称")
+    assert has_element?(view, "#pool-create-submit", "创建 Pool")
+
+    view |> element("#pool-create-cancel") |> render_click()
+    view |> element("#delete-pool-#{pool.id}") |> render_click()
+    assert has_element?(view, "#pool-delete-dialog h2", "删除 Locale Pool？")
+    assert has_element?(view, "#pool-delete-form", "输入 locale-pool 以确认")
+    assert has_element?(view, "#pool-delete-submit", "删除")
+    view |> element("#pool-delete-cancel") |> render_click()
+    _ = await_pool_traffic(view)
+  end
+
+  test "Chinese Pool empty state offers creation", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-empty-state", "未找到 Pool")
+    assert has_element?(view, "#pool-empty-create-action", "创建 Pool")
+  end
+
   test "routing profiles replace legacy controls and associate native radios with explanations", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)

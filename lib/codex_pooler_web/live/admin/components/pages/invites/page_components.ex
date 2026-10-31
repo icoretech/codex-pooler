@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.PoolInviteForm
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.RelativeTime
   alias Phoenix.LiveView.JS
@@ -21,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   attr :selected_value, :string, required: true
   attr :options, :list, required: true
 
+  @spec invite_filter_dropdown(map()) :: Phoenix.LiveView.Rendered.t()
   def invite_filter_dropdown(assigns) do
     assigns =
       assign(assigns,
@@ -82,6 +84,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   attr :datetime_preferences, :map, required: true
   attr :now, :any, default: nil
 
+  @spec invites_table(map()) :: Phoenix.LiveView.Rendered.t()
   def invites_table(assigns) do
     assigns = assign(assigns, :now, assigns.now || DateTime.utc_now())
 
@@ -90,8 +93,8 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
       :if={@invites.items == []}
       id="invite-empty-state"
       icon="hero-envelope"
-      title="No Pool invites"
-      description="No invites match the current filters."
+      title={gettext("No Pool invites")}
+      description={gettext("No invites match the current filters.")}
     />
 
     <div
@@ -117,15 +120,15 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           </colgroup>
           <thead>
             <tr>
-              <th>Created</th>
-              <th class="w-24 text-center">Status</th>
-              <th>Pool</th>
-              <th>Codex account email</th>
-              <th>Invited by</th>
-              <th class="text-center">Email</th>
-              <th>Result</th>
-              <th class="text-center">Expires</th>
-              <th class="text-right">Actions</th>
+              <th>{gettext("Created")}</th>
+              <th class="w-24 text-center">{gettext("Status")}</th>
+              <th>{gettext("Pool")}</th>
+              <th>{gettext("Codex account email")}</th>
+              <th>{gettext("Invited by")}</th>
+              <th class="text-center">{gettext("Email")}</th>
+              <th>{gettext("Result")}</th>
+              <th class="text-center">{gettext("Expires")}</th>
+              <th class="text-right">{gettext("Actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -147,7 +150,12 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
                   <span class="truncate font-semibold text-base-content">{invite.pool_name}</span>
                 </div>
               </td>
-              <td class="truncate font-semibold text-primary">{invite.invited_email}</td>
+              <td class="truncate font-semibold text-primary">
+                <div class="truncate">{invite.invited_email}</div>
+                <div id={"invite-locale-#{invite.id}"} class="text-xs font-normal text-base-content/60">
+                  {gettext("Email language: %{language}", language: PoolInviteForm.locale_label(invite.locale))}
+                </div>
+              </td>
               <td class="truncate text-base-content/70">{invite.inviter_email}</td>
               <td class="text-center">
                 <span
@@ -196,6 +204,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   attr :invite, :map, required: true
   attr :mailer_configured?, :boolean, required: true
 
+  @spec invite_actions_menu(map()) :: Phoenix.LiveView.Rendered.t()
   def invite_actions_menu(assigns) do
     ~H"""
     <div class="dropdown dropdown-end inline-block">
@@ -204,7 +213,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for invite to #{@invite.invited_email}"}
+        aria-label={gettext("Actions for invite to %{email}", email: @invite.invited_email)}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -216,7 +225,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           <AdminComponents.dropdown_action_item
             id={"invite-reissue-#{@invite.id}"}
             icon="hero-paper-airplane"
-            label="Reissue"
+            label={gettext("Reissue")}
             variant={:positive}
             phx-click="reissue_invite"
             phx-value-id={@invite.id}
@@ -228,7 +237,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           <AdminComponents.dropdown_action_item
             id={"invite-revoke-open-#{@invite.id}"}
             icon="hero-no-symbol"
-            label="Revoke"
+            label={gettext("Revoke")}
             variant={:danger}
             phx-click="open_revoke_invite"
             phx-value-id={@invite.id}
@@ -242,6 +251,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
 
   attr :invite, :map, default: nil
 
+  @spec invite_revoke_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def invite_revoke_dialog(assigns) do
     assigns = assign(assigns, :invite_docs_url, @invite_docs_url)
 
@@ -254,13 +264,12 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Pool invite</p>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Pool invite")}</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
-            Revoke the invite for {@invite.invited_email}?
+            {gettext("Revoke the invite for %{email}?", email: @invite.invited_email)}
           </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            The invite URL stops working immediately. Upstream accounts already onboarded through it
-            keep working.
+            {gettext("The invite URL stops working immediately. Upstream accounts already onboarded through it keep working.")}
           </p>
         </div>
 
@@ -271,14 +280,14 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="invite-revoke-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_revoke_invite"
             />
             <AdminComponents.action_button
               id="invite-revoke-confirm"
               icon="hero-no-symbol"
-              label="Revoke"
+              label={gettext("Revoke")}
               variant={:danger}
               phx-click="confirm_revoke_invite"
               phx-value-id={@invite.id}
@@ -287,7 +296,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_revoke_invite">close</button>
+        <button type="button" phx-click="cancel_revoke_invite">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -308,28 +317,28 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   defp option_icon_class(_option), do: "text-base-content/60"
 
   defp reissue_title(%{status: status}, _mailer_configured?) when status != "active",
-    do: "Only active invites can be reissued"
+    do: gettext("Only active invites can be reissued")
 
-  defp reissue_title(_invite, false), do: "SMTP is not configured"
-  defp reissue_title(_invite, true), do: "Reissue invite email"
+  defp reissue_title(_invite, false), do: gettext("SMTP is not configured")
+  defp reissue_title(_invite, true), do: gettext("Reissue invite email")
 
   defp status_badge_class(status), do: AdminBadges.status_chip_class(status)
 
-  defp status_label("active"), do: "active"
-  defp status_label("accepted"), do: "accepted"
-  defp status_label("expired"), do: "expired"
-  defp status_label("revoked"), do: "revoked"
+  defp status_label("active"), do: gettext("active")
+  defp status_label("accepted"), do: gettext("accepted")
+  defp status_label("expired"), do: gettext("expired")
+  defp status_label("revoked"), do: gettext("revoked")
   defp status_label(status), do: status
 
   defp result_label(%{status: "accepted", accepted_at: accepted_at}, datetime_preferences),
-    do: "Accepted #{datetime_label(accepted_at, datetime_preferences)}"
+    do: gettext("Accepted %{time}", time: datetime_label(accepted_at, datetime_preferences))
 
   defp result_label(%{status: "revoked", revoked_at: revoked_at}, datetime_preferences),
-    do: "Revoked #{datetime_label(revoked_at, datetime_preferences)}"
+    do: gettext("Revoked %{time}", time: datetime_label(revoked_at, datetime_preferences))
 
-  defp result_label(%{status: "expired"}, _datetime_preferences), do: "Expired"
+  defp result_label(%{status: "expired"}, _datetime_preferences), do: gettext("Expired")
 
-  defp result_label(_invite, _datetime_preferences), do: "Awaiting acceptance"
+  defp result_label(_invite, _datetime_preferences), do: gettext("Awaiting acceptance")
 
   defp email_sent_icon(%DateTime{}), do: "hero-check-circle"
   defp email_sent_icon(_email_sent_at), do: "hero-minus-circle"
@@ -337,8 +346,8 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   defp email_sent_class(%DateTime{}), do: "inline-flex justify-center text-success"
   defp email_sent_class(_email_sent_at), do: "inline-flex justify-center text-base-content/35"
 
-  defp email_sent_label(%DateTime{}), do: "Invite email sent"
-  defp email_sent_label(_email_sent_at), do: "Invite email not sent"
+  defp email_sent_label(%DateTime{}), do: gettext("Invite email sent")
+  defp email_sent_label(_email_sent_at), do: gettext("Invite email not sent")
 
   defp datetime_label(nil, _datetime_preferences), do: "-"
 
@@ -346,17 +355,17 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     DateTimeDisplay.format_datetime(datetime, datetime_preferences)
   end
 
-  defp expiry_label(nil, _now), do: "No expiry"
+  defp expiry_label(nil, _now), do: gettext("No expiry")
 
   defp expiry_label(%DateTime{} = datetime, %DateTime{} = now) do
     diff_seconds = RelativeTime.seconds_until(datetime, now)
 
     cond do
       DateTime.compare(datetime, now) != :gt ->
-        "Expired"
+        gettext("Expired")
 
       diff_seconds < 60 ->
-        "in <1 minute"
+        gettext("in <1 minute")
 
       diff_seconds < 3_600 ->
         relative_minutes(diff_seconds)
@@ -369,10 +378,14 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     end
   end
 
-  defp pluralized_relative_time(unit, count) do
-    suffix = if count == 1, do: unit, else: unit <> "s"
-    "in #{count} #{suffix}"
-  end
+  defp pluralized_relative_time("hour", count),
+    do: ngettext("in %{count} hour", "in %{count} hours", count)
+
+  defp pluralized_relative_time("day", count),
+    do: ngettext("in %{count} day", "in %{count} days", count)
+
+  defp pluralized_relative_time("minute", count),
+    do: ngettext("in %{count} minute", "in %{count} minutes", count)
 
   defp relative_minutes(diff_seconds) do
     minutes = ceil(diff_seconds / 60)

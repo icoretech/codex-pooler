@@ -231,6 +231,17 @@ defmodule CodexPooler.Access.InviteTest do
     assert row.status == "active"
   end
 
+  test "exact recipient filter is normalized and does not match a containing address" do
+    pool = pool_fixture()
+    scope = fixture_owner_scope()
+    {:ok, %{invite: exact}} = Access.create_invite(scope, pool, %{invited_email: "recipient@example.com", locale: "zh-CN"})
+    {:ok, _other} = Access.create_invite(scope, pool, %{invited_email: "prefix-recipient@example.com", locale: "en"})
+
+    assert {:ok, %{items: [row], total: 1}} = Access.list_invites(scope, limit: 1, filters: [pool_id: pool.id, invited_email: " Recipient@Example.COM "])
+    assert row.id == exact.id
+    assert row.locale == "zh-CN"
+  end
+
   test "list_invites rejects invalid scope while visible invite listing falls back to an empty page" do
     assert {:error, %{code: :invalid_request}} = Access.list_invites(nil)
     assert {:error, %{code: :invalid_request}} = Access.list_invites(%{})

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3]
   import Phoenix.LiveView, only: [connected?: 1, put_flash: 3, start_async: 3]
 
@@ -10,6 +12,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.PoolWizardComponents
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
+  alias CodexPoolerWeb.CoreComponents
 
   @type socket :: Phoenix.LiveView.Socket.t()
 
@@ -42,13 +46,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
            Pools.require_capability(scope, Pools.capability(:pool_manage), pool_id: pool.id) do
       {:ok, pool}
     else
-      false -> {:error, %{message: "Pool management is not available for this session"}}
-      nil -> {:error, %{message: "Pool was not found"}}
+      false -> {:error, %{message: gettext("Pool management is not available for this session")}}
+      nil -> {:error, %{message: gettext("Pool was not found")}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def find_editable_pool(_scope, _pool_id), do: {:error, %{message: "Pool was not found"}}
+  def find_editable_pool(_scope, _pool_id), do: {:error, %{message: gettext("Pool was not found")}}
 
   @spec open(socket(), map(), term()) :: socket()
   def open(socket, pool, step) do
@@ -99,15 +103,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
              pool_params
            ) do
       socket
-      |> put_flash(:info, "Pool updated")
+      |> put_flash(:info, gettext("Pool updated"))
       |> assign(editing_pool: pool, pool_edit_form: PoolForm.edit_form(pool))
       |> reload_fun.(pool)
     else
       nil ->
-        put_flash(socket, :error, "Pool was not found")
+        put_flash(socket, :error, gettext("Pool was not found"))
 
       false ->
-        put_flash(socket, :error, "Pool was not found")
+        put_flash(socket, :error, gettext("Pool was not found"))
 
       {:error, %Ecto.Changeset{} = changeset} ->
         socket
@@ -172,12 +176,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
              submission.revision
            ) do
       socket
-      |> put_flash(:info, "Model serving modes updated")
+      |> put_flash(:info, gettext("Model serving modes updated"))
       |> assign(pool_editor_step: "models", pool_model_serving_dirty?: false)
       |> begin_model_serving_load(pool, reset?: false)
     else
       nil ->
-        put_flash(socket, :error, "Pool was not found")
+        put_flash(socket, :error, gettext("Pool was not found"))
 
       {:error, reason} ->
         socket = put_flash(socket, :error, error_message(reason))
@@ -242,6 +246,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
     pending_attrs = Keyword.get(opts, :pending_attrs)
     load_token = make_ref()
     scope = socket.assigns.current_scope
+    locale = Gettext.get_locale()
 
     socket =
       socket
@@ -252,7 +257,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
         pool_model_serving_load_token: load_token
       )
       |> start_async({:pool_editor_model_serving, load_token, pool.id}, fn ->
-        load_model_serving_data(scope, pool)
+        Gettext.with_locale(locale, fn -> load_model_serving_data(scope, pool) end)
       end)
 
     if reset? do
@@ -363,12 +368,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
 
   defp error_message(%Ecto.Changeset{} = changeset) do
     case PoolForm.changeset_errors(changeset) do
-      [{_field, {message, _opts}} | _rest] -> message
-      [{_field, message} | _rest] when is_binary(message) -> message
-      _errors -> "Pool action failed"
+      [{_field, {_message, _opts} = error} | _rest] -> CoreComponents.translate_error(error)
+      [{_field, message} | _rest] when is_binary(message) -> WorkflowError.message(%{message: message})
+      _errors -> gettext("Pool action failed")
     end
   end
 
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Pool action failed"
+  defp error_message(%{message: _message} = reason), do: WorkflowError.message(reason)
+  defp error_message(_reason), do: gettext("Pool action failed")
 end

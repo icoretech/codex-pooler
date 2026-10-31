@@ -1,0 +1,30 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr ""
+
+msgctxt "state"
+msgid "Open"
+msgstr ""
+
+msgid "Hello %{name}, 100% ready"
+msgstr ""
+
+msgid "%{count} request for %{name}"
+msgid_plural "%{count} requests for %{name}"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "OpenAI is reporting an incident"
+msgid_plural "OpenAI is reporting %{count} incidents"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "First line\nSecond \"quoted\" line"
+msgstr ""

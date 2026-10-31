@@ -10,15 +10,16 @@ defmodule CodexPoolerWeb.Admin.LensFilters do
   attr :pool_options, :list, required: true
   attr :model_options, :list, required: true
 
+  @spec filters(map()) :: Phoenix.LiveView.Rendered.t()
   def filters(assigns) do
     ~H"""
     <AdminComponents.filter_form id="model-history-filter" for={@form} phx-change="filter" phx-submit="filter" advanced_open={@form.params["upstream_identity_id"] != ""} mobile_single_column>
-      <.dropdown id="lens-window-filter" label="Window" field="window" value={@form.params["window"]} options={LensFilterForm.window_options()} />
-      <PoolFilterComponents.pool_filter_dropdown id="lens-pool-filter" label="Pool" hidden_id="filters_pool_id" selected_value={@form.params["pool_id"]} options={@pool_options} />
-      <.dropdown id="lens-model-filter" label="Sent model" field="sent_model" value={@form.params["sent_model"]} options={@model_options} />
-      <.dropdown id="lens-evidence-filter" label="Attempt evidence" field="evidence" value={@form.params["evidence"]} options={LensFilterForm.evidence_options()} />
+      <.dropdown id="lens-window-filter" label={gettext("Window")} field="window" value={@form.params["window"]} options={LensFilterForm.window_options()} />
+      <PoolFilterComponents.pool_filter_dropdown id="lens-pool-filter" label={gettext("Pool")} hidden_id="filters_pool_id" selected_value={@form.params["pool_id"]} options={@pool_options} />
+      <.dropdown id="lens-model-filter" label={gettext("Sent model")} field="sent_model" value={@form.params["sent_model"]} options={@model_options} />
+      <.dropdown id="lens-evidence-filter" label={gettext("Attempt evidence")} field="evidence" value={@form.params["evidence"]} options={LensFilterForm.evidence_options()} />
       <:advanced>
-        <.input field={@form[:upstream_identity_id]} type="text" label="Upstream identity id" placeholder="Any upstream identity" phx-debounce="300" />
+        <.input field={@form[:upstream_identity_id]} type="text" label={gettext("Upstream identity id")} placeholder={gettext("Any upstream identity")} phx-debounce="300" />
       </:advanced>
     </AdminComponents.filter_form>
     """

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 3]
 
   use Phoenix.VerifiedRoutes,
@@ -170,7 +172,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   defp notification_action_error(socket) do
     socket
     |> assign_notification_center()
-    |> Phoenix.LiveView.put_flash(:error, "Notification could not be updated")
+    |> Phoenix.LiveView.put_flash(:error, gettext("Notification could not be updated"))
   end
 
   defp alert_incident_path(incident_id) do

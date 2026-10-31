@@ -41,14 +41,14 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
       total_pages_label: "1",
       has_previous_page: false,
       has_next_page: false,
-      range: "0 of 0"
+      range: gettext("0 of 0")
     }
   end
 
-  defp range(0, _limit, _offset, _exact?), do: "0 of 0"
+  defp range(0, _limit, _offset, _exact?), do: gettext("0 of 0")
 
   defp range(total, limit, offset, exact?),
-    do: "#{offset + 1}-#{min(offset + limit, total)} of #{bound_label(total, exact?)}"
+    do: gettext("%{first}-%{last} of %{total}", first: offset + 1, last: min(offset + limit, total), total: bound_label(total, exact?))
 
   defp bound_label(count, true), do: Integer.to_string(count)
   defp bound_label(count, false), do: "#{count}+"
@@ -77,6 +77,7 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
   long scroll to reach Next. Below `sm` the ordinal steps aside, since the range
   says the same thing more precisely.
   """
+  @spec pager(map()) :: Phoenix.LiveView.Rendered.t()
   def pager(assigns) do
     ~H"""
     <nav
@@ -86,7 +87,7 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
     >
       <div class="flex items-center gap-3">
         <p data-role="pagination-status" class="hidden shrink-0 text-base-content/60 sm:block">
-          Page {@page.current_page} of {@page.total_pages_label}
+          {gettext("Page %{page} of %{total}", page: @page.current_page, total: @page.total_pages_label)}
         </p>
 
         <div class="flex min-w-0 grow items-center gap-2 sm:justify-center">
@@ -95,7 +96,7 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
             data-role="pagination-range"
             class="min-w-0 truncate tabular-nums text-base-content/70"
           >
-            <span class="hidden sm:inline">Showing </span>{@page.range}
+            <span class="hidden sm:inline">{gettext("Showing %{range}", range: @page.range)}</span><span class="sm:hidden">{@page.range}</span>
           </p>
           {render_slot(@aside)}
         </div>
@@ -103,13 +104,13 @@ defmodule CodexPoolerWeb.Admin.LogPagination do
         <div class="join shrink-0">
           <.pagination_link
             id={"#{@id}-prev"}
-            label="Previous"
+            label={pgettext("pagination", "Previous")}
             path={@previous_path}
             enabled={@page.has_previous_page}
           />
           <.pagination_link
             id={"#{@id}-next"}
-            label="Next"
+            label={pgettext("pagination", "Next")}
             path={@next_path}
             enabled={@page.has_next_page}
           />

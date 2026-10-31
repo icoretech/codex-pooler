@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive.AuthJsonWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
 
   import Phoenix.LiveView,
@@ -57,7 +59,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AuthJsonWorkflow do
 
       {:error, message, socket} ->
         socket
-        |> put_flash(:error, "Codex auth.json could not be imported")
+        |> put_flash(:error, gettext("Codex auth.json could not be imported"))
         |> assign(
           :auth_json_form,
           UpstreamAuthJsonImport.form_with_error(auth_json_params["pool_id"], :content, message)
@@ -76,18 +78,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AuthJsonWorkflow do
   defp do_import(socket, pool, auth_json_params, content, reload_fun) do
     case Upstreams.import_codex_auth_json(socket.assigns.current_scope, pool, content) do
       {:ok, %{status: :created}} ->
-        import_success(socket, "Codex auth.json imported", reload_fun)
+        import_success(socket, gettext("Codex auth.json imported"), reload_fun)
 
       {:ok, %{status: :existing}} ->
         import_success(
           socket,
-          "Codex auth.json matched an existing account; tokens updated",
+          gettext("Codex auth.json matched an existing account; tokens updated"),
           reload_fun
         )
 
       {:error, %Ecto.Changeset{} = changeset} ->
         socket
-        |> put_flash(:error, "Codex auth.json could not be imported")
+        |> put_flash(:error, gettext("Codex auth.json could not be imported"))
         |> assign(:importing_auth_json, true)
         |> assign(:auth_json_form, to_form(changeset, as: :auth_json))
 
@@ -142,14 +144,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AuthJsonWorkflow do
         if byte_size(content) <= UpstreamAuthJsonImport.upload_limit_bytes() do
           {:ok, content, socket}
         else
-          {:error, "File must be #{UpstreamAuthJsonImport.upload_limit_label()} or smaller", socket}
+          {:error, gettext("File must be %{limit} or smaller", limit: UpstreamAuthJsonImport.upload_limit_label()), socket}
         end
 
       [] ->
-        {:error, "Paste auth.json or upload one .json file", socket}
+        {:error, gettext("Paste auth.json or upload one .json file"), socket}
 
       _entries ->
-        {:error, "Uploaded auth.json could not be read", socket}
+        {:error, gettext("Uploaded auth.json could not be read"), socket}
     end
   end
 

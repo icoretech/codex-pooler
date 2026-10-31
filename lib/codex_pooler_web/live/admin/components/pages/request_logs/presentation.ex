@@ -49,6 +49,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :newer_count, :integer, default: 0
   attr :newer_count_exact?, :boolean, default: true
 
+  @spec request_logs_table(map()) :: Phoenix.LiveView.Rendered.t()
   def request_logs_table(assigns) do
     assigns =
       assigns
@@ -63,8 +64,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       >
         <AdminComponents.empty_state
           id="request-log-loading-state"
-          title="Loading request logs"
-          description="Loading the latest requests for the selected filters."
+          title={gettext("Loading request logs")}
+          description={gettext("Loading the latest requests for the selected filters.")}
           icon="hero-arrow-path"
           loading?={true}
         />
@@ -73,16 +74,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       <AdminComponents.empty_state
         :if={@request_logs.items == [] && !@loading? && !@loaded?}
         id="request-log-error-state"
-        title="Request logs are not available"
-        description="Reload the page or adjust the filters to try again."
+        title={gettext("Request logs are not available")}
+        description={gettext("Reload the page or adjust the filters to try again.")}
         icon="hero-exclamation-triangle"
       />
 
       <AdminComponents.empty_state
         :if={@request_logs.items == [] && @loaded?}
         id="request-log-empty-state"
-        title="No request logs"
-        description="Send a request through a Pool or adjust the filters to find existing log rows."
+        title={gettext("No request logs")}
+        description={gettext("Send a request through a Pool or adjust the filters to find existing log rows.")}
         icon="hero-document-magnifying-glass"
       />
 
@@ -110,8 +111,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
             <%!-- The count is the pager's job; the caption repeats it only for
           assistive tech, which reads it before the rows. --%>
             <caption class="sr-only">
-              Request logs, {format_total(@request_logs.total)}{if Map.get(@request_logs, :total_exact?) == false,
-                do: " or more"} matching sanitized request logs
+              <%= if Map.get(@request_logs, :total_exact?) == false do %>
+                {ngettext("Request logs, %{requests} or more matching sanitized request logs", "Request logs, %{requests} or more matching sanitized request logs", @request_logs.total, requests: format_total(@request_logs.total))}
+              <% else %>
+                {ngettext("Request logs, %{requests} matching sanitized request log", "Request logs, %{requests} matching sanitized request logs", @request_logs.total, requests: format_total(@request_logs.total))}
+              <% end %>
             </caption>
             <%!-- Omit the entire issues track when this page has no signals;
           the same cells reflow as a ledger below lg. --%>
@@ -126,13 +130,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
             </colgroup>
             <thead>
               <tr>
-                <th scope="col" class="whitespace-nowrap">Time · Status</th>
-                <th scope="col" class="whitespace-nowrap">Model · Effort · Speed</th>
-                <th scope="col" class="whitespace-nowrap">Upstream · Pool · Key</th>
-                <th scope="col" class="whitespace-nowrap">Endpoint · Transport · Client</th>
-                <th :if={@has_issues?} id="request-log-issues-heading" scope="col" class="whitespace-nowrap">Errors · Warnings</th>
-                <th scope="col" class="whitespace-nowrap" title="Each bar shows this request's token composition; cache percentage is calculated over input tokens">Tokens · Cached</th>
-                <th scope="col" class="whitespace-nowrap text-right">Cost</th>
+                <th scope="col" class="whitespace-nowrap">{gettext("Time · Status")}</th>
+                <th scope="col" class="whitespace-nowrap">{gettext("Model · Effort · Speed")}</th>
+                <th scope="col" class="whitespace-nowrap">{gettext("Upstream · Pool · Key")}</th>
+                <th scope="col" class="whitespace-nowrap">{gettext("Endpoint · Transport · Client")}</th>
+                <th :if={@has_issues?} id="request-log-issues-heading" scope="col" class="whitespace-nowrap">{gettext("Errors · Warnings")}</th>
+                <th scope="col" class="whitespace-nowrap" title={gettext("Each bar shows this request's token composition; cache percentage is calculated over input tokens")}>{gettext("Tokens · Cached")}</th>
+                <th scope="col" class="whitespace-nowrap text-right">{gettext("Cost")}</th>
               </tr>
             </thead>
             <tbody id="request-logs-table">
@@ -207,18 +211,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     assigns = assign(assigns, :suffix, if(assigns.top?, do: "-top", else: ""))
 
     ~H"""
-    <nav id={"request-log-pagination#{@suffix}"} aria-label="Request log pagination" class={["flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-base-300 px-3 py-2 text-xs text-base-content/55", if(@top?, do: "border-b", else: "border-t")]}>
-      <span>Times {@datetime_preferences.timezone}</span>
-      <span id={"request-log-pagination#{@suffix}-range"} data-role="pagination-range" class="tabular-nums">Showing {@page.range}</span>
-      <span data-role="pagination-status">Page {@page.current_page} of {@page.total_pages_label}</span>
-      <span :if={@frozen? && @newer_count > 0} data-role="request-log-newer-count" class="tabular-nums">· {format_total(@newer_count)}{if !@newer_count_exact?, do: "+"} newer</span>
-      <.link :if={@frozen?} id={"request-log-back-to-latest#{@suffix}"} data-role="request-log-back-to-latest" patch={~p"/admin/request-logs?#{RequestLogFilterForm.query_params(@current_params)}"} class="font-semibold text-primary hover:underline">Back to latest</.link>
+    <nav id={"request-log-pagination#{@suffix}"} aria-label={gettext("Request log pagination")} class={["flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-base-300 px-3 py-2 text-xs text-base-content/55", if(@top?, do: "border-b", else: "border-t")]}>
+      <span>{gettext("Times %{timezone}", timezone: @datetime_preferences.timezone)}</span>
+      <span id={"request-log-pagination#{@suffix}-range"} data-role="pagination-range" class="tabular-nums">{gettext("Showing %{range}", range: @page.range)}</span>
+      <span data-role="pagination-status">{gettext("Page %{page} of %{total}", page: @page.current_page, total: @page.total_pages_label)}</span>
+      <span :if={@frozen? && @newer_count > 0} data-role="request-log-newer-count" class="tabular-nums">· {if @newer_count_exact?, do: ngettext("%{requests} newer", "%{requests} newer", @newer_count, requests: format_total(@newer_count)), else: ngettext("%{requests}+ newer", "%{requests}+ newer", @newer_count, requests: format_total(@newer_count))}</span>
+      <.link :if={@frozen?} id={"request-log-back-to-latest#{@suffix}"} data-role="request-log-back-to-latest" patch={~p"/admin/request-logs?#{RequestLogFilterForm.query_params(@current_params)}"} class="font-semibold text-primary hover:underline">{gettext("Back to latest")}</.link>
       <div class="ml-auto flex items-center gap-1">
         <button :if={request_id = @current_params["selected_request_id"]} id={"request-log-open-selected#{@suffix}"} type="button" phx-click="open_request_log" phx-value-request-id={request_id} class="btn btn-xs">
-          Open request {format_record_id(request_id)} <.icon name="hero-arrow-top-right-on-square" class="size-3" />
+          {gettext("Open request %{id}", id: format_record_id(request_id))} <.icon name="hero-arrow-top-right-on-square" class="size-3" />
         </button>
-        <.page_button id={"request-log-pagination#{@suffix}-prev"} label="Previous" icon="hero-chevron-left" path={page_path(@current_params, @page.current_page - 1, @pin_at)} enabled={@page.has_previous_page} />
-        <.page_button id={"request-log-pagination#{@suffix}-next"} label="Next" icon="hero-chevron-right" path={page_path(@current_params, @page.current_page + 1, @pin_at)} enabled={@page.has_next_page} />
+        <.page_button id={"request-log-pagination#{@suffix}-prev"} label={gettext("Previous")} icon="hero-chevron-left" path={page_path(@current_params, @page.current_page - 1, @pin_at)} enabled={@page.has_previous_page} />
+        <.page_button id={"request-log-pagination#{@suffix}-next"} label={gettext("Next")} icon="hero-chevron-right" path={page_path(@current_params, @page.current_page + 1, @pin_at)} enabled={@page.has_next_page} />
       </div>
     </nav>
     """
@@ -270,6 +274,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :request_log, :map, required: true
   attr :plan_badge_id, :string, default: nil
 
+  @spec request_log_attribution_cell(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_attribution_cell(assigns) do
     assigns =
       assigns
@@ -293,7 +298,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           id={@plan_badge_id}
           data-role="plan-badge"
           class="max-w-[50%] shrink-0 truncate whitespace-nowrap text-base-content/50"
-          title={"Upstream account plan: #{@plan_label}"}
+          title={gettext("Upstream account plan: %{plan}", plan: @plan_label)}
         >
           <span :if={@account_named? && @plan_label != "—"} data-role="upstream-plan-separator" aria-hidden="true">·</span>{" "}<span data-role="plan-name" class={AdminBadges.plan_text_class(@request_log.upstream_account_plan_label || @request_log.upstream_account_plan_family)}>{@plan_label}</span>
           <span :if={@request_log.upstream_account_plan_family} class="sr-only">{@request_log.upstream_account_plan_family}</span>
@@ -331,6 +336,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :datetime_preferences, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_timestamp_cell(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_timestamp_cell(assigns) do
     assigns =
       assigns
@@ -345,7 +351,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       phx-click="open_request_log"
       phx-value-request-id={@request_log.id}
       class="request-log-lines group grid max-w-full gap-1 rounded-field text-left transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-hover/request-log:text-primary"
-      aria-label={"Inspect request #{format_record_id(@request_log.id) || @request_log.id}, #{format_datetime(@request_log.admitted_at, @datetime_preferences)}, #{status_label(@display_status || "unknown")}#{if @latency, do: " in #{@latency}"}"}
+      aria-label={inspect_request_label(@request_log, @datetime_preferences, @latency)}
     >
       <span
         data-role="timestamp-datetime"
@@ -359,7 +365,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         title={Status.status_description(@display_status)}
         class="flex min-w-0 items-center gap-1 whitespace-nowrap text-[11px]"
       >
-        <span class="sr-only">{"Status: "}</span>
+        <span class="sr-only">{gettext("Status:")}</span>
         <span data-role="status-icon" data-status={@display_status} aria-hidden="true" class={["inline-flex size-3 shrink-0 items-center justify-center", status_text_class(@display_status)]}>
           <.icon name={request_status_icon(@display_status)} class="size-3" />
         </span>
@@ -370,16 +376,20 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
             data-role="latency"
             class="font-normal tabular-nums text-base-content/45"
             title={format_latency_title(@request_log.latency_ms)}
-          >{" "}in {@latency}</span>
+          >{" "}{gettext("in %{latency}", latency: @latency)}</span>
         </span>
       </span>
     </button>
     """
   end
 
+  defp inspect_request_label(log, preferences, nil), do: gettext("Inspect request %{id}, %{time}, %{status}", id: format_record_id(log.id) || log.id, time: format_datetime(log.admitted_at, preferences), status: status_label(display_status(log) || "unknown"))
+  defp inspect_request_label(log, preferences, latency), do: gettext("Inspect request %{id}, %{time}, %{status} in %{latency}", id: format_record_id(log.id) || log.id, time: format_datetime(log.admitted_at, preferences), status: status_label(display_status(log) || "unknown"), latency: latency)
+
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_model_cell(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_model_cell(assigns) do
     assigns = assign(assigns, :model_known?, format_model_name(assigns.request_log) not in ["—", "-"])
 
@@ -396,7 +406,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           data-role="model-name"
           class={["min-w-0 truncate whitespace-nowrap", if(@model_known?, do: "text-base-content", else: "text-base-content/45")]}
         >
-          {if @model_known?, do: format_model_name(@request_log), else: "— no model"}
+          {if @model_known?, do: format_model_name(@request_log), else: gettext("— no model")}
         </span>
         <span :if={@model_known? && format_model_reasoning_slot(@request_log)} data-role="model-effort" class="shrink-0 whitespace-nowrap text-base-content/60">
           <span data-role="model-reasoning-separator" aria-hidden="true">·</span>{" "}
@@ -406,9 +416,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
             id={"#{@prefix}-#{@request_log.id}-reasoning-default"}
             data-role="model-reasoning-default"
             class="text-base-content/45"
-            title="No reasoning effort recorded; the backend used the model default"
+            title={gettext("No reasoning effort recorded; the backend used the model default")}
           >
-            default
+            {gettext("default")}
           </span>
         </span>
       </span>
@@ -432,6 +442,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_protocol_badge(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_protocol_badge(assigns) do
     ~H"""
     <span
@@ -448,24 +459,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
 
+  @spec request_log_route_cell(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_route_cell(assigns) do
     assigns = assign(assigns, :route_paths, route_paths(assigns.request_log))
 
     ~H"""
     <div class="request-log-lines grid min-w-0 gap-1">
-      <span data-role="route-paths-line" class="flex min-w-0 items-center gap-1 whitespace-nowrap text-base-content/80" title={if @route_paths.source, do: "Translated from #{@route_paths.source} to #{@route_paths.destination}"}>
+      <span data-role="route-paths-line" class="flex min-w-0 items-center gap-1 whitespace-nowrap text-base-content/80" title={if @route_paths.source, do: gettext("Translated from %{source} to %{destination}", source: @route_paths.source, destination: @route_paths.destination)}>
         <span
           :if={@route_paths.source}
           id={"#{@prefix}-#{@request_log.id}-route-origin"}
           data-role="route-origin"
           class="min-w-0 max-w-[50%] shrink-0 truncate"
-          title={"Client endpoint: #{@route_paths.source}"}
+          title={gettext("Client endpoint: %{endpoint}", endpoint: @route_paths.source)}
         >
           {@route_paths.source}
         </span>
         <span :if={@route_paths.source} data-role="route-translation" class="inline-flex shrink-0 items-center text-base-content/55">
           <.icon name="hero-arrows-right-left" class="size-3" />
-          <span class="sr-only">translated to</span>
+          <span class="sr-only">{gettext("translated to")}</span>
         </span>
         <span
           id={"#{@prefix}-#{@request_log.id}-route"}
@@ -505,6 +517,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   attr :user_agent, :map, required: true
 
+  @spec request_log_user_agent_icon(map()) :: Phoenix.LiveView.Rendered.t()
   def request_log_user_agent_icon(assigns) do
     ~H"""
     <span data-role="user-agent-icon" aria-hidden="true" class="inline-flex shrink-0">

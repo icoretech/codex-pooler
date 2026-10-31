@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Quotas.ModelWeeklyResetSemantics
@@ -15,19 +17,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.RelativeTime
-
-  @quota_priming_labels %{
-    "unknown" => "Priming pending",
-    "refreshing" => "Reconciling quota",
-    "known" => "Quota known",
-    "weekly_only_probe" => "Weekly-only probe",
-    "stale" => "Quota stale",
-    "expired" => "Quota expired",
-    "failed" => "Quota failed",
-    "blocked" => "Priming blocked",
-    "resetless_unprimed" => "Quota reset missing",
-    "unprimed" => "Quota unprimed"
-  }
 
   @observed_zero_use_sources ~w(
     codex_usage_api
@@ -72,6 +61,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:reset_display_state) => reset_display_state(),
           required(:reset_at) => DateTime.t() | nil,
           required(:reset_label) => String.t() | nil,
+          required(:reset_countdown_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
 
@@ -95,12 +85,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   @spec readiness([Quota.AccountQuotaWindow.t()], DateTime.t()) :: UpstreamQuotaReadiness.t()
   def readiness(windows, %DateTime{} = snapshot_at) when is_list(windows) do
-    UpstreamQuotaReadiness.from_windows(windows, snapshot_at)
+    windows |> UpstreamQuotaReadiness.from_windows(snapshot_at) |> localize_readiness()
   end
 
   @spec readiness(RoutingQuotaSnapshot.t(), DateTime.t()) :: UpstreamQuotaReadiness.t()
   def readiness(%RoutingQuotaSnapshot{as_of: snapshot_at} = snapshot, %DateTime{} = snapshot_at) do
-    UpstreamQuotaReadiness.from_snapshot(snapshot)
+    snapshot |> UpstreamQuotaReadiness.from_snapshot() |> localize_readiness()
   end
 
   @spec assignment_priming_status(map()) :: String.t()
@@ -120,9 +110,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     |> assignment_priming_label()
   end
 
-  def assignment_priming_label(status) when is_binary(status) do
-    Map.get(@quota_priming_labels, status, String.replace(status, "_", " "))
-  end
+  def assignment_priming_label("unknown"), do: gettext("Priming pending")
+  def assignment_priming_label("refreshing"), do: gettext("Reconciling quota")
+  def assignment_priming_label("known"), do: gettext("Quota known")
+  def assignment_priming_label("weekly_only_probe"), do: gettext("Weekly-only probe")
+  def assignment_priming_label("stale"), do: gettext("Quota stale")
+  def assignment_priming_label("expired"), do: gettext("Quota expired")
+  def assignment_priming_label("failed"), do: gettext("Quota failed")
+  def assignment_priming_label("blocked"), do: gettext("Priming blocked")
+  def assignment_priming_label("resetless_unprimed"), do: gettext("Quota reset missing")
+  def assignment_priming_label("unprimed"), do: gettext("Quota unprimed")
+  def assignment_priming_label(status) when is_binary(status), do: String.replace(status, "_", " ")
 
   @spec put_current_quota_priming(map(), map()) :: map()
   def put_current_quota_priming(assignment, quota_readiness) do
@@ -172,7 +170,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
         DateTimeDisplay.format_datetime(refreshed_at, datetime_preferences)
 
       nil ->
-        "not run"
+        gettext("not run")
     end
   end
 
@@ -219,7 +217,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       ),
       quota_limit_row(
         :weekly,
-        "Weekly",
+        gettext("Weekly"),
         quota_account_window(windows, "secondary", snapshot_at),
         datetime_preferences,
         snapshot_at
@@ -341,10 +339,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp credit_capacity_explanation(snapshot, decision) do
     cond do
       "saved_reset_probe_pending" in decision.reason_codes ->
-        {:unavailable, "Banked-reset recovery pending", "Recovery is not yet confirmed. Provider credits on this identity cannot confirm included quota restoration."}
+        {:unavailable, gettext("Banked-reset recovery pending"), gettext("Recovery is not yet confirmed. Provider credits on this identity cannot confirm included quota restoration.")}
 
       not snapshot.allow_provider_credits ->
-        {:disabled, "Provider credits disabled", "Observed balance remains separate. Independently valid included capacity, exact-model allowances and permitted banked-reset recovery remain available."}
+        {:disabled, gettext("Provider credits disabled"), gettext("Observed balance remains separate. Independently valid included capacity, exact-model allowances and permitted banked-reset recovery remain available.")}
 
       true ->
         effective_credit_explanation(decision)
@@ -352,27 +350,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp effective_credit_explanation(%{eligible?: true, capacity_basis: :provider_credits}),
-    do: {:available, "Provider credits available", "Compatible included capacity is considered first, then usable provider credits, before blocked-request banked-reset recovery. Each request still checks its model, transport and serving mode; this does not establish a credit debit."}
+    do: {:available, gettext("Provider credits available"), gettext("Compatible included capacity is considered first, then usable provider credits, before blocked-request banked-reset recovery. Each request still checks its model, transport and serving mode; this does not establish a credit debit.")}
 
   defp effective_credit_explanation(%{eligible?: true, capacity_basis: :unknown_legacy}),
-    do: {:unknown, "Capacity basis unknown", "Legacy provider availability is preserved with this policy enabled. It does not prove included quota or provider credit capacity for every model or transport."}
+    do: {:unknown, gettext("Capacity basis unknown"), gettext("Legacy provider availability is preserved with this policy enabled. It does not prove included quota or provider credit capacity for every model or transport.")}
 
   defp effective_credit_explanation(%{eligible?: true}),
-    do: {:conditional, "Provider permission available", "Current evidence permits routing independently of the credit option. The account summary does not establish the billing source or permission for every model, transport and serving mode."}
+    do: {:conditional, gettext("Provider permission available"), gettext("Current evidence permits routing independently of the credit option. The account summary does not establish the billing source or permission for every model, transport and serving mode.")}
 
   defp effective_credit_explanation(decision) do
     cond do
       "saved_reset_recovery_unavailable" in decision.reason_codes ->
-        {:unavailable, "Banked-reset recovery unavailable", "Existing reset recovery restrictions remain in force; a provider credit balance cannot clear the recovery latch."}
+        {:unavailable, gettext("Banked-reset recovery unavailable"), gettext("Existing reset recovery restrictions remain in force; a provider credit balance cannot clear the recovery latch.")}
 
       decision.capacity_basis == :provider_credits ->
-        {:unavailable, "Provider credit capacity unverified", "The observed balance does not grant routing. Current evidence does not establish usable provider credit permission; included capacity, ordinary provider permission and authorized reset recovery are evaluated separately."}
+        {:unavailable, gettext("Provider credit capacity unverified"), gettext("The observed balance does not grant routing. Current evidence does not establish usable provider credit permission; included capacity, ordinary provider permission and authorized reset recovery are evaluated separately.")}
 
       "provider_denied" in decision.reason_codes ->
-        {:unavailable, "Provider capacity blocked", "A provider workspace or model denial remains in force. Provider credits do not bypass that denial."}
+        {:unavailable, gettext("Provider capacity blocked"), gettext("A provider workspace or model denial remains in force. Provider credits do not bypass that denial.")}
 
       true ->
-        {:unknown, "Provider credit capacity unverified", "A balance or unknown observation grants no new routing capacity. Current included evidence and permitted banked-reset recovery are evaluated independently."}
+        {:unknown, gettext("Provider credit capacity unverified"), gettext("A balance or unknown observation grants no new routing capacity. Current included evidence and permitted banked-reset recovery are evaluated independently.")}
     end
   end
 
@@ -486,7 +484,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       label =
         case Map.fetch!(labels_by_base, base_label) do
           [_window] -> base_label
-          _colliding_windows -> "#{base_label} (#{quota_identity_label(window)})"
+          _colliding_windows -> gettext("%{label} (%{identity})", label: base_label, identity: quota_identity_label(window))
         end
 
       {window, key, label}
@@ -496,7 +494,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_limit_label(%Quota.AccountQuotaWindow{} = window) do
     window
     |> quota_limit_base_label()
-    |> then(&"#{&1} #{quota_window_label(window)}")
+    |> then(&gettext("%{label} %{window}", label: &1, window: quota_window_label(window)))
   end
 
   defp quota_limit_base_label(%Quota.AccountQuotaWindow{} = window) do
@@ -507,7 +505,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       window.limit_name
     ]
     |> Enum.find(&Formatting.present_string?/1)
-    |> then(&(&1 || "Additional limit"))
+    |> then(&(&1 || gettext("Additional limit")))
     |> humanize_quota_label()
   end
 
@@ -515,27 +513,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     {scope, family, model, upstream_model, _quota_key, _window_kind, _window_minutes} =
       WindowSelector.logical_key(window)
 
-    ([quota_scope_label(scope), identity_dimension_label("Family", family)] ++
+    ([quota_scope_label(scope), identity_dimension_label(:family, family)] ++
        scope_identity_dimension_labels(scope, model, upstream_model))
     |> Enum.reject(&is_nil/1)
     |> Enum.join(", ")
   end
 
-  defp quota_scope_label("model"), do: "Model scope"
-  defp quota_scope_label("upstream_model"), do: "Upstream model scope"
-  defp quota_scope_label("feature"), do: "Feature scope"
-  defp quota_scope_label(scope), do: identity_dimension_label("Scope", scope)
+  defp quota_scope_label("model"), do: gettext("Model scope")
+  defp quota_scope_label("upstream_model"), do: gettext("Upstream model scope")
+  defp quota_scope_label("feature"), do: gettext("Feature scope")
+  defp quota_scope_label(scope), do: identity_dimension_label(:scope, scope)
 
   defp scope_identity_dimension_labels("model", model, _upstream_model),
-    do: [identity_dimension_label("Model", model)]
+    do: [identity_dimension_label(:model, model)]
 
   defp scope_identity_dimension_labels("upstream_model", _model, upstream_model),
-    do: [identity_dimension_label("Upstream model", upstream_model)]
+    do: [identity_dimension_label(:upstream_model, upstream_model)]
 
   defp scope_identity_dimension_labels(_scope, model, upstream_model) do
     [
-      identity_dimension_label("Model", model),
-      identity_dimension_label("Upstream model", upstream_model)
+      identity_dimension_label(:model, model),
+      identity_dimension_label(:upstream_model, upstream_model)
     ]
   end
 
@@ -547,7 +545,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     if value == "" do
       nil
     else
-      "#{name} #{String.replace(value, ~r/[_-]+/u, " ")}"
+      value = String.replace(value, ~r/[_-]+/u, " ")
+
+      case name do
+        :family -> gettext("Family %{value}", value: value)
+        :scope -> gettext("Scope %{value}", value: value)
+        :model -> gettext("Model %{value}", value: value)
+        :upstream_model -> gettext("Upstream model %{value}", value: value)
+      end
     end
   end
 
@@ -561,14 +566,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
        when is_integer(minutes),
        do: format_window_minutes(minutes)
 
-  defp quota_window_label(%Quota.AccountQuotaWindow{window_kind: "primary"}), do: "Primary"
+  defp quota_window_label(%Quota.AccountQuotaWindow{window_kind: "primary"}), do: gettext("Primary")
 
   defp quota_window_label(%Quota.AccountQuotaWindow{
          window_kind: "secondary",
          window_minutes: minutes
        })
        when minutes in [nil, 10_080],
-       do: "Weekly"
+       do: gettext("Weekly")
 
   defp quota_window_label(%Quota.AccountQuotaWindow{
          window_kind: "secondary",
@@ -584,7 +589,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     |> String.capitalize()
   end
 
-  defp quota_window_label(%Quota.AccountQuotaWindow{}), do: "Window"
+  defp quota_window_label(%Quota.AccountQuotaWindow{}), do: gettext("Window")
 
   defp format_window_minutes(minutes) when rem(minutes, 1_440) == 0,
     do: "#{div(minutes, 1_440)}d"
@@ -605,7 +610,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     |> String.trim()
   end
 
-  defp humanize_quota_label(_label), do: "Additional limit"
+  defp humanize_quota_label(_label), do: gettext("Additional limit")
 
   defp quota_limit_row(
          key,
@@ -655,6 +660,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       reset_display_state: reset_display_state,
       reset_at: reset_at,
       reset_label: reset_label,
+      reset_countdown_label: reset_countdown_label(reset_semantics, reset_at, reset_label, snapshot_at),
       reset_title: reset_title
     }
   end
@@ -665,14 +671,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       label: label,
       percent: nil,
       percent_value: 0,
-      percent_label: "not reported",
+      percent_label: gettext("not reported"),
       count_label: nil,
       count_title: nil,
       evidence_state: :unknown,
       meter_state: :unknown,
-      freshness_label: "freshness unknown",
-      freshness_title: "quota evidence was not reported",
-      observed_label: "observed time not reported",
+      freshness_label: gettext("freshness unknown"),
+      freshness_title: gettext("quota evidence was not reported"),
+      observed_label: gettext("observed time not reported"),
       observed_title: nil,
       measurement_pending?: false,
       measurement_pending_label: nil,
@@ -682,12 +688,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       reset_display_state: :absent,
       reset_at: nil,
       reset_label: nil,
+      reset_countdown_label: nil,
       reset_title: nil
     }
   end
 
   defp measurement_pending_presentation(%{measurement_pending?: true}) do
-    {true, "Retained measurement awaits confirmation", "Retained measurement; newer provider measurement awaits confirmation"}
+    {true, gettext("Retained measurement awaits confirmation"), gettext("Retained measurement; newer provider measurement awaits confirmation")}
   end
 
   defp measurement_pending_presentation(_observation), do: {false, nil, nil}
@@ -749,18 +756,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_percent_value(_percent), do: 0
 
   defp quota_percent_label(%Decimal{} = percent), do: "#{quota_percent_value(percent)}%"
-  defp quota_percent_label(_percent), do: "not reported"
+  defp quota_percent_label(_percent), do: gettext("not reported")
 
   defp quota_count_label(%Quota.AccountQuotaWindow{quota_key: "account", quota_scope: "account"}), do: nil
 
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})
        when is_integer(credits) and is_integer(active_limit) and active_limit > 0 do
-    "#{Formatting.format_integer(credits)} / #{Formatting.format_integer(active_limit)} credits"
+    ngettext("%{remaining} / %{total} credit", "%{remaining} / %{total} credits", active_limit, remaining: Formatting.format_integer(credits), total: Formatting.format_integer(active_limit))
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})
        when is_integer(credits) and credits > 0 and active_limit in [nil, 0] do
-    "#{Formatting.format_integer(credits)} credits"
+    ngettext("%{credits} credit", "%{credits} credits", credits, credits: Formatting.format_integer(credits))
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{
@@ -777,7 +784,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       |> Decimal.round(0)
       |> Decimal.to_integer()
 
-    "#{Formatting.format_integer(remaining)} / #{Formatting.format_integer(active_limit)} credits"
+    ngettext("%{remaining} / %{total} credit", "%{remaining} / %{total} credits", active_limit, remaining: Formatting.format_integer(remaining), total: Formatting.format_integer(active_limit))
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{used_percent: %Decimal{}}), do: nil
@@ -791,7 +798,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           anchored_reset_presentation(window.reset_at, datetime_preferences, snapshot_at)
 
         :floating ->
-          {:floating, nil, "starts on use", floating_reset_title(window)}
+          {:floating, nil, gettext("starts on use"), floating_reset_title(window)}
 
         :unknown ->
           {:unknown, nil, nil, nil}
@@ -810,7 +817,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp reset_display_presentation(:anchored, _reset_at, _reset_label, _reset_title, :stale) do
-    {:anchored, :unconfirmed, nil, "reset unconfirmed", "last reported reset is unconfirmed because quota evidence is stale"}
+    {:anchored, :unconfirmed, nil, gettext("reset unconfirmed"), gettext("last reported reset is unconfirmed because quota evidence is stale")}
   end
 
   defp reset_display_presentation(:anchored, reset_at, reset_label, reset_title, _evidence_state),
@@ -836,7 +843,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
        when is_map(metadata) do
     case Map.fetch(metadata, "reset_state") do
       {:ok, "floating"} ->
-        {:floating, reset_at, "starts on use", floating_reset_title(window)}
+        {:floating, reset_at, gettext("starts on use"), floating_reset_title(window)}
 
       {:ok, "anchored"} ->
         anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
@@ -858,10 +865,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp floating_reset_title(%{window_minutes: 10_080}),
-    do: "provider reports a rolling seven-day window until use starts"
+    do: gettext("provider reports a rolling seven-day window until use starts")
 
   defp floating_reset_title(_window),
-    do: "provider reports a rolling window until use starts"
+    do: gettext("provider reports a rolling window until use starts")
 
   defp anchored_reset_presentation(
          %DateTime{} = reset_at,
@@ -878,14 +885,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     seconds_until_reset = RelativeTime.seconds_until(reset_at, snapshot_at)
 
     if DateTime.compare(reset_at, snapshot_at) == :gt do
-      "in #{Formatting.format_reset_duration(seconds_until_reset)}"
+      gettext("in %{duration}", duration: Formatting.format_reset_duration(seconds_until_reset))
     else
-      "due"
+      gettext("due")
     end
   end
 
   defp quota_reset_title(%DateTime{} = reset_at, datetime_preferences) do
-    "resets #{DateTimeDisplay.format_datetime(reset_at, datetime_preferences)}"
+    gettext("resets %{timestamp}", timestamp: DateTimeDisplay.format_datetime(reset_at, datetime_preferences))
   end
 
   defp quota_evidence_state(%Quota.AccountQuotaWindow{} = window, snapshot_at) do
@@ -908,13 +915,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_meter_state(:fresh, _remaining_percent), do: :current
   defp quota_meter_state(:unknown, _remaining_percent), do: :unknown
 
-  defp freshness_presentation(:fresh), do: {"current", "evidence current"}
+  defp freshness_presentation(:fresh), do: {gettext("current"), gettext("evidence current")}
 
   defp freshness_presentation(:stale),
-    do: {"last reported", "evidence stale; showing the last reported value"}
+    do: {gettext("last reported"), gettext("evidence stale; showing the last reported value")}
 
   defp freshness_presentation(:unknown),
-    do: {"freshness unknown", "quota evidence freshness was not reported"}
+    do: {gettext("freshness unknown"), gettext("quota evidence freshness was not reported")}
 
   defp observed_presentation(
          %DateTime{} = observed_at,
@@ -922,16 +929,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          datetime_preferences,
          snapshot_at
        ) do
-    prefix = if evidence_state == :stale, do: "last reported", else: "observed"
+    relative_time = Formatting.relative_time_label(observed_at, snapshot_at)
+
+    label =
+      if evidence_state == :stale,
+        do: gettext("last reported %{relative_time}", relative_time: relative_time),
+        else: gettext("observed %{relative_time}", relative_time: relative_time)
 
     {
-      "#{prefix} #{Formatting.relative_time_label(observed_at, snapshot_at)}",
-      "observed #{DateTimeDisplay.format_datetime(observed_at, datetime_preferences)}"
+      label,
+      gettext("observed %{timestamp}", timestamp: DateTimeDisplay.format_datetime(observed_at, datetime_preferences))
     }
   end
 
   defp observed_presentation(_observed_at, _evidence_state, _datetime_preferences, _snapshot_at),
-    do: {"observed time not reported", nil}
+    do: {gettext("observed time not reported"), nil}
 
   defp remaining_percent_from_used(%Decimal{} = used_percent) do
     Decimal.sub(Decimal.new(100), used_percent)
@@ -944,4 +956,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp decimal_non_negative(%Decimal{} = value), do: Decimal.max(value, Decimal.new(0))
+
+  defp reset_countdown_label(:floating, _reset_at, label, _snapshot_at), do: label
+
+  defp reset_countdown_label(_semantics, %DateTime{} = reset_at, _label, snapshot_at) do
+    if DateTime.compare(reset_at, snapshot_at) == :gt,
+      do: Formatting.format_reset_duration(RelativeTime.seconds_until(reset_at, snapshot_at)),
+      else: gettext("due")
+  end
+
+  defp reset_countdown_label(_semantics, _reset_at, label, _snapshot_at), do: label
+
+  defp localize_readiness(readiness), do: %{readiness | label: readiness_label(readiness.state)}
+
+  defp readiness_label("ready"), do: gettext("Quota ready")
+  defp readiness_label("weekly_only_probe"), do: gettext("Weekly quota probe")
+  defp readiness_label("provider_available_no_windows"), do: gettext("Provider available")
+  defp readiness_label("exhausted"), do: gettext("Quota exhausted")
+  defp readiness_label("stale"), do: gettext("Quota refresh needed")
+  defp readiness_label("missing_evidence"), do: gettext("Quota missing")
+  defp readiness_label("blocked"), do: gettext("Quota blocked")
+  defp readiness_label("capacity_basis_unknown"), do: gettext("Conditional provider availability")
+  defp readiness_label("provider_credits_ready"), do: gettext("Routing ready via credits")
+  defp readiness_label("saved_reset_probe_pending"), do: gettext("Banked-reset recovery pending")
+  defp readiness_label("provider_credits_disabled"), do: gettext("Provider credits disabled")
+  defp readiness_label("provider_credit_capacity_unverified"), do: gettext("Provider credit capacity unverified")
 end

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [to_form: 2, upload_errors: 1, upload_errors: 2]
 
   @upload_limit_bytes 64_000
@@ -62,7 +64,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
          _upload_errors
        )
        when is_binary(paste_content) and byte_size(paste_content) > @upload_limit_bytes do
-    {:error, "Pasted JSON must be #{@upload_limit_label} or smaller", :cancel_uploads}
+    {:error, gettext("Pasted JSON must be %{limit} or smaller", limit: @upload_limit_label), :cancel_uploads}
   end
 
   defp classify_content_source(
@@ -83,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
        )
        when is_binary(paste_content) and
               (completed_upload_entries != [] or in_progress_upload_entries != []) do
-    {:error, "Use either pasted JSON or one uploaded file, not both", :cancel_uploads}
+    {:error, gettext("Use either pasted JSON or one uploaded file, not both"), :cancel_uploads}
   end
 
   defp classify_content_source(
@@ -107,7 +109,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
 
   defp select_upload_source(_completed_upload_entries, in_progress_upload_entries)
        when in_progress_upload_entries != [] do
-    {:error, "Upload is still in progress; wait for it to finish before importing", :keep_uploads}
+    {:error, gettext("Upload is still in progress; wait for it to finish before importing"), :keep_uploads}
   end
 
   defp select_upload_source(completed_upload_entries, _in_progress_upload_entries)
@@ -116,7 +118,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
   end
 
   defp select_upload_source(_completed_upload_entries, _in_progress_upload_entries) do
-    {:error, "Paste auth.json or upload one .json file", :keep_uploads}
+    {:error, gettext("Paste auth.json or upload one .json file"), :keep_uploads}
   end
 
   @spec upload_error_messages(Phoenix.LiveView.UploadConfig.t()) :: [String.t()]
@@ -133,10 +135,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonImport do
   @spec read_upload(Path.t()) :: {:ok, binary()} | {:error, term()}
   def read_upload(path), do: File.read(path)
 
-  defp upload_error_message(:too_large), do: "File must be #{@upload_limit_label} or smaller"
-  defp upload_error_message(:too_many_files), do: "Upload one .json file"
-  defp upload_error_message(:not_accepted), do: "Upload a .json file"
-  defp upload_error_message(_error), do: "Uploaded file is invalid"
+  defp upload_error_message(:too_large), do: gettext("File must be %{limit} or smaller", limit: @upload_limit_label)
+  defp upload_error_message(:too_many_files), do: gettext("Upload one .json file")
+  defp upload_error_message(:not_accepted), do: gettext("Upload a .json file")
+  defp upload_error_message(_error), do: gettext("Uploaded file is invalid")
 
   defp present_string(value) when is_binary(value) do
     value = String.trim(value)

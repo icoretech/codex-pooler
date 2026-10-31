@@ -28,7 +28,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     {:ok,
      socket
      |> assign(
-       page_title: "Pools",
+       page_title: gettext("Pools"),
        pools: [],
        can_manage_pools?: false,
        creating_pool: false,
@@ -130,7 +130,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
            ) do
       {:noreply,
        socket
-       |> put_flash(:info, "Pool created")
+       |> put_flash(:info, gettext("Pool created"))
        |> clear_pool_traffic_refresh()
        |> close_create_dialog()
        |> load_structural()
@@ -171,7 +171,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   def handle_event("edit_pool_models", %{"id" => pool_id}, socket) do
     case find_pool(socket, pool_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Pool was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Pool was not found"))}
 
       pool ->
         case ensure_can_operate_pool(socket, pool) do
@@ -249,7 +249,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
            ) do
       {:noreply,
        socket
-       |> put_flash(:info, "Pool updated")
+       |> put_flash(:info, gettext("Pool updated"))
        |> clear_pool_traffic_refresh()
        |> assign(editing_pool: pool, edit_form: PoolForm.edit_form(pool))
        |> load_structural()
@@ -313,13 +313,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
            ) do
       {:noreply,
        socket
-       |> put_flash(:info, "Model serving modes updated")
+       |> put_flash(:info, gettext("Model serving modes updated"))
        |> clear_pool_traffic_refresh()
        |> assign(pool_wizard_step: "models", model_serving_dirty?: false)
        |> begin_model_serving_load(pool, reset?: false)}
     else
       nil ->
-        {:noreply, put_flash(socket, :error, "Pool was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Pool was not found"))}
 
       {:error, reason} ->
         socket = put_flash(socket, :error, error_message(reason))
@@ -369,11 +369,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
              pool_row.pool,
              %{flag => enabled?}
            ) do
-      state_label = if enabled?, do: "enabled", else: "disabled"
+      state_label = if enabled?, do: gettext("enabled"), else: gettext("disabled")
 
       {:noreply,
        socket
-       |> put_flash(:info, "#{flag_label} #{state_label} on #{pool_row.pool.name}")
+       |> put_flash(:info, gettext("%{flag} %{state} on %{pool}", flag: flag_label, state: state_label, pool: pool_row.pool.name))
        |> load_structural()}
     else
       {:error, reason} ->
@@ -387,7 +387,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   def handle_event("delete_pool", %{"id" => pool_id}, socket) do
     case find_pool(socket, pool_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Pool was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Pool was not found"))}
 
       pool ->
         {:noreply,
@@ -416,8 +416,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       # deleting until the job removes it (findings#206 row 206-550).
       message =
         if status == :ok,
-          do: "Pool deleted",
-          else: "Pool deletion started. The Pool disappears once its request history has been removed."
+          do: gettext("Pool deleted"),
+          else: gettext("Pool deletion started. The Pool disappears once its request history has been removed.")
 
       {:noreply,
        socket
@@ -448,13 +448,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          {:ok, _pool} <- Pools.change_pool_status(socket.assigns.current_scope, listed_pool.id, "active") do
       {:noreply,
        socket
-       |> put_flash(:info, "Pool reactivated")
+       |> put_flash(:info, gettext("Pool reactivated"))
        |> clear_pool_traffic_refresh()
        |> load_structural()
        |> start_pool_traffic_load()}
     else
       nil ->
-        {:noreply, put_flash(socket, :error, "Pool was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Pool was not found"))}
 
       {:error, reason} ->
         {:noreply,
@@ -706,6 +706,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:pools}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -713,15 +715,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       <section id="admin-pools-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="pool-page-header"
-          title="Pools"
-          description="A Pool groups upstream accounts behind shared API keys, routing, and serving modes."
+          title={gettext("Pools")}
+          description={gettext("A Pool groups upstream accounts behind shared API keys, routing, and serving modes.")}
         >
           <:actions>
             <AdminComponents.action_button
               :if={@can_manage_pools?}
               id="pools-page-create-action"
               icon="hero-plus"
-              label="Create Pool"
+              label={gettext("Create Pool")}
               phx-click="open_create_pool"
               size={:md}
               variant={:primary}
@@ -745,14 +747,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           <AdminComponents.metric_card
             id="pool-metric-total"
             icon="hero-server-stack"
-            label="Total pools"
+            label={gettext("Total pools")}
             value={@pool_metrics.total_count}
             compact_mobile
           />
           <AdminComponents.metric_card
             id="pool-metric-upstreams"
             icon="hero-cloud-arrow-up"
-            label="Upstream accounts"
+            label={gettext("Upstream accounts")}
             value={@pool_metrics.upstream_count}
             tone={:primary}
             compact_mobile
@@ -760,14 +762,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           <AdminComponents.metric_card
             id="pool-metric-api-keys"
             icon="hero-key"
-            label="API keys"
+            label={gettext("API keys")}
             value={@pool_metrics.api_key_count}
             compact_mobile
           />
           <AdminComponents.metric_card
             id="pool-metric-requests"
             icon="hero-arrow-path"
-            label={"Requests #{@pool_metrics.traffic_window_label}"}
+            label={gettext("Requests %{window}", window: @pool_metrics.traffic_window_label)}
             value={
               pool_traffic_metric_value(
                 @pool_traffic_loading?,
@@ -779,7 +781,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           <AdminComponents.metric_card
             id="pool-metric-tokens-per-sec"
             icon="hero-bolt"
-            label={"TPS #{@pool_metrics.traffic_window_label}"}
+            label={gettext("TPS %{window}", window: @pool_metrics.traffic_window_label)}
             value={
               pool_traffic_metric_value(
                 @pool_traffic_loading?,
@@ -905,25 +907,32 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         queue_pool_traffic_load(socket, reason)
 
       true ->
-        pool_ids = socket.assigns.traffic_pool_ids
-        eligible_pool_ids = eligible_pool_traffic_ids(socket)
-        traffic_window = current_traffic_window(socket)
-        current_scope = socket.assigns.current_scope
-        owner_token = Ecto.UUID.generate()
-
-        socket
-        |> assign(pool_traffic_running?: true, pool_traffic_rerun?: false, pool_traffic_reason: reason, pool_traffic_pending_reason: nil)
-        |> reconcile_pool_histogram_states(:loading)
-        |> start_async(:pool_traffic, fn ->
-          load_pool_traffic(
-            current_scope,
-            owner_token,
-            pool_ids,
-            eligible_pool_ids,
-            traffic_window
-          )
-        end)
+        begin_pool_traffic_load(socket, reason)
     end
+  end
+
+  defp begin_pool_traffic_load(socket, reason) do
+    pool_ids = socket.assigns.traffic_pool_ids
+    eligible_pool_ids = eligible_pool_traffic_ids(socket)
+    traffic_window = current_traffic_window(socket)
+    current_scope = socket.assigns.current_scope
+    owner_token = Ecto.UUID.generate()
+    locale = Gettext.get_locale()
+
+    socket
+    |> assign(pool_traffic_running?: true, pool_traffic_rerun?: false, pool_traffic_reason: reason, pool_traffic_pending_reason: nil)
+    |> reconcile_pool_histogram_states(:loading)
+    |> start_async(:pool_traffic, fn ->
+      Gettext.with_locale(locale, fn ->
+        load_pool_traffic(
+          current_scope,
+          owner_token,
+          pool_ids,
+          eligible_pool_ids,
+          traffic_window
+        )
+      end)
+    end)
   end
 
   defp queue_pool_traffic_load(socket, reason) do
@@ -1235,14 +1244,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   defp find_pool(_socket, _pool_id), do: nil
 
-  @compat_flag_labels %{
-    "v1_compatibility_enabled" => "/v1 compatibility",
-    "allow_image_generation" => "Allow Image Generation",
-    "allow_audio_transcription" => "Allow Audio Transcription"
-  }
+  defp compat_flag_labels do
+    %{
+      "v1_compatibility_enabled" => gettext("/v1 compatibility"),
+      "allow_image_generation" => gettext("Allow Image Generation"),
+      "allow_audio_transcription" => gettext("Allow Audio Transcription")
+    }
+  end
 
   defp compat_flag_label(flag) do
-    case Map.fetch(@compat_flag_labels, flag) do
+    case Map.fetch(compat_flag_labels(), flag) do
       {:ok, label} -> {:ok, label}
       :error -> {:error, %{message: "unsupported pool option"}}
     end
@@ -1382,6 +1393,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     pending_attrs = Keyword.get(opts, :pending_attrs)
     load_token = make_ref()
     scope = socket.assigns.current_scope
+    locale = Gettext.get_locale()
 
     socket =
       socket
@@ -1392,7 +1404,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         model_serving_load_token: load_token
       )
       |> start_async({:pool_model_serving, load_token, pool.id}, fn ->
-        load_model_serving_data(scope, pool)
+        Gettext.with_locale(locale, fn -> load_model_serving_data(scope, pool) end)
       end)
 
     if reset? do
@@ -1570,15 +1582,65 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   defp error_message(%Ecto.Changeset{} = changeset) do
     changeset
-    |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
+    |> Ecto.Changeset.traverse_errors(&CodexPoolerWeb.CoreComponents.translate_error/1)
+    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &gettext("%{field} %{message}", field: pool_error_field(field), message: &1)) end)
     |> List.first()
     |> case do
-      nil -> "Pool action failed"
+      nil -> gettext("Pool action failed")
       message -> message
     end
   end
 
-  defp error_message(%{message: message}) when is_binary(message), do: message
-  defp error_message(_reason), do: "Pool action failed"
+  defp error_message(%{code: :pool_not_found}), do: gettext("pool was not found")
+  defp error_message(%{code: :pool_not_archived}), do: gettext("pool must be archived before deletion")
+  defp error_message(%{code: :pool_deletion_in_progress}), do: gettext("the Pool is being deleted")
+  defp error_message(%{code: :confirmation_mismatch}), do: gettext("confirmation slug did not match pool slug")
+  defp error_message(%{code: :invalid_status}), do: gettext("status must be active, disabled, or archived")
+  defp error_message(%{code: :invalid_model}), do: gettext("model identifier is invalid")
+  defp error_message(%{code: :invalid_mode}), do: gettext("model serving mode is invalid")
+  defp error_message(%{code: :duplicate_model}), do: gettext("model identifier was submitted more than once")
+  defp error_message(%{code: :unknown_model}), do: gettext("model identifier is not available for this Pool")
+  defp error_message(%{code: :stale_revision}), do: gettext("model serving modes changed since they were loaded")
+  defp error_message(%{code: :audit_failed}), do: gettext("model serving mode audit could not be recorded")
+  defp error_message(%{code: :event_failed}), do: gettext("model serving mode event could not be emitted")
+  defp error_message(%{code: :transaction_conflict}), do: gettext("model serving modes could not be saved because of a database conflict")
+  defp error_message(%{code: :invalid_assignment_selection}), do: gettext("selected assignments are not available for this Pool")
+  defp error_message(%{code: :upstream_identity_not_found}), do: gettext("upstream identity was not found")
+  defp error_message(%{code: :pool_upstream_assignment_not_found}), do: gettext("pool assignment was not found")
+  defp error_message(%{code: :upstream_account_deleting}), do: gettext("upstream account is being deleted")
+
+  defp error_message(%{message: message}) when is_binary(message), do: pool_error_message(message)
+  defp error_message(_reason), do: gettext("Pool action failed")
+
+  defp pool_error_field(:name), do: gettext("name")
+  defp pool_error_field(:slug), do: gettext("slug")
+  defp pool_error_field(:status), do: gettext("status")
+  defp pool_error_field(:bridge_ring_size), do: gettext("Bridge ring size")
+  defp pool_error_field(:routing_strategy), do: gettext("Routing strategy")
+  defp pool_error_field(:v1_compatibility_enabled), do: gettext("/v1 compatibility")
+  defp pool_error_field(:allow_image_generation), do: gettext("Allow Image Generation")
+  defp pool_error_field(:allow_audio_transcription), do: gettext("Allow Audio Transcription")
+  defp pool_error_field(:pool_id), do: gettext("Pool")
+  defp pool_error_field(:upstream_identity_id), do: gettext("Upstream account")
+  defp pool_error_field(:weight), do: gettext("Weight")
+  defp pool_error_field(:priority), do: gettext("Priority")
+  defp pool_error_field(field), do: to_string(field)
+
+  defp pool_error_message("Pool was not found"), do: gettext("Pool was not found")
+  defp pool_error_message("Pool management is not available for this session"), do: gettext("Pool management is not available for this session")
+  defp pool_error_message("Pool is already active"), do: gettext("Pool is already active")
+  defp pool_error_message("unsupported pool option"), do: gettext("unsupported pool option")
+  defp pool_error_message("name can't be blank"), do: gettext("name can't be blank")
+  defp pool_error_message("only node admins can perform this capability"), do: gettext("only node admins can perform this capability")
+  defp pool_error_message("the actor role cannot perform this capability in the requested scope"), do: gettext("the actor role cannot perform this capability in the requested scope")
+  defp pool_error_message("user scope is required"), do: gettext("user scope is required")
+  defp pool_error_message("this capability requires a Pool scope"), do: gettext("this capability requires a Pool scope")
+  defp pool_error_message("only the instance owner can perform this global capability"), do: gettext("only the instance owner can perform this global capability")
+  defp pool_error_message("assigned-pool admin capabilities require a Pool scope"), do: gettext("assigned-pool admin capabilities require a Pool scope")
+  defp pool_error_message("the assigned-pool admin cannot access the requested Pool"), do: gettext("the assigned-pool admin cannot access the requested Pool")
+  defp pool_error_message("model serving rows and revision are required"), do: gettext("model serving rows and revision are required")
+  defp pool_error_message("model serving rows are invalid"), do: gettext("model serving rows are invalid")
+  defp pool_error_message("selected API keys are not available"), do: gettext("selected API keys are not available")
+  defp pool_error_message("unsupported pool assignment selection mode"), do: gettext("unsupported pool assignment selection mode")
+  defp pool_error_message(message), do: message
 end

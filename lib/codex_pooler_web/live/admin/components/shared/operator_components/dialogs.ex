@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   attr :temporary_password_receipt, :map, default: nil
   attr :pool_options, :list, default: []
 
+  @spec operator_create_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_create_dialog(assigns) do
     assigns = assign(assigns, :operator_docs_url, @operator_docs_url)
 
@@ -31,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Operator access
+            {gettext("Operator access")}
           </p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
             {create_dialog_title(@temporary_password_receipt)}
@@ -49,7 +50,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           copy_button_id="operator-create-copy-temporary-password"
           close_button_id="operator-create-dialog-close"
           close_event="cancel_create_operator"
-          email_error_copy="Operator email could not be sent. Copy the temporary password now."
+          email_error_copy={gettext("Operator email could not be sent. Copy the temporary password now.")}
         />
 
         <.form
@@ -63,15 +64,15 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           <div class="grid gap-4 md:grid-cols-2">
             <.operator_email_input
               field={@create_form[:email]}
-              label="Email"
+              label={gettext("Email")}
               placeholder="operator@example.com"
               required
             />
             <.input
               field={@create_form[:display_name]}
               type="text"
-              label="Display name"
-              placeholder="Local operator"
+              label={gettext("Display name")}
+              placeholder={gettext("Local operator")}
             />
             <.operator_role_fields
               form={@create_form}
@@ -90,14 +91,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="operator-create-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_create_operator"
             />
             <AdminComponents.action_button
               id="operator-create-submit"
               icon="hero-user-plus"
-              label="Create operator"
+              label={gettext("Create operator")}
               type="submit"
               form="operator-create-form"
               variant={:primary}
@@ -106,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_create_operator">close</button>
+        <button type="button" phx-click="cancel_create_operator">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -116,6 +117,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   attr :edit_form, Form, default: nil
   attr :pool_options, :list, default: []
 
+  @spec operator_edit_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_edit_dialog(assigns) do
     assigns = assign(assigns, :operator_actions_docs_url, @operator_actions_docs_url)
 
@@ -129,11 +131,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Operator profile
+            {gettext("Operator profile")}
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Edit operator</h2>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">{gettext("Edit operator")}</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Update the local account details and whether the next sign in must change password.
+            {gettext("Update the local account details and whether the next sign in must change password.")}
           </p>
         </div>
 
@@ -146,12 +148,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         >
           <.input field={@edit_form[:id]} type="hidden" />
           <div class="grid gap-4 md:grid-cols-2">
-            <.operator_email_input field={@edit_form[:email]} label="Email" required />
-            <.input field={@edit_form[:display_name]} type="text" label="Display name" />
+            <.operator_email_input field={@edit_form[:email]} label={gettext("Email")} required />
+            <.input field={@edit_form[:display_name]} type="text" label={gettext("Display name")} />
             <.input
               field={@edit_form[:password_change_required]}
               type="checkbox"
-              label="Require password change on next sign in"
+              label={gettext("Require password change on next sign in")}
             />
             <.operator_role_fields
               form={@edit_form}
@@ -168,14 +170,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="operator-edit-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_edit"
             />
             <AdminComponents.action_button
               id="operator-edit-submit"
               icon="hero-check"
-              label="Save operator"
+              label={gettext("Save operator")}
               type="submit"
               form="operator-edit-form"
               variant={:primary}
@@ -184,7 +186,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_edit">close</button>
+        <button type="button" phx-click="cancel_edit">{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -195,6 +197,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   attr :reset_operation, :atom, default: nil
   attr :reset_form, Form, required: true
 
+  @spec operator_password_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_password_dialog(assigns) do
     assigns = assign(assigns, :operator_password_docs_url, @operator_password_docs_url)
 
@@ -208,7 +211,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Operator credential
+            {gettext("Operator credential")}
           </p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
             {password_dialog_title(@reset_operation, @password_dialog_receipt)}
@@ -257,7 +260,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="operator-reset-password-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_reset"
             />
@@ -273,14 +276,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_reset">close</button>
+        <button type="button" phx-click="cancel_reset">{gettext("close")}</button>
       </form>
     </dialog>
     """
   end
 
   attr :field, FormField, required: true
-  attr :label, :string, default: "Email"
+  attr :label, :string, default: nil
   attr :placeholder, :string, default: "operator@example.com"
   attr :required, :boolean, default: false
 
@@ -297,7 +300,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     ~H"""
     <div class="fieldset mb-2">
       <label for={@id}>
-        <span class="label mb-1">{@label}</span>
+        <span class="label mb-1">{@label || gettext("Email")}</span>
         <span class={["input validator w-full", @errors != [] && "input-error"]}>
           <.icon name="hero-envelope" class="size-4 opacity-50" />
           <input
@@ -311,7 +314,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           />
         </span>
       </label>
-      <div class="validator-hint hidden">Enter valid email address</div>
+      <div class="validator-hint hidden">{gettext("Enter valid email address")}</div>
       <p :for={msg <- @errors} class="mt-1.5 flex items-center gap-2 text-sm text-error">
         <.icon name="hero-exclamation-circle" class="size-5" />
         {msg}
@@ -334,9 +337,9 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     <div class="contents group/rolegate">
       <fieldset id={@field_prefix <> "_role"} class="grid gap-2 md:col-span-2">
         <legend class="mb-1 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-          Operator role
+          {gettext("Operator role")}
           <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
-            Instance-wide owner or Pool-scoped admin
+            {gettext("Instance-wide owner or Pool-scoped admin")}
           </span>
         </legend>
         <div class="grid gap-2 sm:grid-cols-2">
@@ -345,30 +348,30 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
             field_prefix={@field_prefix}
             value="instance_admin"
             selected_role={@selected_role}
-            label="Instance admin"
-            description="Manages only the Pools assigned below."
+            label={gettext("Instance admin")}
+            description={gettext("Manages only the Pools assigned below.")}
           />
           <.operator_role_card
             id={@field_prefix <> "_role_instance_owner"}
             field_prefix={@field_prefix}
             value="instance_owner"
             selected_role={@selected_role}
-            label="Instance owner"
-            description="Instance-wide access to every Pool and setting."
+            label={gettext("Instance owner")}
+            description={gettext("Instance-wide access to every Pool and setting.")}
           />
         </div>
       </fieldset>
       <div class="fieldset mb-2 transition-opacity md:col-span-2 group-has-[.operator-role-owner:checked]/rolegate:opacity-45">
         <p class="mb-1 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-          Assigned Pools
+          {gettext("Assigned Pools")}
           <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
-            Apply only while the role is instance admin; owners keep instance-wide access
+            {gettext("Apply only while the role is instance admin; owners keep instance-wide access")}
           </span>
         </p>
         <input type="hidden" name={@field_prefix <> "[pool_ids][]"} value="" />
         <div id={@field_prefix <> "_pool_ids_group"} class="grid gap-2 sm:grid-cols-2">
           <p :if={@pool_options == []} class="text-sm text-base-content/60 sm:col-span-2">
-            No Pools are available yet. Owners can still create another owner.
+            {gettext("No Pools are available yet. Owners can still create another owner.")}
           </p>
           <label
             :for={pool <- @pool_options}
@@ -429,14 +432,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   # The header follows the flow rather than freezing on the form's opening line:
   # once the receipt exists the operator does too, and "add a local admin
   # account" is describing a step already taken.
-  defp create_dialog_title(nil), do: "Create operator"
-  defp create_dialog_title(_receipt), do: "Copy this password before closing"
+  defp create_dialog_title(nil), do: gettext("Create operator")
+  defp create_dialog_title(_receipt), do: gettext("Copy this password before closing")
 
   defp create_dialog_description(nil),
-    do: "Add a local admin account and decide how the first password is delivered."
+    do: gettext("Add a local admin account and decide how the first password is delivered.")
 
   defp create_dialog_description(_receipt),
-    do: "It is shown once, and cannot be recovered afterwards."
+    do: gettext("It is shown once, and cannot be recovered afterwards.")
 
   attr :receipt, :map, required: true
   attr :wrapper_id, :string, required: true
@@ -455,20 +458,20 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <div class="grid gap-1">
           <p class="font-semibold">{@email_error_copy}</p>
-          <p class="text-sm">Hand it over yourself: they have no other way to receive it.</p>
+          <p class="text-sm">{gettext("Hand it over yourself: they have no other way to receive it.")}</p>
         </div>
       </div>
 
       <p class="text-sm leading-6 text-base-content/70">
-        <span class="font-semibold text-base-content">{@receipt.operator_email}</span> must use it on next sign in.
+        {gettext("%{email} must use it on next sign in.", email: @receipt.operator_email)}
       </p>
 
       <AdminComponents.one_time_secret
         value={@receipt.temporary_password}
         value_id={@code_id}
         copy_id={@copy_button_id}
-        copy_label="Copy password"
-        copy_aria_label="Copy one-time password"
+        copy_label={gettext("Copy password")}
+        copy_aria_label={gettext("Copy one-time password")}
       />
     </div>
 
@@ -477,7 +480,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         <AdminComponents.action_button
           id={@close_button_id}
           icon="hero-check"
-          label="Done"
+          label={gettext("Done")}
           phx-click={@close_event}
           variant={:primary}
         />
@@ -493,47 +496,47 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     <.input
       field={@form[:password_mode]}
       type="select"
-      label="Temporary password"
+      label={gettext("Temporary password")}
       options={password_mode_options()}
     />
     <.input
       field={@form[:password]}
       type="password"
-      label="Manual password"
-      placeholder="Used only when manual mode is selected"
+      label={gettext("Manual password")}
+      placeholder={gettext("Used only when manual mode is selected")}
       value=""
     />
     <.input
       field={@form[:password_change_required]}
       type="checkbox"
-      label="Require password change on next sign in"
+      label={gettext("Require password change on next sign in")}
     />
     <.input
       field={@form[:send_email]}
       type="checkbox"
-      label="Send text credential email"
+      label={gettext("Send text credential email")}
     />
     """
   end
 
   defp password_mode_options do
-    [{"Generate secure password", "generated"}, {"Use manual password", "manual"}]
+    [{gettext("Generate secure password"), "generated"}, {gettext("Use manual password"), "manual"}]
   end
 
-  defp reset_button_label(:reactivate), do: "Reactivate operator"
-  defp reset_button_label(_operation), do: "Reset password"
+  defp reset_button_label(:reactivate), do: gettext("Reactivate operator")
+  defp reset_button_label(_operation), do: gettext("Reset password")
 
   defp password_dialog_title(_operation, %{label: label}), do: label
-  defp password_dialog_title(:reactivate, _receipt), do: "Reactivate operator"
-  defp password_dialog_title(_operation, _receipt), do: "Reset password"
+  defp password_dialog_title(:reactivate, _receipt), do: gettext("Reactivate operator")
+  defp password_dialog_title(_operation, _receipt), do: gettext("Reset password")
 
   defp password_dialog_operator_label(%User{} = operator, _receipt),
     do: Identity.operator_display_name(operator)
 
   defp password_dialog_operator_label(_operator, %{operator_label: label}), do: label
-  defp password_dialog_operator_label(_operator, _receipt), do: "operator"
+  defp password_dialog_operator_label(_operator, _receipt), do: gettext("operator")
 
   defp password_dialog_operator_email(%User{email: email}, _receipt), do: email
   defp password_dialog_operator_email(_operator, %{operator_email: email}), do: email
-  defp password_dialog_operator_email(_operator, _receipt), do: "unknown email"
+  defp password_dialog_operator_email(_operator, _receipt), do: gettext("unknown email")
 end

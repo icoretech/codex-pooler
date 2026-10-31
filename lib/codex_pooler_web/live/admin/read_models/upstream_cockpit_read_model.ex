@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Accounting.RequestOutcome
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.{UpstreamCircuitReadiness, UpstreamCockpitMetrics}
@@ -11,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPoolerWeb.Admin.AuditLogsComponents.Presentation, as: AuditPresentation
   alias CodexPoolerWeb.Admin.SavedResetCalendar
   alias CodexPoolerWeb.Admin.UpstreamAccountActions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -37,6 +40,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:plan_label) => String.t() | nil,
           required(:plan_reported?) => boolean(),
           required(:safe_account_id_label) => String.t(),
+          required(:safe_account_id_value) => String.t(),
           required(:subject_ref) => String.t() | nil,
           required(:account_email) => String.t() | nil,
           required(:workspace_ref) => String.t() | nil,
@@ -54,16 +58,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:quota_refresh_status) => String.t(),
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
+          required(:auth_verified_value_label) => String.t(),
           required(:access_token_label) => String.t(),
           required(:credential_expiry) => UpstreamAccountsReadModel.credential_expiry_projection(),
           required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:token_refresh_label) => String.t(),
+          required(:token_refresh_value_label) => String.t(),
           required(:refresh_job_state) => String.t() | nil,
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
           required(:disabled?) => boolean(),
           required(:safe_account_id_label) => String.t(),
+          required(:safe_account_id_value) => String.t(),
           required(:subject_ref) => String.t() | nil,
           required(:routing_readiness) => map(),
           required(:identity_observability) => UpstreamAccountsReadModel.identity_observability()
@@ -433,6 +440,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       plan_label: account.plan_label,
       plan_reported?: account.plan_reported?,
       safe_account_id_label: safe_account_id_label(identity.chatgpt_account_id),
+      safe_account_id_value: safe_account_id_value(identity.chatgpt_account_id),
       subject_ref: account.subject_ref,
       account_email: identity.account_email,
       workspace_ref: account.workspace_ref,
@@ -468,25 +476,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       quota_refresh_status: account.quota_refresh_status,
       auth_fresh_label: account.auth_fresh_label,
       auth_verified_label: account.auth_verified_label,
+      auth_verified_value_label: account.auth_verified_value_label,
       access_token_label: account.access_token_label,
       credential_expiry: credential_expiry(account.identity),
       secret_status: Secrets.secret_status(account.identity),
       token_refresh_label: account.token_refresh_label,
+      token_refresh_value_label: account.token_refresh_value_label,
       refresh_job_state: account.refresh_job_state,
       reauth_required?: account.reauth_required?,
       reauth_reason_code: account.reauth_reason_code,
       reauth_reason_message: account.reauth_reason_message,
       disabled?: account.identity.status == "disabled",
       safe_account_id_label: safe_identity.safe_account_id_label,
+      safe_account_id_value: safe_identity.safe_account_id_value,
       subject_ref: safe_identity.subject_ref,
       routing_readiness: account.routing_readiness,
       identity_observability: account.identity_observability
     }
   end
 
-  defp status_label(%{deletion_state: :in_progress}), do: "Deletion in progress"
-  defp status_label(%{deletion_state: :failed}), do: "Deletion failed - retry Delete"
-  defp status_label(account), do: account.identity.status |> String.replace("_", " ") |> String.capitalize()
+  defp status_label(%{deletion_state: :in_progress}), do: gettext("Deletion in progress")
+  defp status_label(%{deletion_state: :failed}), do: gettext("Deletion failed - retry Delete")
+  defp status_label(account), do: status_text(account.identity.status)
+
+  defp status_text("active"), do: gettext("Active")
+  defp status_text("disabled"), do: gettext("Disabled")
+  defp status_text("deleted"), do: gettext("Deleted")
+  defp status_text("refresh_due"), do: gettext("Refresh due")
+  defp status_text("refresh_failed"), do: gettext("Refresh failed")
+  defp status_text("reauth_required"), do: gettext("Reauth required")
+  defp status_text("pending"), do: gettext("Pending")
+  defp status_text("paused"), do: gettext("Paused")
+  defp status_text("refreshing"), do: gettext("Refreshing")
+  defp status_text("errored"), do: gettext("Errored")
+  defp status_text(status) when is_binary(status), do: String.capitalize(String.replace(status, "_", " "))
 
   defp assignments(%{identity: %UpstreamIdentity{} = identity, assignments: assignment_snapshots})
        when is_list(assignment_snapshots) do
@@ -628,9 +651,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp fallback_request_event_title(%{status: status}) when status in @request_failed_statuses,
-    do: "Request failed"
+    do: gettext("Request failed")
 
-  defp fallback_request_event_title(_row), do: "Request retried"
+  defp fallback_request_event_title(_row), do: gettext("Request retried")
 
   # A client cancellation reaches the feed only through a retry: it names its
   # class, not "Failed".
@@ -638,7 +661,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     [
       request_event_status(row),
       retry_label(row),
-      pluralize_count(row.attempt_count, "attempt", "attempts")
+      ngettext("%{attempts} attempt", "%{attempts} attempts", row.attempt_count, attempts: row.attempt_count)
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
@@ -646,7 +669,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp retry_label(%{status: status, attempt_count: attempt_count})
        when status in @request_failed_statuses and attempt_count > 1,
-       do: "after retry"
+       do: gettext("after retry")
 
   defp retry_label(_row), do: nil
 
@@ -682,8 +705,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     %{
       timestamp: row.occurred_at,
       source: "audit_log",
-      title: Audit.action_label(row.action) || humanize_event_title(row.action),
-      subtitle: human_status(row.outcome),
+      title: AuditPresentation.event_title(row),
+      subtitle: AuditPresentation.outcome_label(row.outcome),
       link: audit_recent_event_link(identity_id),
       request_id: nil,
       failure?: false
@@ -779,12 +802,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp oauth_terminal_timestamp(flow), do: flow.inserted_at
 
-  defp oauth_recent_event_title("failed"), do: "OAuth relink failed"
-  defp oauth_recent_event_title("expired"), do: "OAuth relink expired"
-  defp oauth_recent_event_title(_status), do: "OAuth relink cancelled"
+  defp oauth_recent_event_title("failed"), do: gettext("OAuth relink failed")
+  defp oauth_recent_event_title("expired"), do: gettext("OAuth relink expired")
+  defp oauth_recent_event_title(_status), do: gettext("OAuth relink cancelled")
 
   defp oauth_recent_event_subtitle(flow) do
-    ["#{flow.flow_kind} flow", oauth_error_label(flow.error)]
+    [gettext("%{flow_kind} flow", flow_kind: flow.flow_kind), oauth_error_label(flow.error)]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
@@ -797,29 +820,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp oauth_error_label(_error), do: nil
 
-  defp humanize_event_title(value) do
-    value
-    |> to_string()
-    |> String.replace([".", "_"], " ")
-    |> String.capitalize()
-  end
+  defp request_event_status(row), do: if(RequestOutcome.client_cancelled?(row), do: gettext("Client cancelled"), else: human_status(row.status))
 
-  defp request_event_status(row) do
-    if RequestOutcome.client_cancelled?(row), do: "Client cancelled", else: human_status(row.status)
-  end
-
-  defp human_status(value) do
-    value
-    |> to_string()
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp human_status("succeeded"), do: gettext("Succeeded")
+  defp human_status("failed"), do: gettext("Failed")
+  defp human_status("rejected"), do: gettext("Rejected")
+  defp human_status("accepted"), do: gettext("Accepted")
+  defp human_status("in_progress"), do: gettext("In progress")
+  defp human_status("cancelled"), do: gettext("Cancelled")
+  defp human_status(value) when is_binary(value), do: String.capitalize(String.replace(value, "_", " "))
+  defp human_status(value), do: to_string(value)
 
   defp status_code_label(nil), do: nil
-  defp status_code_label(status_code), do: "HTTP #{status_code}"
-
-  defp pluralize_count(1, singular, _plural), do: "1 #{singular}"
-  defp pluralize_count(count, _singular, plural), do: "#{count || 0} #{plural}"
+  defp status_code_label(status_code), do: gettext("HTTP %{status_code}", status_code: status_code)
 
   defp blank?(nil), do: true
   defp blank?(value), do: String.trim(to_string(value)) == ""
@@ -830,37 +843,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     redeem_saved_reset = redeem_saved_reset_action(account, header)
 
     %{
-      rename: assignment_action(account, status != "deleted", "deleted accounts cannot be renamed"),
+      rename: assignment_action(account, status != "deleted", gettext("deleted accounts cannot be renamed")),
       pause:
         assignment_action(
           account,
           status in ["active", "refresh_due", "refresh_failed"],
-          "account is not pausable"
+          gettext("account is not pausable")
         ),
       reactivate:
         assignment_action(
           account,
           status in @reactivatable_statuses,
-          "account is not reactivatable"
+          gettext("account is not reactivatable")
         ),
       refresh_token:
         assignment_action(
           account,
           status in ["active", "refresh_due", "refresh_failed"],
-          "token refresh is unavailable"
+          gettext("token refresh is unavailable")
         ),
       redeem_saved_reset: redeem_saved_reset,
-      download_reset_calendar: action(SavedResetCalendar.available?(account.identity), "no upcoming banked reset expirations are available"),
-      replace_auth_json: action(recovery_eligible?, "credential replacement is not needed"),
+      download_reset_calendar: action(SavedResetCalendar.available?(account.identity), gettext("no upcoming banked reset expirations are available")),
+      replace_auth_json: action(recovery_eligible?, gettext("credential replacement is not needed")),
       oauth_relink:
         action(
           status != "deleted" and account.assignments != [],
-          "OAuth relink requires a Pool assignment"
+          gettext("OAuth relink requires a Pool assignment")
         ),
       reinvite:
         action(
           recovery_eligible? and account.assignments != [],
-          "reinvite requires a Pool assignment"
+          gettext("reinvite requires a Pool assignment")
         ),
       delete: action(Map.get(account, :can_delete?, false), deletion_unavailable_reason(account)),
       empty?: false,
@@ -869,17 +882,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp deletion_unavailable_reason(%{deletion_state: :in_progress}),
-    do: "account deletion is already in progress"
+    do: gettext("account deletion is already in progress")
 
   defp deletion_unavailable_reason(%{assignments: [_ | _]}),
-    do: "Remove this account from all Pools before deleting it."
+    do: gettext("Remove this account from all Pools before deleting it.")
 
   defp deletion_unavailable_reason(_account),
-    do: "You do not have permission to permanently delete this account."
+    do: gettext("You do not have permission to permanently delete this account.")
 
   defp redeem_saved_reset_action(account, header) do
     if account.identity.status not in ["deleted", "disabled"] and not auth_clearly_usable?(header) do
-      action(false, "saved reset redemption requires usable credentials")
+      action(false, gettext("saved reset redemption requires usable credentials"))
     else
       Map.get_lazy(account, :saved_reset_redemption_action, fn -> SavedResetProjection.redemption_action(account) end)
     end
@@ -946,14 +959,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp safe_account_id_label(value) when is_binary(value) and value != "" do
-    fingerprint =
-      :sha256
-      |> :crypto.hash(value)
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 12)
-
-    "stored account id sha256:#{fingerprint}"
+    gettext("stored account id sha256:%{fingerprint}", fingerprint: safe_account_id_fingerprint(value))
   end
 
-  defp safe_account_id_label(_value), do: "stored account id not reported"
+  defp safe_account_id_label(_value), do: gettext("stored account id not reported")
+
+  defp safe_account_id_value(value) when is_binary(value) and value != "" do
+    "sha256:" <> safe_account_id_fingerprint(value)
+  end
+
+  defp safe_account_id_value(_value), do: gettext("not reported")
+
+  defp safe_account_id_fingerprint(value) do
+    :sha256
+    |> :crypto.hash(value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
+  end
 end

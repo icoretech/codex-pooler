@@ -62,6 +62,10 @@ defmodule CodexPooler.Accounts do
   defdelegate update_current_operator_profile(user, attrs, metadata \\ %{}),
     to: OperatorManagement
 
+  @spec update_user_locale(User.t(), String.t() | nil) ::
+          {:ok, User.t()} | {:error, Ecto.Changeset.t() | :database_failed}
+  defdelegate update_user_locale(user, locale), to: OperatorManagement
+
   @spec deactivate_operator(Scope.t() | User.t(), User.t() | Ecto.UUID.t(), map(), map()) ::
           {:ok, User.t()} | {:error, Ecto.Changeset.t() | atom()}
   defdelegate deactivate_operator(actor, operator, attrs, metadata \\ %{}),

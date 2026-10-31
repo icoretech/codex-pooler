@@ -42,6 +42,27 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     :ok
   end
 
+  test "Chinese system settings translate SMTP labels and validation feedback", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/system")
+
+    assert page_title(view) == "系统 - Codex Pooler"
+    assert has_element?(view, "#system-page-header", "系统")
+    assert has_element?(view, "#instance-settings-smtp", "SMTP 投递")
+    assert has_element?(view, "label[for='instance-settings-smtp-username']", "SMTP 用户名")
+    assert has_element?(view, "#instance-settings-smtp-submit", "保存 SMTP 投递设置")
+
+    view |> element("#instance-settings-smtp-test") |> render_click()
+    assert has_element?(view, "#instance-settings-smtp-test-status", "SMTP 已禁用")
+
+    view
+    |> element("#instance-settings-smtp-form")
+    |> render_submit(%{"instance_settings" => %{"smtp" => %{"enabled" => "true", "host" => ""}}})
+
+    assert has_element?(view, "#instance-settings-smtp-errors", "保存前请检查此卡片。")
+    assert has_element?(view, "#instance-settings-smtp-errors", "SMTP 主机")
+    refute InstanceSettings.get!().smtp.enabled
+  end
+
   test "denies instance admins before loading global settings or MCP counts", %{scope: scope} do
     assert {:ok, _settings} =
              InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
@@ -2576,6 +2597,33 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              :crypto.hash(:sha256, stored_password)
 
     refute_received {^telemetry_ref, _metadata}
+
+    {:ok, chinese_view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/system?#{%{"tab" => "smtp"}}")
+
+    chinese_view
+    |> element("#instance-settings-smtp-form")
+    |> render_change(%{
+      "instance_settings" => %{
+        "smtp" => %{
+          "enabled" => "true",
+          "host" => "localhost",
+          "port" => Integer.to_string(port),
+          "username" => "username",
+          "from" => "candidate@example.com",
+          "ssl" => "false",
+          "tls" => "never",
+          "retries" => "2",
+          "password" => ""
+        }
+      }
+    })
+
+    chinese_html = chinese_view |> element("#instance-settings-smtp-test") |> render_click()
+    assert chinese_html =~ "测试邮件已发送至 #{user.email}"
+    assert_received {^telemetry_ref, chinese_metadata}
+    assert chinese_metadata.email.subject == "Codex Pooler SMTP 测试邮件"
+    assert chinese_metadata.email.text_body == "这封测试邮件确认 Codex Pooler 可以使用当前 SMTP 设置发送邮件。"
+    refute chinese_html =~ stored_password
 
     current = InstanceSettings.get!()
     assert current.smtp.enabled == before.smtp.enabled

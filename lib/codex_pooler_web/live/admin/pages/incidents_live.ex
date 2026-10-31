@@ -13,7 +13,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
     socket =
       socket
       |> assign(
-        page_title: "OpenAI incidents",
+        page_title: gettext("OpenAI incidents"),
         incidents_page: OpenAIIncidentsReadModel.load(),
         datetime_preferences: DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
       )
@@ -58,6 +58,8 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:incidents}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -65,8 +67,8 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
       <section id="admin-incidents-page" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="admin-incidents-page-header"
-          title="OpenAI incidents"
-          description="Incidents on the public OpenAI status page, refreshed by Codex Pooler."
+          title={gettext("OpenAI incidents")}
+          description={gettext("Incidents on the public OpenAI status page, refreshed by Codex Pooler.")}
         >
           <:actions><IncidentsPageComponents.feed_chip page={@incidents_page} /></:actions>
         </AdminComponents.page_header>

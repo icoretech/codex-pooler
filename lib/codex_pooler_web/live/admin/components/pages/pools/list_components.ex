@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :can_operate_pools?, :boolean, required: true
   attr :compat_panel_views, :map, default: %{}
 
+  @spec pool_inventory(map()) :: Phoenix.LiveView.Rendered.t()
   def pool_inventory(assigns) do
     ~H"""
     <.pool_delete_dialog
@@ -39,7 +40,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       <AdminComponents.empty_state
         :if={@pools == []}
         id="pool-empty-state"
-        title={if @can_manage_pools?, do: "No Pools Found", else: "No assigned Pools"}
+        title={if @can_manage_pools?, do: gettext("No Pools Found"), else: gettext("No assigned Pools")}
         description={pool_empty_description(@can_manage_pools?)}
         icon="hero-server-stack"
       >
@@ -48,7 +49,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             :if={@can_manage_pools?}
             id="pool-empty-create-action"
             icon="hero-plus"
-            label="Create Pool"
+            label={gettext("Create Pool")}
             phx-click="open_create_pool"
             variant={:primary}
           />
@@ -70,6 +71,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :delete_form, Phoenix.HTML.Form, required: true
   attr :delete_form_version, :integer, required: true
 
+  @spec pool_delete_dialog(map()) :: Phoenix.LiveView.Rendered.t()
   def pool_delete_dialog(assigns) do
     ~H"""
     <dialog
@@ -80,12 +82,12 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Pool</p>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">{gettext("Pool")}</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">
-            Delete {@deleting_pool.name}?
+            {gettext("Delete %{name}?", name: @deleting_pool.name)}
           </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Only an archived Pool can be deleted, and this one leaves for good. This cannot be undone.
+            {gettext("Only an archived Pool can be deleted, and this one leaves for good. This cannot be undone.")}
           </p>
         </div>
 
@@ -106,7 +108,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@deleting_pool.slug}</span> to confirm
+              <span class="font-semibold text-base-content">{gettext("Type %{slug} to confirm", slug: @deleting_pool.slug)}</span>
             </:label_content>
           </.input>
         </.form>
@@ -118,14 +120,14 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <:actions>
             <AdminComponents.action_button
               id="pool-delete-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               variant={:ghost}
               phx-click="cancel_delete"
             />
             <AdminComponents.action_button
               id="pool-delete-submit"
               icon="hero-trash"
-              label="Delete"
+              label={gettext("Delete")}
               type="submit"
               form="pool-delete-form"
               variant={:danger}
@@ -136,17 +138,22 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_delete">close</button>
+        <button type="button" phx-click="cancel_delete">{gettext("close")}</button>
       </form>
     </dialog>
     """
   end
 
+  defp pool_status_label("active"), do: gettext("active")
+  defp pool_status_label("disabled"), do: gettext("disabled")
+  defp pool_status_label("archived"), do: gettext("archived")
+  defp pool_status_label(status), do: status
+
   defp pool_empty_description(true),
-    do: "Create the first Pool before connecting upstreams or issuing API keys."
+    do: gettext("Create the first Pool before connecting upstreams or issuing API keys.")
 
   defp pool_empty_description(false),
-    do: "Ask an instance owner to assign you to a Pool before managing Pool-scoped resources."
+    do: gettext("Ask an instance owner to assign you to a Pool before managing Pool-scoped resources.")
 
   attr :form, Phoenix.HTML.Form, required: true
 
@@ -179,14 +186,14 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
     ~H"""
     <div class="grid gap-2">
-      <label for={@field.id} class="sr-only">Search</label>
+      <label for={@field.id} class="sr-only">{gettext("Search")}</label>
       <div class="input input-bordered flex min-h-10 w-full items-center gap-2">
         <input
           id={@field.id}
           name={@field.name}
           type="text"
           value={@value}
-          placeholder="Search pools..."
+          placeholder={gettext("Search pools...")}
           class="peer grow text-sm font-normal"
         />
         <button
@@ -194,7 +201,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           type="button"
           class="grid size-6 shrink-0 place-items-center rounded-full text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary peer-placeholder-shown:hidden"
           phx-click="clear_pool_query_filter"
-          aria-label="Clear pool search"
+          aria-label={gettext("Clear pool search")}
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
@@ -209,7 +216,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp pool_status_filter_dropdown(assigns) do
     ~H"""
     <div class="grid gap-2">
-      <label for="pool-status-filter" class="sr-only">Status</label>
+      <label for="pool-status-filter" class="sr-only">{gettext("Status")}</label>
       <input
         type="hidden"
         id="pool_filters_status"
@@ -266,19 +273,19 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     [
       all_pool_status_filter_option(),
       %{
-        label: "Active",
+        label: gettext("Active"),
         value: "active",
         icon: "hero-check-circle",
         icon_class: "text-success"
       },
       %{
-        label: "Disabled",
+        label: gettext("Disabled"),
         value: "disabled",
         icon: "hero-pause-circle",
         icon_class: "text-warning"
       },
       %{
-        label: "Archived",
+        label: gettext("Archived"),
         value: "archived",
         icon: "hero-archive-box",
         icon_class: "text-error"
@@ -288,7 +295,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   defp all_pool_status_filter_option do
     %{
-      label: "Status: All",
+      label: gettext("Status: All"),
       value: "all",
       icon: "hero-server-stack",
       icon_class: "text-base-content/60"
@@ -301,7 +308,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp pool_traffic_window_filter_dropdown(assigns) do
     ~H"""
     <div class="grid gap-2">
-      <label for="pool-traffic-window-filter" class="sr-only">Traffic window</label>
+      <label for="pool-traffic-window-filter" class="sr-only">{gettext("Traffic window")}</label>
       <input
         type="hidden"
         id="pool_filters_traffic_window"
@@ -359,7 +366,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   end
 
   defp default_pool_traffic_window_filter_option do
-    %{label: "Traffic: Last 24 hours", value: "24h"}
+    %{label: gettext("Traffic: Last 24 hours"), value: "24h"}
   end
 
   defp pool_query_filter_value(%{value: value}) when is_binary(value), do: value
@@ -420,23 +427,23 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
                 id={"pool-row-#{@pool_row.pool.id}-status"}
                 class={AdminBadges.lifecycle_chip_class(@pool_row.pool.status)}
               >
-                {@pool_row.pool.status}
+                {pool_status_label(@pool_row.pool.status)}
               </span>
               <span
                 :if={Map.get(@pool_row, :deletion) == :in_progress}
                 id={"pool-row-#{@pool_row.pool.id}-deletion"}
                 class={AdminBadges.lifecycle_chip_class("paused")}
-                title="A background job is removing this Pool's history; the Pool disappears when it finishes"
+                title={gettext("A background job is removing this Pool's history; the Pool disappears when it finishes")}
               >
-                deleting
+                {gettext("deleting")}
               </span>
               <span
                 :if={Map.get(@pool_row, :deletion) == :failed}
                 id={"pool-row-#{@pool_row.pool.id}-deletion"}
                 class={AdminBadges.lifecycle_chip_class("deleted")}
-                title="The last deletion attempt gave up; delete the Pool again to resume"
+                title={gettext("The last deletion attempt gave up; delete the Pool again to resume")}
               >
-                deletion failed
+                {gettext("deletion failed")}
               </span>
               <.pool_action_menu
                 pool_row={@pool_row}
@@ -463,7 +470,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <.pool_metric_link
             data_role="pool-upstream-count-cell"
             href={~p"/admin/upstreams?pool_id=#{@pool_row.pool.id}"}
-            label="Upstreams"
+            label={gettext("Upstreams")}
             value={@pool_row.upstream_count}
             value_id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}
             wrapper_class="min-w-0 pr-3"
@@ -472,7 +479,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <.pool_metric_link
             data_role="pool-api-key-count-cell"
             href={~p"/admin/api-keys?pool_id=#{@pool_row.pool.id}"}
-            label="API keys"
+            label={gettext("API keys")}
             value={@pool_row.api_key_count}
             value_id={"pool-row-#{@pool_row.pool.id}-api-key-count"}
             wrapper_class="min-w-0 pl-3 sm:px-3"
@@ -480,7 +487,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <.pool_metric_link
             data_role="pool-request-count-cell"
             href={~p"/admin/request-logs?pool_id=#{@pool_row.pool.id}"}
-            label={"Req/TPS #{@pool_row.traffic_window_label}"}
+            label={gettext("Req/TPS %{window}", window: @pool_row.traffic_window_label)}
             value={
               PoolsReadModel.format_request_throughput(
                 @pool_row.request_count,
@@ -501,7 +508,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <.pool_metric_link
             data_role="pool-cost-cell"
             href={~p"/admin/stats?pool_id=#{@pool_row.pool.id}"}
-            label={"Cost #{@pool_row.traffic_window_label}"}
+            label={gettext("Cost %{window}", window: @pool_row.traffic_window_label)}
             value={PoolsReadModel.format_settled_cost_micros(@pool_row.settled_cost_micros)}
             value_id={"pool-row-#{@pool_row.pool.id}-settled-cost"}
             wrapper_class="min-w-0 pl-3"
@@ -529,7 +536,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         <.link
           navigate={@href}
           class={footer_metric_link_class(@position)}
-          aria-label={"Open #{@label}"}
+          aria-label={gettext("Open %{label}", label: @label)}
         >
           <span class="sr-only">{@label}</span>
         </.link>
@@ -589,7 +596,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         <div class="pool-token-histogram-header">
           <div class="grid gap-1">
             <h3>
-              <span class="pool-token-histogram-label">Traffic</span>
+              <span class="pool-token-histogram-label">{gettext("Traffic")}</span>
               <span class="pool-token-histogram-value">
                 {@pool_row.traffic_window_label}
               </span>
@@ -602,7 +609,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             <span class="pool-token-histogram-value">
               {@traffic_histogram_card.token_total_label}
             </span>
-            <span class="pool-token-histogram-label"> tokens</span>
+            <span class="pool-token-histogram-label">{" " <> gettext("tokens")}</span>
             <span aria-hidden="true"> / </span>
             <span class="pool-token-histogram-value">
               {@traffic_histogram_card.request_total_label}
@@ -630,6 +637,9 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           data-chart-categories={@traffic_histogram_card.categories}
           data-chart-series={@traffic_histogram_card.series}
           data-chart-units={@traffic_histogram_card.units}
+          data-chart-unit-labels={CodexPooler.JSON.encode!([gettext("tokens"), gettext("requests")])}
+          data-chart-default-series-label={gettext("Value")}
+          data-chart-series-label={gettext("Series %{index}", index: "%{index}")}
           data-chart-yaxis={@traffic_histogram_card.yaxis}
           data-chart-height="84"
           data-chart-colors={@traffic_histogram_card.colors}
@@ -650,7 +660,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             <.icon name="hero-chart-bar" class="size-4" />
           </span>
           <p class="pool-activity-empty-copy">
-            No traffic in the last {@traffic_histogram_card.window_label}
+            {gettext("No traffic in the last %{window}", window: @traffic_histogram_card.window_label)}
           </p>
         </div>
         <div
@@ -666,7 +676,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           >
             <.icon name="hero-arrow-path" class="admin-loading-icon size-4" />
           </span>
-          <p class="pool-activity-empty-copy">Loading traffic</p>
+          <p class="pool-activity-empty-copy">{gettext("Loading traffic")}</p>
         </div>
         <div
           :if={@pool_row.histogram_state in [:unobserved, :error]}
@@ -676,7 +686,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         </div>
         <ul :if={@pool_row.histogram_state == :ready} class="sr-only">
           <li :for={point <- @traffic_histogram_card.points}>
-            {point.label}: {point.tokens} tokens, {point.requests} requests
+            {gettext("%{time}: %{tokens}, %{requests}", time: point.label, tokens: ngettext("%{count} token", "%{count} tokens", point.tokens), requests: ngettext("%{count} request", "%{count} requests", point.requests))}
           </li>
         </ul>
       </section>
@@ -696,7 +706,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{@pool_row.pool.name}"}
+        aria-label={gettext("Actions for %{name}", name: @pool_row.pool.name)}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -708,21 +718,21 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <AdminComponents.dropdown_action_item
             id={"copy-pool-id-#{@pool_row.pool.id}"}
             icon="hero-clipboard-document"
-            label="Copy Pool ID"
+            label={gettext("Copy Pool ID")}
             copy_feedback?={true}
             phx-hook="ClipboardCopy"
             phx-update="ignore"
             data-copy-text={@pool_row.pool.id}
-            data-copy-label="Copy Pool ID"
-            data-copied-label="Copied"
-            aria-label={"Copy ID for #{@pool_row.pool.name}"}
+            data-copy-label={gettext("Copy Pool ID")}
+            data-copied-label={gettext("Copied")}
+            aria-label={gettext("Copy ID for %{name}", name: @pool_row.pool.name)}
           />
         </li>
         <li :if={@can_manage_pools?}>
           <AdminComponents.dropdown_action_item
             id={"edit-pool-#{@pool_row.pool.id}"}
             icon="hero-pencil-square"
-            label="Edit"
+            label={gettext("Edit")}
             phx-click="edit_pool"
             phx-value-id={@pool_row.pool.id}
             disabled={@pool_row.pool.status != "active"}
@@ -733,7 +743,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <AdminComponents.dropdown_action_item
             id={"reactivate-pool-#{@pool_row.pool.id}"}
             icon="hero-play"
-            label="Reactivate"
+            label={gettext("Reactivate")}
             variant={:positive}
             phx-click="reactivate_pool"
             phx-value-id={@pool_row.pool.id}
@@ -744,7 +754,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <AdminComponents.dropdown_action_item
             id={"models-pool-#{@pool_row.pool.id}"}
             icon="hero-adjustments-horizontal"
-            label="Models"
+            label={gettext("Models")}
             phx-click="edit_pool_models"
             phx-value-id={@pool_row.pool.id}
           />
@@ -753,7 +763,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <AdminComponents.dropdown_action_item
             id={"delete-pool-#{@pool_row.pool.id}"}
             icon="hero-trash"
-            label="Delete"
+            label={gettext("Delete")}
             variant={:danger}
             phx-click="delete_pool"
             phx-value-id={@pool_row.pool.id}
@@ -766,38 +776,40 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     """
   end
 
-  @compat_flags [
-    %{
-      key: :v1_compatibility_enabled,
-      id_suffix: "v1",
-      icon: "hero-code-bracket",
-      label: "/v1 compatibility",
-      docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
-      description: "OpenAI-style /v1 compatibility routes."
-    },
-    %{
-      key: :allow_image_generation,
-      id_suffix: "image-generation",
-      icon: "hero-photo",
-      label: "Allow Image Generation",
-      docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
-      description: "Permits image generation and edits for requests using this Pool."
-    },
-    %{
-      key: :allow_audio_transcription,
-      id_suffix: "audio-transcription",
-      icon: "hero-microphone",
-      label: "Allow Audio Transcription",
-      docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
-      description: "Permits speech-to-text transcription for requests using this Pool."
-    }
-  ]
+  defp compat_flags do
+    [
+      %{
+        key: :v1_compatibility_enabled,
+        id_suffix: "v1",
+        icon: "hero-code-bracket",
+        label: gettext("/v1 compatibility"),
+        docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
+        description: gettext("OpenAI-style /v1 compatibility routes.")
+      },
+      %{
+        key: :allow_image_generation,
+        id_suffix: "image-generation",
+        icon: "hero-photo",
+        label: gettext("Allow Image Generation"),
+        docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
+        description: gettext("Permits image generation and edits for requests using this Pool.")
+      },
+      %{
+        key: :allow_audio_transcription,
+        id_suffix: "audio-transcription",
+        icon: "hero-microphone",
+        label: gettext("Allow Audio Transcription"),
+        docs_url: "https://www.codex-pooler.com/docs/operators/pools/#compatibility",
+        description: gettext("Permits speech-to-text transcription for requests using this Pool.")
+      }
+    ]
+  end
 
   attr :pool_row, :map, required: true
   attr :open_flag, :any, default: nil
 
   defp pool_compat_flag_icons(assigns) do
-    assigns = assign(assigns, :flags, @compat_flags)
+    assigns = assign(assigns, :flags, compat_flags())
 
     ~H"""
     <span class="flex shrink-0 items-center gap-px" data-role="pool-compat-flags">
@@ -840,7 +852,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <span
             :if={@flag[:experimental]}
             data-role="pool-compat-experimental"
-            title="Experimental feature — behavior may change"
+            title={gettext("Experimental feature — behavior may change")}
             class="flex shrink-0 items-center text-warning"
           >
             <.icon name="hero-beaker" class="size-3.5" />
@@ -851,8 +863,8 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             href={@flag.docs_url}
             target="_blank"
             rel="noopener noreferrer"
-            title={"#{@flag.label} documentation"}
-            aria-label={"#{@flag.label} documentation"}
+            title={gettext("%{label} documentation", label: @flag.label)}
+            aria-label={gettext("%{label} documentation", label: @flag.label)}
             class="flex shrink-0 items-center text-base-content/45 transition-colors hover:text-primary"
           >
             <.icon name="hero-book-open" class="size-3.5" />
@@ -863,8 +875,8 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             href={compat_issue_url(@flag.issue_number)}
             target="_blank"
             rel="noopener noreferrer"
-            title={"Issue ##{@flag.issue_number} on GitHub"}
-            aria-label={"Issue ##{@flag.issue_number} on GitHub"}
+            title={gettext("Issue #%{number} on GitHub", number: @flag.issue_number)}
+            aria-label={gettext("Issue #%{number} on GitHub", number: @flag.issue_number)}
             class="flex shrink-0 items-center text-base-content/45 transition-colors hover:text-primary"
           >
             <.github_icon class="size-3.5 fill-current" />
@@ -879,13 +891,13 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           phx-click="toggle_pool_compat_flag"
           phx-value-pool-id={@pool_row.pool.id}
           phx-value-flag={Atom.to_string(@flag.key)}
-          aria-label={"Toggle #{@flag.label} for #{@pool_row.pool.name}"}
+          aria-label={gettext("Toggle %{label} for %{pool}", label: @flag.label, pool: @pool_row.pool.name)}
         />
         <span
           :if={!@can_manage_pools?}
           class={AdminBadges.metadata_chip_class(if(@enabled, do: :success, else: :neutral))}
         >
-          {if @enabled, do: "Enabled", else: "Disabled"}
+          {if @enabled, do: gettext("Enabled"), else: gettext("Disabled")}
         </span>
       </div>
       <p class="mt-1 text-xs leading-5 text-base-content/60">
@@ -901,7 +913,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp compat_panel_flag(panel_views, %{pool: %{id: pool_id}}) when is_map(panel_views) do
     case Map.get(panel_views, pool_id) do
       nil -> nil
-      flag_key -> Enum.find(@compat_flags, &(Atom.to_string(&1.key) == flag_key))
+      flag_key -> Enum.find(compat_flags(), &(Atom.to_string(&1.key) == flag_key))
     end
   end
 
@@ -913,8 +925,8 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp compat_flag_enabled?(pool_row, flag), do: pool_row.compat_flags[flag.key] == true
 
   defp compat_flag_state_label(pool_row, flag) do
-    state = if compat_flag_enabled?(pool_row, flag), do: "enabled", else: "disabled"
-    "#{flag.label}: #{state}"
+    state = if compat_flag_enabled?(pool_row, flag), do: gettext("enabled"), else: gettext("disabled")
+    gettext("%{label}: %{state}", label: flag.label, state: state)
   end
 
   defp compat_flag_trigger_class(pool_row, flag, open_flag) do
@@ -957,28 +969,28 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     request_total = Enum.sum(request_values)
 
     %{
-      title: "Traffic #{window_label}",
+      title: gettext("Traffic %{window}", window: window_label),
       window_label: window_label,
       token_total_label: Format.token_count(token_total),
       request_total_label: format_integer(request_total),
       request_total_unit: request_total_unit(request_total),
-      total_label: "#{Format.token_count(token_total)} tokens / #{format_request_count(request_total)}",
+      total_label: gettext("%{tokens} tokens / %{requests}", tokens: Format.token_count(token_total), requests: format_request_count(request_total)),
       categories: CodexPooler.JSON.encode!(Enum.map(points, & &1.label)),
       series:
         CodexPooler.JSON.encode!([
-          %{name: "Tokens", type: "column", data: token_values},
-          %{name: "Requests", type: "line", data: request_values}
+          %{name: gettext("Tokens"), type: "column", data: token_values},
+          %{name: gettext("Requests"), type: "line", data: request_values}
         ]),
       units: CodexPooler.JSON.encode!(["tokens", "requests"]),
       yaxis:
         CodexPooler.JSON.encode!([
-          %{seriesName: "Tokens", title: "tokens"},
-          %{seriesName: "Requests", title: "requests", opposite: true}
+          %{seriesName: gettext("Tokens"), title: gettext("tokens")},
+          %{seriesName: gettext("Requests"), title: gettext("requests"), opposite: true}
         ]),
       colors: CodexPooler.JSON.encode!(["var(--color-primary)", "var(--color-info)"]),
       points: points,
       empty?: token_total == 0 and request_total == 0,
-      aria_label: "Traffic in the last #{window_label}: #{Format.token_count(token_total)} tokens and #{format_request_count(request_total)}"
+      aria_label: gettext("Traffic in the last %{window}: %{tokens} tokens and %{requests}", window: window_label, tokens: Format.token_count(token_total), requests: format_request_count(request_total))
     }
   end
 
@@ -987,11 +999,9 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   defp format_chart_bucket(bucket), do: to_string(bucket)
 
-  defp request_total_unit(1), do: "request"
-  defp request_total_unit(_value), do: "requests"
+  defp request_total_unit(value), do: ngettext("request", "requests", value)
 
-  defp format_request_count(1), do: "1 request"
-  defp format_request_count(value) when is_integer(value), do: "#{format_integer(value)} requests"
+  defp format_request_count(value) when is_integer(value), do: ngettext("%{requests} request", "%{requests} requests", value, requests: format_integer(value))
 
   defp format_integer(number) when is_integer(number) do
     number

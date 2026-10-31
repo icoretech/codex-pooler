@@ -1,13 +1,14 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProjection do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.{Formatting, SavedResetConfirmationProjection}
   alias CodexPoolerWeb.DateTimeDisplay
 
-  @unknown_caveat "The request may have reached the provider. Don't redeem again until this resolves."
   @terminal_requests [:completed, :discarded, :cancelled, :stopped]
   @accepted_verifications [:quota_confirmed, :request_verified]
 
@@ -89,7 +90,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
       active?: active?,
       refreshable?: latest? or request.state != :none,
       show_latest_receipt?: latest?,
-      serving_readiness: Map.get(context, :serving_readiness)
+      serving_readiness: context |> Map.get(:serving_readiness) |> Formatting.localize_routing_readiness()
     }
     |> put_time(:started_at, record["started_at"], preferences, now)
     |> put_time(:finished_at, record["finished_at"], preferences, now)
@@ -165,17 +166,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   # The job's own state says how the request ended. A job records no link to the reset lifecycle it ran, so a
   # finished request points at the latest reset instead of claiming that result as its own.
-  defp request_copy(:queued, _latest?), do: {"Request accepted", "Queued. Nothing has been sent to the provider yet."}
-  defp request_copy(:processing, _latest?), do: {"Request accepted", "Being processed."}
-  defp request_copy(:completed, latest?), do: {"Request completed", finished_request_summary(latest?)}
-  defp request_copy(:discarded, latest?), do: {"Request did not complete", finished_request_summary(latest?)}
-  defp request_copy(:cancelled, latest?), do: {"Request cancelled", finished_request_summary(latest?)}
-  defp request_copy(:stopped, latest?), do: {"Request stopped", finished_request_summary(latest?)}
-  defp request_copy(:unavailable, _latest?), do: {"Request status unavailable", nil}
+  defp request_copy(:queued, _latest?), do: {gettext("Request accepted"), gettext("Queued. Nothing has been sent to the provider yet.")}
+  defp request_copy(:processing, _latest?), do: {gettext("Request accepted"), gettext("Being processed.")}
+  defp request_copy(:completed, latest?), do: {gettext("Request completed"), finished_request_summary(latest?)}
+  defp request_copy(:discarded, latest?), do: {gettext("Request did not complete"), finished_request_summary(latest?)}
+  defp request_copy(:cancelled, latest?), do: {gettext("Request cancelled"), finished_request_summary(latest?)}
+  defp request_copy(:stopped, latest?), do: {gettext("Request stopped"), finished_request_summary(latest?)}
+  defp request_copy(:unavailable, _latest?), do: {gettext("Request status unavailable"), nil}
   defp request_copy(:none, _latest?), do: {nil, nil}
 
-  defp finished_request_summary(true), do: "Check the latest reset before acting."
-  defp finished_request_summary(false), do: "No reset result is recorded."
+  defp finished_request_summary(true), do: gettext("Check the latest reset before acting.")
+  defp finished_request_summary(false), do: gettext("No reset result is recorded.")
 
   # A job inserted to run now is scheduled at its insertion time; the time is shown once.
   defp drop_repeated_schedule(%{requested_at: same, scheduled_at: same} = request), do: Map.delete(request, :scheduled_at)
@@ -183,9 +184,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   # The status line of the list row and the receipt's disclosure summary. Observation overrides replace only the
   # body headline, never this line, and an open outcome outranks the verification state it comes with.
-  defp compact_headline(%{state: :queued}, _headline, _open_outcome?), do: "Request accepted — queued"
-  defp compact_headline(%{state: :processing}, _headline, _open_outcome?), do: "Request accepted — processing"
-  defp compact_headline(_request, _headline, true), do: "Reset outcome not confirmed"
+  defp compact_headline(%{state: :queued}, _headline, _open_outcome?), do: gettext("Request accepted — queued")
+  defp compact_headline(%{state: :processing}, _headline, _open_outcome?), do: gettext("Request accepted — processing")
+  defp compact_headline(_request, _headline, true), do: gettext("Reset outcome not confirmed")
   defp compact_headline(_request, headline, false), do: headline
 
   defp provider_outcome(nil, _now), do: :not_recorded
@@ -272,18 +273,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   # be a non-consuming failure, and an expired one can follow an unresolved
   # consume. `facts` carries the snapshot clock and the record facts the last
   # clauses need.
-  defp copy(_record, _request, _outcome, :quota_confirmed, _facts), do: {"Quota confirmed", "The new quota cycle is confirmed.", false}
-  defp copy(_record, _request, _outcome, :request_verified, _facts), do: {"Recovery verified by a request", "A request succeeded on the new quota; the usage report has not caught up yet.", false}
-  defp copy(_record, _request, :applied, :reblocked, _facts), do: {"Quota is still unavailable", "The reset was applied, but quota is still blocked. No further reset is spent automatically.", true}
-  defp copy(_record, _request, _outcome, :reblocked, _facts), do: {"Quota is still unavailable", "Quota is still blocked.", false}
-  defp copy(_record, _request, :applied, :expired, _facts), do: {"Quota confirmation timed out", "No usage report confirmed the new quota in time. The spent reset is not refunded.", true}
-  defp copy(_record, _request, _outcome, :expired, _facts), do: {"Quota confirmation timed out", "No usage report confirmed the new quota in time.", false}
+  defp copy(_record, _request, _outcome, :quota_confirmed, _facts), do: {gettext("Quota confirmed"), gettext("The new quota cycle is confirmed."), false}
+  defp copy(_record, _request, _outcome, :request_verified, _facts), do: {gettext("Recovery verified by a request"), gettext("A request succeeded on the new quota; the usage report has not caught up yet."), false}
+  defp copy(_record, _request, :applied, :reblocked, _facts), do: {gettext("Quota is still unavailable"), gettext("The reset was applied, but quota is still blocked. No further reset is spent automatically."), true}
+  defp copy(_record, _request, _outcome, :reblocked, _facts), do: {gettext("Quota is still unavailable"), gettext("Quota is still blocked."), false}
+  defp copy(_record, _request, :applied, :expired, _facts), do: {gettext("Quota confirmation timed out"), gettext("No usage report confirmed the new quota in time. The spent reset is not refunded."), true}
+  defp copy(_record, _request, _outcome, :expired, _facts), do: {gettext("Quota confirmation timed out"), gettext("No usage report confirmed the new quota in time."), false}
 
   defp copy(record, _request, :applied, verification, facts) when verification in [:pending, :candidate] do
     if deadline_passed?(record, facts.now) do
-      {"Deadline passed — checking quota", "Waiting for the latest quota check.", true}
+      {gettext("Deadline passed — checking quota"), gettext("Waiting for the latest quota check."), true}
     else
-      {"Reset applied — verifying quota", "Waiting for a usage report to confirm the new quota.", true}
+      {gettext("Reset applied — verifying quota"), gettext("Waiting for a usage report to confirm the new quota."), true}
     end
   end
 
@@ -291,18 +292,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   defp copy(_record, request, outcome, _verification, facts) do
     cond do
-      facts.in_progress? -> {"Reset request in progress", "Waiting for the provider's answer.", true}
-      outcome == :unknown and facts.untracked? -> {"Reset outcome not recorded", "It does not block another redemption.", true}
-      outcome == :unknown -> {"Reset outcome not confirmed", @unknown_caveat, true}
-      outcome == :applied -> {"Reset applied", "The provider applied the reset.", true}
+      facts.in_progress? -> {gettext("Reset request in progress"), gettext("Waiting for the provider's answer."), true}
+      outcome == :unknown and facts.untracked? -> {gettext("Reset outcome not recorded"), gettext("It does not block another redemption."), true}
+      outcome == :unknown -> {gettext("Reset outcome not confirmed"), unknown_caveat(), true}
+      outcome == :applied -> {gettext("Reset applied"), gettext("The provider applied the reset."), true}
       request.state != :none -> {request.headline, request.summary, false}
-      true -> {"No reset result recorded", nil, false}
+      true -> {gettext("No reset result recorded"), nil, false}
     end
   end
 
-  defp noop_copy("no_credit"), do: {"No saved reset was available", "The provider had no saved reset to apply.", true}
-  defp noop_copy("nothing_to_reset"), do: {"Nothing needed resetting", "The provider found no exhausted quota to reset.", true}
-  defp noop_copy("consume_not_applied"), do: {"Reset was not applied", "The request stopped before reaching the provider.", true}
+  defp noop_copy("no_credit"), do: {gettext("No saved reset was available"), gettext("The provider had no saved reset to apply."), true}
+  defp noop_copy("nothing_to_reset"), do: {gettext("Nothing needed resetting"), gettext("The provider found no exhausted quota to reset."), true}
+  defp noop_copy("consume_not_applied"), do: {gettext("Reset was not applied"), gettext("The request stopped before reaching the provider."), true}
 
   defp fresh_consuming?(record, now) do
     with nil <- Map.get(record, "result"),
@@ -332,10 +333,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
     end
   end
 
-  defp outcome_caveat(:not_applied, "consume_not_applied"), do: "The request stopped before reaching the provider."
-  defp outcome_caveat(:not_applied, _code), do: "The provider reported that the reset was not applied."
-  defp outcome_caveat(:unknown, _code), do: @unknown_caveat
+  defp outcome_caveat(:not_applied, "consume_not_applied"), do: gettext("The request stopped before reaching the provider.")
+  defp outcome_caveat(:not_applied, _code), do: gettext("The provider reported that the reset was not applied.")
+  defp outcome_caveat(:unknown, _code), do: unknown_caveat()
   defp outcome_caveat(_applied_or_not_recorded, _code), do: nil
+
+  defp unknown_caveat, do: gettext("The request may have reached the provider. Don't redeem again until this resolves.")
 
   defp result_code(%{"result" => %{"code" => code}}) when code in ["reset", "already_redeemed", "target_redeemed", "no_credit", "nothing_to_reset", "consume_not_applied"], do: code
   defp result_code(_record), do: nil
@@ -351,9 +354,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   defp usage_pause(nil, _preferences, _now), do: %{state: :none, pause_until: nil}
   defp usage_pause(_unavailable, _preferences, _now), do: %{state: :unavailable, pause_until: nil}
 
-  defp observation_copy(true, _pause, _paused?, false), do: {"Live updates disconnected", "The reset continues. Reconnect to see the latest status before acting."}
-  defp observation_copy(true, %{state: state}, _paused?, _connected?) when state in [:paused, :unavailable], do: {"Quota checks are delayed", "Usage polling is paused or unavailable, so confirmation can take longer."}
-  defp observation_copy(true, _pause, true, _connected?), do: {"Live updates paused", "The reset continues. Refresh reads the stored status."}
+  defp observation_copy(true, _pause, _paused?, false), do: {gettext("Live updates disconnected"), gettext("The reset continues. Reconnect to see the latest status before acting.")}
+  defp observation_copy(true, %{state: state}, _paused?, _connected?) when state in [:paused, :unavailable], do: {gettext("Quota checks are delayed"), gettext("Usage polling is paused or unavailable, so confirmation can take longer.")}
+  defp observation_copy(true, _pause, true, _connected?), do: {gettext("Live updates paused"), gettext("The reset continues. Refresh reads the stored status.")}
   defp observation_copy(_visible?, _pause, _paused?, _connected?), do: nil
 
   defp put_consumed_time(result, :applied, record, preferences, now), do: put_time(result, :consumed_at, record["consumed_at"], preferences, now)

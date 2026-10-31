@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.UpstreamAccountActions
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection
+  alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting, as: CockpitFormatting
 
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.{
     QuotaLimitRow,
@@ -39,6 +41,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   attr :datetime_preferences, :map, default: nil
 
+  @spec account_card(map()) :: Phoenix.LiveView.Rendered.t()
   def account_card(assigns) do
     datetime_preferences =
       Map.get(assigns, :datetime_preferences) || DateTimeDisplay.preferences_for_user(nil)
@@ -151,7 +154,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             >
               <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                 <div class="min-w-0">
-                  <p class="text-xs font-semibold uppercase text-primary">Status</p>
+                  <p class="text-xs font-semibold uppercase text-primary">{gettext("Status")}</p>
                   <p
                     id={"upstream-account-#{@account.identity.id}-limits-summary"}
                     class="truncate text-xs text-base-content/60"
@@ -169,7 +172,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                     id={"upstream-account-#{@account.identity.id}-token-burn-label"}
                     class="text-xs font-semibold uppercase text-primary"
                   >
-                    TOKEN BURN
+                    {gettext("TOKEN BURN")}
                   </p>
                   <TokenBurnPopover.token_burn_popover
                     id={"upstream-account-#{@account.identity.id}-token-burn-value"}
@@ -224,7 +227,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                 <div class="min-w-0">
                   <p class="text-xs font-semibold uppercase text-primary">
-                    tokens/<span class="normal-case">5m</span>
+                    {gettext("tokens/5m")}
                   </p>
                   <p
                     id={"upstream-account-#{@account.identity.id}-tokens-summary"}
@@ -234,11 +237,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   </p>
                 </div>
                 <div class="min-w-0 text-right">
-                  <p class="text-xs font-semibold uppercase text-primary">Requests</p>
+                  <p class="text-xs font-semibold uppercase text-primary">{gettext("Requests")}</p>
                   <p
                     id={"upstream-account-#{@account.identity.id}-tokens-requests-summary"}
                     class="truncate text-xs text-base-content/60"
-                    title="Settled requests in the last 5 minutes"
+                    title={gettext("Settled requests in the last 5 minutes")}
                   >
                     {recent_request_count_label(@account)}
                   </p>
@@ -255,7 +258,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   data-role="upstream-account-token-models-empty"
                   class="text-xs text-base-content/60"
                 >
-                  No models advertised or used in the last 5 minutes.
+                  {gettext("No models advertised or used in the last 5 minutes.")}
                 </p>
 
                 <div
@@ -328,7 +331,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             >
               <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
                 <div class="min-w-0">
-                  <p class="text-xs font-semibold uppercase text-primary">Pools</p>
+                  <p class="text-xs font-semibold uppercase text-primary">{gettext("Pools")}</p>
                   <p
                     id={"upstream-account-#{@account.identity.id}-pools-summary"}
                     class="truncate text-xs text-base-content/60"
@@ -337,7 +340,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   </p>
                 </div>
                 <div class="min-w-0 text-right">
-                  <p class="text-xs font-semibold uppercase text-primary">Routing</p>
+                  <p class="text-xs font-semibold uppercase text-primary">{gettext("Routing")}</p>
                   <p
                     id={"upstream-account-#{@account.identity.id}-pools-routing-summary"}
                     class="truncate text-xs text-base-content/60"
@@ -383,7 +386,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           class="upstream-account-card-footer"
         >
           <:fact role="upstream-routing-cell">
-            <AdminComponents.card_fact_label>Routing</AdminComponents.card_fact_label>
+            <AdminComponents.card_fact_label>{gettext("Routing")}</AdminComponents.card_fact_label>
             <AdminComponents.card_fact_value title={@routing_readiness.reason}>
               {@routing_readiness.label}
             </AdminComponents.card_fact_value>
@@ -403,10 +406,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 aria-expanded={aria_bool(@panel_view == :pools)}
                 aria-label={pools_panel_trigger_label(@panel_view, @account.assignments)}
               >
-                <span class="sr-only">Pools</span>
+                <span class="sr-only">{gettext("Pools")}</span>
               </button>
               <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
-                Pools
+                {gettext("Pools")}
               </span>
             </AdminComponents.card_fact_label>
             <AdminComponents.card_fact_value
@@ -436,10 +439,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 aria-expanded={aria_bool(@panel_view == :tokens)}
                 aria-label={tokens_panel_trigger_label(@panel_view)}
               >
-                <span class="sr-only">Tokens/5m</span>
+                <span class="sr-only">{gettext("Tokens/5m")}</span>
               </button>
               <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
-                tokens/<span class="normal-case">5m</span>
+                {gettext("tokens/5m")}
               </span>
             </AdminComponents.card_fact_label>
             <AdminComponents.card_fact_value
@@ -490,7 +493,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       id={@id}
       patch={@editor_path}
       data-role="upstream-account-pool-assignment"
-      aria-label={"Edit #{@assignment.pool_label} upstream assignments"}
+      aria-label={gettext("Edit %{pool} upstream assignments", pool: @assignment.pool_label)}
       class="saved-reset-open-gloss relative grid min-w-0 gap-1.5 overflow-hidden rounded border border-transparent px-2 py-1.5 transition-colors hover:border-primary/25 hover:bg-primary/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
       <.pool_assignment_content
@@ -563,8 +566,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp saved_resets(%{saved_resets: saved_resets}), do: saved_resets
-  defp saved_resets(%{identity: identity}), do: SavedResets.snapshot(identity)
-  defp saved_resets(_account), do: SavedResets.snapshot(nil)
+  defp saved_resets(%{identity: identity}), do: SavedResetProjection.snapshot(identity, DateTimeDisplay.preferences_for_user(nil))
+  defp saved_resets(_account), do: SavedResetProjection.snapshot(nil, DateTimeDisplay.preferences_for_user(nil))
 
   defp saved_reset_policy(%{saved_reset_policy: saved_reset_policy}), do: saved_reset_policy
   defp saved_reset_policy(%{identity: identity}), do: SavedResets.auto_policy(identity)
@@ -580,27 +583,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     case credential_expiry do
       %{state: "known_future", expires_at: %DateTime{} = expires_at} ->
         %{
-          label: "Access token expires #{credential_expiry_label(credential_expiry)}",
+          label: gettext("Access token expires %{age}", age: credential_expiry_label(credential_expiry)),
           title: DateTimeDisplay.format_datetime(expires_at, preferences)
         }
 
       %{state: "known_past", expires_at: %DateTime{} = expires_at} ->
         %{
-          label: "Access token expired #{credential_expiry_label(credential_expiry)}",
+          label: gettext("Access token expired %{age}", age: credential_expiry_label(credential_expiry)),
           title: DateTimeDisplay.format_datetime(expires_at, preferences)
         }
 
       _unavailable ->
-        %{label: "Access token expiry unavailable", title: nil}
+        %{label: gettext("Access token expiry unavailable"), title: nil}
     end
   end
 
   defp auth_expiration(_account, _preferences),
-    do: %{label: "Access token expiry unavailable", title: nil}
+    do: %{label: gettext("Access token expiry unavailable"), title: nil}
 
   @spec credential_expiry_label(map()) :: String.t()
   defp credential_expiry_label(%{age: age}) when is_binary(age) and age != "", do: age
-  defp credential_expiry_label(_credential_expiry), do: "at an unknown time"
+  defp credential_expiry_label(_credential_expiry), do: gettext("at an unknown time")
 
   defp normalize_panel_view(:tokens, _saved_resets, _account), do: :tokens
 
@@ -658,7 +661,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{@account.label}"}
+        aria-label={gettext("Actions for %{label}", label: @account.label)}
         title={actions_menu_title(@account)}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
@@ -671,7 +674,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"rename-upstream-account-#{@account.identity.id}"}
             icon="hero-pencil-square"
-            label="Rename"
+            label={gettext("Rename")}
             phx-click="open_rename_account"
             phx-value-id={@account.identity.id}
             disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
@@ -682,7 +685,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"pause-upstream-account-#{@account.identity.id}"}
             icon="hero-pause"
-            label="Pause"
+            label={gettext("Pause")}
             variant={:warning}
             phx-click="pause_account"
             phx-value-id={@account.identity.id}
@@ -694,7 +697,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"reactivate-upstream-account-#{@account.identity.id}"}
             icon="hero-play"
-            label="Reactivate"
+            label={gettext("Reactivate")}
             variant={:positive}
             phx-click="reactivate_account"
             phx-value-id={@account.identity.id}
@@ -706,7 +709,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"replace-auth-json-upstream-account-#{@account.identity.id}"}
             icon="hero-document-arrow-up"
-            label="Replace auth.json"
+            label={gettext("Replace auth.json")}
             phx-click="open_import_auth_json"
             phx-value-pool-id={@recovery_default_pool_id}
           />
@@ -715,7 +718,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"oauth-relink-upstream-account-#{@account.identity.id}"}
             icon="hero-link"
-            label="Relink account"
+            label={gettext("Relink account")}
             phx-click="open_oauth_relink"
             phx-value-id={@account.identity.id}
             disabled={!@oauth_relink_available?}
@@ -727,23 +730,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             :if={@recovery_reinvite_path}
             id={"reinvite-upstream-account-#{@account.identity.id}"}
             icon="hero-user-plus"
-            label="Reinvite account"
+            label={gettext("Reinvite account")}
             navigate={@recovery_reinvite_path}
           />
           <AdminComponents.dropdown_action_item
             :if={!@recovery_reinvite_path}
             id={"reinvite-upstream-account-#{@account.identity.id}"}
             icon="hero-user-plus"
-            label="Reinvite account"
+            label={gettext("Reinvite account")}
             disabled
-            title="Assign this account to a visible Pool before creating a reinvite."
+            title={gettext("Assign this account to a visible Pool before creating a reinvite.")}
           />
         </li>
         <li :if={@account.identity.status != "deleted"}>
           <AdminComponents.dropdown_action_item
             id={"refresh-upstream-account-#{@account.identity.id}"}
             icon="hero-arrow-path"
-            label="Refresh token"
+            label={gettext("Refresh token")}
             phx-click="refresh_account"
             phx-value-id={@account.identity.id}
             disabled={@assignment_unavailable_reason != nil or !refreshable?(@account.identity.status)}
@@ -754,7 +757,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"provider-credits-policy-upstream-account-#{@account.identity.id}"}
             icon="hero-currency-dollar"
-            label="Provider credits"
+            label={gettext("Provider credits")}
             phx-click={JS.push_focus() |> JS.push("open_provider_credits_policy")}
             phx-value-id={@account.identity.id}
             aria-controls="provider-credits-policy-dialog"
@@ -765,7 +768,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"saved-reset-policy-upstream-account-#{@account.identity.id}"}
             icon="hero-building-library-micro"
-            label="Saved resets"
+            label={gettext("Saved resets")}
             phx-click="open_saved_reset_policy"
             phx-value-id={@account.identity.id}
             disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
@@ -776,7 +779,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <AdminComponents.dropdown_action_item
             id={"delete-upstream-account-#{@account.identity.id}"}
             icon="hero-trash"
-            label="Delete"
+            label={gettext("Delete")}
             variant={:danger}
             phx-click="open_delete_account"
             phx-value-id={@account.identity.id}
@@ -790,15 +793,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp delete_unavailable_reason(%{deletion_state: :in_progress}),
-    do: "Account deletion is already in progress."
+    do: gettext("Account deletion is already in progress.")
 
   defp delete_unavailable_reason(%{can_delete?: true}), do: nil
 
   defp delete_unavailable_reason(%{assignments: [_ | _]}),
-    do: "Remove this account from all Pools before deleting it."
+    do: gettext("Remove this account from all Pools before deleting it.")
 
   defp delete_unavailable_reason(_account),
-    do: "You do not have permission to permanently delete this account."
+    do: gettext("You do not have permission to permanently delete this account.")
 
   defp actions_menu_title(%{identity: %{status: "deleted"}} = account),
     do: delete_unavailable_reason(account)
@@ -818,27 +821,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       id={account_plan_label_id(@account, @account_index)}
       label={@account.plan_label}
       class="self-center"
-      aria-label={"Account plan: #{@account.plan_label}"}
+      aria-label={gettext("Account plan: %{plan}", plan: @account.plan_label)}
     />
     <AdminComponents.diagnostic_popover
       :if={!@account.plan_reported?}
       id={account_plan_label_id(@account, @account_index)}
-      label="Account did not report plan or quota details"
-      title="Plan and quota not reported"
-      description="This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch."
+      label={gettext("Account did not report plan or quota details")}
+      title={gettext("Plan and quota not reported")}
+      description={gettext("This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch.")}
       placement={:end}
     />
     """
   end
 
-  defp pool_assignment_summary_label([_assignment]), do: "1 routing lane"
-  defp pool_assignment_summary_label(assignments), do: "#{length(assignments)} routing lanes"
+  defp pool_assignment_summary_label(assignments),
+    do: ngettext("%{count} routing lane", "%{count} routing lanes", length(assignments))
 
   # The footer cell below already carries the window's token total, so the
   # panel summary adds what nothing else shows: the settled spend.
   defp tokens_panel_summary(leaderboard) do
     total_cost_micros = leaderboard |> Enum.map(& &1.cost_micros) |> Enum.sum()
-    "#{model_count_label(length(leaderboard))}, #{Format.money_from_micros(total_cost_micros)}"
+    ngettext("%{count} model, %{cost}", "%{count} models, %{cost}", length(leaderboard), cost: Format.money_from_micros(total_cost_micros))
   end
 
   # A leaderboard of the account's models over the trailing five minutes: one
@@ -909,18 +912,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp model_dom_id(model_id),
     do: model_id |> String.replace(~r/[^A-Za-z0-9_-]+/, "-") |> String.slice(0, 80)
 
-  defp model_count_label(1), do: "1 model"
+  defp tokens_panel_trigger_label(:tokens), do: gettext("Show quota status")
+  defp tokens_panel_trigger_label(_panel_view), do: gettext("Show model usage for the last 5 minutes")
 
-  defp model_count_label(count) when is_integer(count) and count >= 0,
-    do: "#{count} models"
-
-  defp tokens_panel_trigger_label(:tokens), do: "Show quota status"
-  defp tokens_panel_trigger_label(_panel_view), do: "Show model usage for the last 5 minutes"
-
-  defp pools_panel_trigger_label(:pools, _assignments), do: "Show quota status"
+  defp pools_panel_trigger_label(:pools, _assignments), do: gettext("Show quota status")
 
   defp pools_panel_trigger_label(_panel_view, assignments),
-    do: "Show Pool assignments: #{assignment_count_label(assignments)}"
+    do: gettext("Show Pool assignments: %{count_label}", count_label: assignment_count_label(assignments))
 
   # The open panel keeps its trigger cell in the hover tint, so the footer
   # shows which panel the card body is currently disclosing.
@@ -961,10 +959,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp routing_readiness(_account) do
     %{
       state: "unavailable",
-      label: "Routing unavailable",
+      label: gettext("Routing unavailable"),
       tone: :warning,
       routing_ready_now?: false,
-      reason: "Routing readiness is unavailable for this upstream account.",
+      reason: gettext("Routing readiness is unavailable for this upstream account."),
       reason_code: "routing_readiness_unavailable",
       recovery_action: nil
     }
@@ -977,8 +975,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
        ) do
     %{
       id: "upstream-account-#{id}-refresh-failed-warning",
-      title: "Token refresh failed",
-      body: "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked.",
+      title: gettext("Token refresh failed"),
+      body: gettext("This account is excluded from runtime routing until token refresh succeeds or credentials are relinked."),
       reason: lifecycle_reason(account)
     }
   end
@@ -989,8 +987,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
        ) do
     %{
       id: "upstream-account-#{id}-reauth-warning",
-      title: "Reauthentication required",
-      body: "This account is excluded from routing until credentials are replaced.",
+      title: gettext("Reauthentication required"),
+      body: gettext("This account is excluded from routing until credentials are replaced."),
       reason: lifecycle_reason(account)
     }
   end
@@ -1000,7 +998,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   @spec lifecycle_reason(map()) :: String.t() | nil
   defp lifecycle_reason(%{reauth_reason_message: message, reauth_reason_code: code})
        when is_binary(message) and message != "" do
-    "#{code || "token refresh failed"} - #{message}"
+    gettext("%{code} - %{message}", code: code || gettext("token refresh failed"), message: message)
   end
 
   defp lifecycle_reason(%{reauth_reason_code: code}) when is_binary(code) and code != "", do: code
@@ -1008,12 +1006,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   @spec workspace_context_label(map()) :: String.t()
   defp workspace_context_label(%{workspace_label: label}) when is_binary(label) and label != "",
-    do: "Workspace " <> label
+    do: gettext("Workspace %{label}", label: label)
 
   defp workspace_context_label(%{workspace_ref: "legacy"}), do: ""
 
   defp workspace_context_label(%{workspace_ref: ref}) when is_binary(ref) and ref != "",
-    do: "Workspace " <> ref
+    do: gettext("Workspace %{label}", label: ref)
 
   defp workspace_context_label(_account), do: ""
 
@@ -1021,20 +1019,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp workspace_context_title(%{workspace_ref: "legacy"}), do: nil
 
   defp workspace_context_title(%{workspace_ref: ref}) when is_binary(ref) and ref != "",
-    do: "Workspace reference " <> ref
+    do: gettext("Workspace reference %{ref}", ref: ref)
 
   defp workspace_context_title(_account), do: nil
 
-  defp account_status_label(%{deletion_state: :in_progress}), do: "Deletion in progress"
-  defp account_status_label(%{deletion_state: :failed}), do: "Deletion failed - retry Delete"
+  defp account_status_label(%{deletion_state: :in_progress}), do: gettext("Deletion in progress")
+  defp account_status_label(%{deletion_state: :failed}), do: gettext("Deletion failed - retry Delete")
 
-  defp account_status_label(%{identity: %{status: status}}) when is_binary(status) do
-    status
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp account_status_label(%{identity: %{status: status}}) when is_binary(status),
+    do: CockpitFormatting.humanize_state(status)
 
-  defp account_status_label(_account), do: "Unknown"
+  defp account_status_label(_account), do: gettext("Unknown")
 
   defp reported_quota_limits(quota_limits) when is_list(quota_limits) do
     Enum.filter(quota_limits, &reported_quota_limit?/1)
@@ -1064,9 +1059,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"
 
-  defp assignment_count_label([]), do: "No Pools"
-  defp assignment_count_label([_assignment]), do: "1 Pool"
-  defp assignment_count_label(assignments), do: "#{length(assignments)} Pools"
+  defp assignment_count_label([]), do: gettext("No Pools")
+  defp assignment_count_label(assignments), do: ngettext("%{count} Pool", "%{count} Pools", length(assignments))
 
   # Settled tokens this account routed toward the assignment's Pool in the
   # last 5 minutes — same window and ledger rows as the token burn indicator.
@@ -1085,18 +1079,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp assignment_traffic_title(%{pool_label: pool_label} = assignment) do
     case assignment_recent_traffic(assignment) do
       %{request_count: 0} ->
-        "No requests toward #{pool_label} in the last 5 minutes."
+        gettext("No requests toward %{pool} in the last 5 minutes.", pool: pool_label)
 
       %{tokens: tokens, request_count: requests, unknown_request_count: 0} ->
-        "Last 5m toward #{pool_label}: #{Format.token_count(tokens)} settled tokens across #{request_count_label(requests)}."
+        gettext("Last 5m toward %{pool}: %{tokens} across %{requests}.", pool: pool_label, tokens: settled_token_count_label(tokens), requests: request_count_label(requests))
 
       %{tokens: tokens, request_count: requests, unknown_request_count: unknown} ->
-        "Last 5m toward #{pool_label}: #{Format.token_count(tokens)} settled tokens across #{request_count_label(requests)}; usage still missing for #{request_count_label(unknown)}."
+        gettext("Last 5m toward %{pool}: %{tokens} across %{requests}; usage still missing for %{missing}.", pool: pool_label, tokens: settled_token_count_label(tokens), requests: request_count_label(requests), missing: request_count_label(unknown))
     end
   end
 
-  defp request_count_label(1), do: "1 request"
-  defp request_count_label(count), do: "#{count} requests"
+  defp request_count_label(count), do: ngettext("%{count} request", "%{count} requests", count)
+
+  defp settled_token_count_label(tokens),
+    do: ngettext("%{tokens} settled token", "%{tokens} settled tokens", tokens, tokens: Format.token_count(tokens))
 
   defp assignment_recent_traffic(assignment) do
     Map.get(assignment, :recent_traffic) ||
@@ -1104,22 +1100,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp recent_token_count_label(%{token_burn: %{usage_state: :unknown}}),
-    do: "Usage unavailable"
+    do: gettext("Usage unavailable")
 
   defp recent_token_count_label(%{token_burn: %{usage_state: :partial, recent_tokens: tokens}})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)}+ tokens"
+    ngettext("%{tokens}+ token", "%{tokens}+ tokens", tokens, tokens: Format.token_count(tokens))
   end
 
   defp recent_token_count_label(%{token_burn: %{recent_tokens: tokens}})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)} tokens"
+    ngettext("%{tokens} token", "%{tokens} tokens", tokens, tokens: Format.token_count(tokens))
   end
 
-  defp recent_token_count_label(_account), do: "0 tokens"
+  defp recent_token_count_label(_account), do: ngettext("%{count} token", "%{count} tokens", 0)
 
   defp token_burn_title(%{token_burn: %{title: title}}) when is_binary(title), do: title
-  defp token_burn_title(_account), do: "Token usage in the last 5 minutes"
+  defp token_burn_title(_account), do: gettext("Token usage in the last 5 minutes")
 
   defp recent_request_count_label(%{token_burn: %{recent_requests: requests}})
        when is_integer(requests) and requests >= 0 do
@@ -1182,10 +1178,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   @spec oauth_relink_unavailable_reason(map()) :: String.t() | nil
   defp oauth_relink_unavailable_reason(%{identity: %{status: "deleted"}}),
-    do: "Deleted accounts cannot be relinked."
+    do: gettext("Deleted accounts cannot be relinked.")
 
   defp oauth_relink_unavailable_reason(%{assignments: []}),
-    do: "Assign this account to a visible Pool before relinking."
+    do: gettext("Assign this account to a visible Pool before relinking.")
 
   defp oauth_relink_unavailable_reason(_account), do: nil
 

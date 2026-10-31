@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
     <div class="drawer-side z-[70]" data-role="job-detail-drawer-side">
       <label
         for="job-detail-drawer"
-        aria-label="Close job details"
+        aria-label={gettext("Close job details")}
         class="drawer-overlay"
         phx-click="close_job"
       ></label>
@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
         status={job_status(@selected_job)}
         status_class={job_status_class(@selected_job)}
         close_event="close_job"
-        close_label="Close job details"
+        close_label={gettext("Close job details")}
         role="dialog"
         aria_modal={true}
         class="flex min-h-full w-full max-w-md flex-col overflow-hidden border-l border-base-300 bg-base-100 shadow-2xl"
@@ -44,25 +44,25 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
           <section id="job-detail-metadata" class="grid gap-4">
             <div class="grid gap-2">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Metadata
+                {gettext("Metadata")}
               </p>
               <dl class="grid gap-2 text-sm">
-                <.detail_row id="job-detail-job-id" label="Job id" value={@selected_job.id} mono />
-                <.detail_row id="job-detail-worker" label="Worker" value={@selected_job.worker} />
-                <.detail_row id="job-detail-queue" label="Queue" value={@selected_job.queue} />
+                <.detail_row id="job-detail-job-id" label={gettext("Job id")} value={@selected_job.id} mono />
+                <.detail_row id="job-detail-worker" label={gettext("Worker")} value={@selected_job.worker} />
+                <.detail_row id="job-detail-queue" label={gettext("Queue")} value={@selected_job.queue} />
                 <.detail_row
                   id="job-detail-state"
-                  label="State"
+                  label={gettext("State")}
                   value={job_state_label(@selected_job.state)}
                 />
                 <.detail_row
                   id="job-detail-health"
-                  label="Health"
+                  label={gettext("Health")}
                   value={health_label(@selected_job)}
                 />
                 <.detail_row
                   id="job-detail-attempts"
-                  label="Attempts"
+                  label={gettext("Attempts")}
                   value={format_attempts(@selected_job)}
                   mono
                 />
@@ -71,42 +71,42 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
 
             <div class="grid gap-2">
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Timeline
+                {gettext("Timeline")}
               </p>
               <dl class="grid gap-2 text-sm sm:grid-cols-2">
                 <.detail_row
                   id="job-detail-inserted-at"
-                  label="Inserted"
+                  label={pgettext("timestamp label", "Inserted")}
                   value={format_job_timestamp(@selected_job.inserted_at, @datetime_preferences)}
                   mono
                 />
                 <.detail_row
                   id="job-detail-scheduled-at"
-                  label="Scheduled"
+                  label={pgettext("timestamp label", "Scheduled")}
                   value={format_job_timestamp(@selected_job.scheduled_at, @datetime_preferences)}
                   mono
                 />
                 <.detail_row
                   id="job-detail-attempted-at"
-                  label="Attempted"
+                  label={pgettext("timestamp label", "Attempted")}
                   value={format_job_timestamp(@selected_job.attempted_at, @datetime_preferences)}
                   mono
                 />
                 <.detail_row
                   id="job-detail-completed-at"
-                  label="Completed"
+                  label={pgettext("timestamp label", "Completed")}
                   value={format_job_timestamp(@selected_job.completed_at, @datetime_preferences)}
                   mono
                 />
                 <.detail_row
                   id="job-detail-discarded-at"
-                  label="Discarded"
+                  label={pgettext("timestamp label", "Discarded")}
                   value={format_job_timestamp(@selected_job.discarded_at, @datetime_preferences)}
                   mono
                 />
                 <.detail_row
                   id="job-detail-cancelled-at"
-                  label="Cancelled"
+                  label={pgettext("timestamp label", "Cancelled")}
                   value={format_job_timestamp(@selected_job.cancelled_at, @datetime_preferences)}
                   mono
                 />
@@ -118,7 +118,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
           </section>
         <% else %>
           <div class="grid min-h-64 place-items-center text-center text-sm text-base-content/60">
-            Select a job to inspect its details.
+            {gettext("Select a job to inspect its details.")}
           </div>
         <% end %>
       </AdminComponents.object_inspector>
@@ -152,7 +152,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
       id="job-detail-target-summary"
       class="grid gap-2 rounded-box border border-base-300 bg-base-200/45 px-3 py-3"
     >
-      <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">Target summary</p>
+      <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">{gettext("Target summary")}</p>
       <%= if @target do %>
         <p data-role="target-primary" class="break-words text-sm font-medium text-base-content/85">
           {@target.primary}
@@ -165,7 +165,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
           {@target.secondary}
         </p>
       <% else %>
-        <p data-role="target-empty" class="text-sm text-base-content/60">System job</p>
+        <p data-role="target-empty" class="text-sm text-base-content/60">{gettext("System job")}</p>
       <% end %>
     </section>
     """
@@ -182,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
       class="grid gap-2 rounded-box border border-base-300 bg-base-200/45 px-3 py-3"
     >
       <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-        Latest error summary
+        {gettext("Latest error summary")}
       </p>
       <p data-role="failure-title" class="text-sm font-semibold text-error">{@failure.title}</p>
       <p data-role="failure-message" class="break-words text-sm leading-6 text-base-content/75">
@@ -198,27 +198,26 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
         %{title: title, message: message}
 
       _missing ->
-        %{title: "Failure detail", message: "No diagnostic message recorded."}
+        %{title: gettext("Failure detail"), message: gettext("No diagnostic message recorded.")}
     end
   end
 
-  defp health_label(%{attention_state: attention_state}) when is_atom(attention_state) do
-    attention_state
-    |> Atom.to_string()
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp health_label(%{attention_state: attention_state}) when is_atom(attention_state),
+    do: health_label(%{attention_state: Atom.to_string(attention_state)})
 
-  defp health_label(%{attention_state: attention_state}) when is_binary(attention_state) do
-    attention_state
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp health_label(%{attention_state: "healthy"}), do: gettext("Healthy")
+  defp health_label(%{attention_state: "active_failure"}), do: gettext("Active failure")
+  defp health_label(%{attention_state: "retry_pressure"}), do: gettext("Retry pressure")
+  defp health_label(%{attention_state: "stuck_executing"}), do: gettext("Stuck executing")
+  defp health_label(%{attention_state: "backlog_pressure"}), do: gettext("Backlog pressure")
+  defp health_label(%{attention_state: "historical_failure"}), do: gettext("Historical failure")
+  defp health_label(%{attention_state: "idle"}), do: gettext("Idle")
+  defp health_label(%{attention_state: state}) when is_binary(state), do: state |> String.replace("_", " ") |> String.capitalize()
 
-  defp health_label(_job), do: "Unknown"
+  defp health_label(_job), do: gettext("Unknown")
 
-  defp job_title(%{id: id}), do: "Job ##{id}"
-  defp job_title(_job), do: "Job details"
+  defp job_title(%{id: id}), do: gettext("Job #%{id}", id: id)
+  defp job_title(_job), do: gettext("Job details")
 
   defp job_subtitle(%{worker: worker}), do: safe_text(worker)
   defp job_subtitle(_job), do: nil

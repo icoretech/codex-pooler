@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReinviteLink do
 
   @spec path_for_cockpit(map()) :: String.t() | nil
   def path_for_cockpit(%{actions: %{reinvite: action}} = cockpit) do
-    path_for_action(action, default_pool_id(cockpit), [])
+    path_for_action(action, default_pool_id(cockpit), [field(cockpit.identity, :account_email)])
   end
 
   def path_for_cockpit(_cockpit), do: nil

@@ -4,12 +4,14 @@ defmodule CodexPoolerWeb.Observatory.Components.States do
   """
 
   use Phoenix.Component
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.CoreComponents
 
   attr :state, :atom, required: true
 
+  @spec state(map()) :: Phoenix.LiveView.Rendered.t()
   def state(%{state: state} = assigns)
       when state in [:loading, :empty, :stale, :error] do
     assigns = assign(assigns, :state_id, state_id(state))
@@ -33,16 +35,16 @@ defmodule CodexPoolerWeb.Observatory.Components.States do
               class="size-5 shrink-0 text-primary motion-safe:animate-spin"
             />
             <div class="grid gap-0.5">
-              <p class="font-semibold text-base-content">Loading usage</p>
-              <p class="text-base-content/65">Collecting the selected window.</p>
+              <p class="font-semibold text-base-content">{gettext("Loading usage")}</p>
+              <p class="text-base-content/65">{gettext("Collecting the selected window.")}</p>
             </div>
           </div>
         <% :empty -> %>
           <AdminComponents.empty_state
             id="observatory-state-empty-anatomy"
             icon="hero-chart-bar-square"
-            title="No usage in this window"
-            description="Choose another window or wait for new usage to arrive."
+            title={gettext("No usage in this window")}
+            description={gettext("Choose another window or wait for new usage to arrive.")}
           />
         <% :stale -> %>
           <div
@@ -51,8 +53,8 @@ defmodule CodexPoolerWeb.Observatory.Components.States do
           >
             <CoreComponents.icon name="hero-pause" class="mt-0.5 size-5 shrink-0 text-warning" />
             <div class="grid gap-0.5">
-              <p class="font-semibold text-base-content">Updates paused</p>
-              <p class="text-base-content/70">Showing the last known usage.</p>
+              <p class="font-semibold text-base-content">{gettext("Updates paused")}</p>
+              <p class="text-base-content/70">{gettext("Showing the last known usage.")}</p>
             </div>
           </div>
         <% :error -> %>
@@ -65,8 +67,8 @@ defmodule CodexPoolerWeb.Observatory.Components.States do
               class="mt-0.5 size-5 shrink-0 text-error"
             />
             <div class="grid gap-0.5">
-              <p class="font-semibold text-base-content">Usage is temporarily unavailable</p>
-              <p class="text-base-content/70">Try again shortly.</p>
+              <p class="font-semibold text-base-content">{gettext("Usage is temporarily unavailable")}</p>
+              <p class="text-base-content/70">{gettext("Try again shortly.")}</p>
             </div>
           </div>
       <% end %>

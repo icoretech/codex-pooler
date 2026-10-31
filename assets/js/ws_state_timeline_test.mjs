@@ -6,6 +6,7 @@ import {
   connectionFooterParts,
   connectionHint,
   connectionTimelineSteps,
+  connectionVisualLabel,
   displayEndpoint,
   initialConnectionHistory,
   recordRoundTrip,
@@ -260,4 +261,85 @@ test("the action matches the state: retry on fallback, reconnect when down, none
   assert.equal(connectionActionLabel("connecting"), "Reconnect now")
   assert.equal(connectionActionLabel("disconnected"), "Reconnect now")
   assert.equal(connectionActionLabel("websocketConnected"), null)
+})
+
+test("translated relative time retains the compact Latin duration units", () => {
+  const labels = {now: "现在", ago: "%{duration} 前"}
+  assert.equal(wsRelativeTime(T0, T0, labels), "现在")
+  assert.equal(wsRelativeTime(T0 - 42 * SECONDS, T0, labels), "42s 前")
+  assert.equal(wsRelativeTime(T0 - 12 * MINUTES, T0, labels), "12m 前")
+  assert.equal(wsRelativeTime(T0 - (2 * HOURS + 14 * MINUTES), T0, labels), "2h 14m 前")
+  assert.equal(wsRelativeTime(T0 - (3 * DAYS + 5 * HOURS), T0, labels), "3d 5h 前")
+})
+
+test("translated timeline labels interpolate heartbeat and separate retry plural templates", () => {
+  const labels = {
+    now: "现在", ago: "%{duration} 前",
+    websocketConnected: "WebSocket 已连接",
+    heartbeatHealthy: "心跳正常 · %{milliseconds}ms",
+    websocketClosed: "WebSocket 已关闭",
+    longPollingDropped: "长轮询已断开",
+    websocketFailed: "WebSocket 连接失败",
+    longPollingActive: "长轮询已启用",
+    longPollingActiveRtt: "长轮询已启用 · %{milliseconds}ms",
+    retriesOne: "%{retries} 次重试失败（单次）",
+    retriesOther: "%{retries} 次重试失败（多次）",
+    reconnecting: "正在重新连接 · 第 %{attempt} 次尝试",
+    connecting: "正在连接实时更新",
+    offlineStale: "离线 · 数据可能已过期",
+  }
+  let history = trackConnectionTransition(initialConnectionHistory(), "websocketConnected", T0 - 10 * SECONDS)
+  history = recordRoundTrip(history, 55, T0 - 5 * SECONDS)
+  assert.deepEqual(connectionTimelineSteps("websocketConnected", history, T0, labels).map(({text, time}) => [text, time]), [
+    ["WebSocket 已连接", "10s 前"], ["心跳正常 · 55ms", "5s 前"],
+  ])
+
+  history = trackConnectionTransition(history, "connecting", T0 - 3 * SECONDS)
+  history = recordSocketError(history)
+  assert.deepEqual(connectionTimelineSteps("connecting", history, T0, labels).map(({text}) => text), [
+    "WebSocket 已关闭", "1 次重试失败（单次）", "正在重新连接 · 第 2 次尝试",
+  ])
+  history = recordSocketError(history)
+  assert.deepEqual(connectionTimelineSteps("disconnected", history, T0, labels).map(({text}) => text), [
+    "WebSocket 已关闭", "2 次重试失败（多次）", "离线 · 数据可能已过期",
+  ])
+  history = trackConnectionTransition(history, "longPollFallback", T0)
+  assert.deepEqual(connectionTimelineSteps("longPollFallback", history, T0, labels).map(({text}) => text), [
+    "WebSocket 连接失败", "长轮询已启用",
+  ])
+  history = recordRoundTrip(history, 184, T0)
+  assert.equal(connectionTimelineSteps("longPollFallback", history, T0, labels)[1].text, "长轮询已启用 · 184ms")
+  history = trackConnectionTransition(history, "disconnected", T0)
+  assert.equal(connectionTimelineSteps("disconnected", history, T0, labels)[0].text, "长轮询已断开")
+  assert.equal(connectionTimelineSteps("connecting", initialConnectionHistory(), T0, labels)[0].text, "正在连接实时更新")
+})
+
+test("translated indicator names, hints, footer and actions keep transport state unchanged", () => {
+  const labels = {
+    connectingLabel: "实时更新：正在同步", connectedLabel: "实时更新：实时",
+    fallbackLabel: "实时更新：备用连接", disconnectedLabel: "实时更新：离线",
+    fallbackHint: "通过轮询接收更新。", connectingHint: "重新连接后继续刷新。",
+    keepalive: "连接保活 %{seconds}s", keepaliveDefault: "默认连接保活",
+    networkOnline: "网络：在线", networkOffline: "网络：离线",
+    retryWebsocket: "重试 WebSocket", reconnectNow: "立即重新连接",
+  }
+  for (const [visual, fallback, translated] of [
+    ["connecting", "Live updates: syncing", "实时更新：正在同步"],
+    ["websocketConnected", "Live updates: live", "实时更新：实时"],
+    ["longPollFallback", "Live updates: fallback connection", "实时更新：备用连接"],
+    ["disconnected", "Live updates: offline", "实时更新：离线"],
+  ]) {
+    assert.equal(connectionVisualLabel(visual), fallback)
+    assert.equal(connectionVisualLabel(visual, labels), translated)
+  }
+  assert.equal(connectionHint("longPollFallback", labels), "通过轮询接收更新。")
+  assert.equal(connectionHint("connecting", labels), "重新连接后继续刷新。")
+  assert.equal(connectionHint("websocketConnected", labels), null)
+  assert.deepEqual(connectionFooterParts("websocketConnected", {endPoint: "/live/websocket", heartbeatIntervalMs: 30000}, labels), {meta: "/live", detail: "连接保活 30s"})
+  assert.equal(connectionFooterParts("longPollFallback", {}, labels).detail, "默认连接保活")
+  assert.equal(connectionFooterParts("disconnected", {online: true}, labels).meta, "网络：在线")
+  assert.equal(connectionFooterParts("disconnected", {online: false}, labels).meta, "网络：离线")
+  assert.equal(connectionActionLabel("longPollFallback", labels), "重试 WebSocket")
+  assert.equal(connectionActionLabel("connecting", labels), "立即重新连接")
+  assert.equal(connectionActionLabel("websocketConnected", labels), null)
 })

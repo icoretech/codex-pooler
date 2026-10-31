@@ -47,6 +47,19 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     refute login_html =~ ~s(name="user[recovery_code]")
   end
 
+  test "Chinese locale translates the login entry surface", %{conn: conn} do
+    bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+
+    html =
+      conn
+      |> put_locale("zh-CN")
+      |> get(~p"/login")
+      |> html_response(200)
+
+    assert html =~ "登录"
+    assert html =~ "电子邮件"
+  end
+
   test "public auth pages render specific document titles", %{conn: conn} do
     conn = get(conn, ~p"/bootstrap")
     assert extracted_page_title(html_response(conn, 200)) == "Bootstrap - Codex Pooler"
@@ -61,6 +74,17 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
     assert extracted_page_title(html_response(conn, 200)) ==
              "Choose a private password - Codex Pooler"
+  end
+
+  test "Chinese locale translates the bootstrap entry surface", %{conn: conn} do
+    html =
+      conn
+      |> put_locale("zh-CN")
+      |> get(~p"/bootstrap")
+      |> html_response(200)
+
+    assert html =~ "引导设置"
+    assert html =~ "创建所有者"
   end
 
   test "invalid login redirects back with the shared safe error alert", %{conn: conn} do
@@ -575,6 +599,23 @@ defmodule CodexPoolerWeb.AuthControllerTest do
         assert Accounts.get_user_by_email_and_password(user.email, valid_user_password())
         refute Accounts.get_user_by_email_and_password(user.email, "new-bootstrap-pass-456")
       end
+    end
+
+    test "Chinese locale translates forced password change and length errors", %{conn: conn} do
+      %{user: user, token: token} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      user = update_user(user, %{password_change_required: true})
+
+      conn = conn |> log_in_user(user, token) |> put_locale("zh-CN")
+      {:ok, view, _html} = live(conn, ~p"/password/change-required")
+
+      assert has_element?(view, "h1", "设置专用密码")
+      assert has_element?(view, "#password-change-form", "确认新密码")
+
+      view
+      |> element("#password-change-form")
+      |> render_submit(%{"user" => %{"new_password" => "short", "new_password_confirmation" => "short"}})
+
+      assert has_element?(view, "#flash-error", "长度应至少为 8 个字符")
     end
 
     @tag :forced_password_change

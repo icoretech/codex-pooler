@@ -1,0 +1,467 @@
+msgid ""
+msgstr ""
+"Language: zh_CN\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+## This is a PO Template file.
+##
+## `msgid`s here are often extracted from source code.
+## Add new translations manually only if they're dynamic
+## translations that can't be statically extracted.
+##
+## Run `mix gettext.extract` to bring this file up to
+## date. Leave `msgstr`s empty as changing them here has no
+## effect: edit them in PO (`.po`) files instead.
+## From Ecto.Changeset.cast/4
+msgid "can't be blank"
+msgstr "不能为空"
+
+## From Ecto.Changeset.unique_constraint/3
+msgid "has already been taken"
+msgstr "已被使用"
+
+## From Ecto.Changeset.put_change/3
+msgid "is invalid"
+msgstr "无效"
+
+## From Ecto.Changeset.validate_acceptance/3
+msgid "must be accepted"
+msgstr "必须接受"
+
+## From Ecto.Changeset.validate_format/3
+msgid "has invalid format"
+msgstr "格式无效"
+
+## From Ecto.Changeset.validate_subset/3
+msgid "has an invalid entry"
+msgstr "包含无效条目"
+
+## From Ecto.Changeset.validate_exclusion/3
+msgid "is reserved"
+msgstr "为保留值"
+
+## From Ecto.Changeset.validate_confirmation/3
+msgid "does not match confirmation"
+msgstr "与确认值不一致"
+
+## From Ecto.Changeset.no_assoc_constraint/3
+msgid "is still associated with this entry"
+msgstr "仍与此条目关联"
+
+msgid "are still associated with this entry"
+msgstr "仍与此条目关联"
+
+## From Ecto.Changeset.validate_length/3
+msgid "should have %{count} item(s)"
+msgid_plural "should have %{count} item(s)"
+msgstr[0] "应包含 %{count} 个条目"
+
+msgid "should be %{count} character(s)"
+msgid_plural "should be %{count} character(s)"
+msgstr[0] "长度应为 %{count} 个字符"
+
+msgid "should be %{count} byte(s)"
+msgid_plural "should be %{count} byte(s)"
+msgstr[0] "长度应为 %{count} 个字节"
+
+msgid "should have at least %{count} item(s)"
+msgid_plural "should have at least %{count} item(s)"
+msgstr[0] "应至少包含 %{count} 个条目"
+
+msgid "should be at least %{count} character(s)"
+msgid_plural "should be at least %{count} character(s)"
+msgstr[0] "长度应至少为 %{count} 个字符"
+
+msgid "should be at least %{count} byte(s)"
+msgid_plural "should be at least %{count} byte(s)"
+msgstr[0] "长度应至少为 %{count} 个字节"
+
+msgid "should have at most %{count} item(s)"
+msgid_plural "should have at most %{count} item(s)"
+msgstr[0] "应最多包含 %{count} 个条目"
+
+msgid "should be at most %{count} character(s)"
+msgid_plural "should be at most %{count} character(s)"
+msgstr[0] "长度应最多为 %{count} 个字符"
+
+msgid "should be at most %{count} byte(s)"
+msgid_plural "should be at most %{count} byte(s)"
+msgstr[0] "长度应最多为 %{count} 个字节"
+
+## From Ecto.Changeset.validate_number/3
+msgid "must be less than %{number}"
+msgstr "必须小于 %{number}"
+
+msgid "must be greater than %{number}"
+msgstr "必须大于 %{number}"
+
+msgid "must be less than or equal to %{number}"
+msgstr "必须小于或等于 %{number}"
+
+msgid "must be greater than or equal to %{number}"
+msgstr "必须大于或等于 %{number}"
+
+msgid "must be equal to %{number}"
+msgstr "必须等于 %{number}"
+
+#: lib/codex_pooler_web/validation_messages.ex:75
+#, elixir-autogen, elixir-format
+msgid "Channel changed since you opened it. Reopen it to review the latest values"
+msgstr "渠道在打开后已更改。请重新打开以查看最新值"
+
+#: lib/codex_pooler_web/validation_messages.ex:76
+#, elixir-autogen, elixir-format
+msgid "Channel could not be saved"
+msgstr "无法保存渠道"
+
+#: lib/codex_pooler_web/validation_messages.ex:74
+#, elixir-autogen, elixir-format
+msgid "Channel is not available"
+msgstr "渠道不可用"
+
+#: lib/codex_pooler_web/validation_messages.ex:72
+#, elixir-autogen, elixir-format
+msgid "Delivery channel is not available"
+msgstr "投递渠道不可用"
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/bulkhead_editor.ex:280
+#, elixir-autogen, elixir-format
+msgid "Must be %{minimum} or more"
+msgstr "必须大于或等于 %{minimum}"
+
+#: lib/codex_pooler_web/validation_messages.ex:69
+#, elixir-autogen, elixir-format
+msgid "Pool is not available"
+msgstr "Pool 不可用"
+
+#: lib/codex_pooler_web/validation_messages.ex:71
+#, elixir-autogen, elixir-format
+msgid "Rule changed since you opened it. Reopen it to review the latest values"
+msgstr "规则在打开后已更改。请重新打开以查看最新值"
+
+#: lib/codex_pooler_web/validation_messages.ex:73
+#, elixir-autogen, elixir-format
+msgid "Rule could not be saved"
+msgstr "无法保存规则"
+
+#: lib/codex_pooler_web/validation_messages.ex:70
+#, elixir-autogen, elixir-format
+msgid "Rule is not available"
+msgstr "规则不可用"
+
+#: lib/codex_pooler_web/validation_messages.ex:82
+#, elixir-autogen, elixir-format
+msgid "Codex API-key auth.json is not supported"
+msgstr "不支持 Codex API 密钥 auth.json"
+
+#: lib/codex_pooler_web/validation_messages.ex:91
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json access token is expired"
+msgstr "Codex auth.json 访问 Token 已过期"
+
+#: lib/codex_pooler_web/validation_messages.ex:87
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json contains an invalid access_token"
+msgstr "Codex auth.json 包含无效的 access_token"
+
+#: lib/codex_pooler_web/validation_messages.ex:86
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json contains an invalid id_token"
+msgstr "Codex auth.json 包含无效的 id_token"
+
+#: lib/codex_pooler_web/validation_messages.ex:81
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is malformed"
+msgstr "Codex auth.json 格式错误"
+
+#: lib/codex_pooler_web/validation_messages.ex:85
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing ChatGPT token data"
+msgstr "Codex auth.json 缺少 ChatGPT Token 数据"
+
+#: lib/codex_pooler_web/validation_messages.ex:89
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing access_token"
+msgstr "Codex auth.json 缺少 access_token"
+
+#: lib/codex_pooler_web/validation_messages.ex:92
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing account identity"
+msgstr "Codex auth.json 缺少账号身份"
+
+#: lib/codex_pooler_web/validation_messages.ex:88
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing id_token"
+msgstr "Codex auth.json 缺少 id_token"
+
+#: lib/codex_pooler_web/validation_messages.ex:90
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing refresh_token"
+msgstr "Codex auth.json 缺少 refresh_token"
+
+#: lib/codex_pooler_web/validation_messages.ex:79
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is required"
+msgstr "需要 Codex auth.json"
+
+#: lib/codex_pooler_web/validation_messages.ex:80
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json must be a JSON object"
+msgstr "Codex auth.json 必须是 JSON 对象"
+
+#: lib/codex_pooler_web/validation_messages.ex:84
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json must contain ChatGPT token auth"
+msgstr "Codex auth.json 必须包含 ChatGPT Token 授权"
+
+#: lib/codex_pooler_web/validation_messages.ex:83
+#, elixir-autogen, elixir-format
+msgid "Codex personal access token auth.json is not supported in this cycle"
+msgstr "当前周期不支持 Codex 个人访问 Token auth.json"
+
+#: lib/codex_pooler_web/validation_messages.ex:33
+#, elixir-autogen, elixir-format
+msgid "account was not selected"
+msgstr "未选择账号"
+
+#: lib/codex_pooler_web/validation_messages.ex:21
+#, elixir-autogen, elixir-format
+msgid "already has an active invite for this Pool"
+msgstr "此 Pool 已有有效邀请"
+
+#: lib/codex_pooler_web/validation_messages.ex:25
+#, elixir-autogen, elixir-format
+msgid "cannot be set when exact reasoning effort is enforced"
+msgstr "强制使用确切推理强度时不能设置"
+
+#: lib/codex_pooler_web/validation_messages.ex:54
+#, elixir-autogen, elixir-format
+msgid "contains an invalid IP or CIDR rule"
+msgstr "包含无效的 IP 或 CIDR 规则"
+
+#: lib/codex_pooler_web/validation_messages.ex:31
+#, elixir-autogen, elixir-format
+msgid "contains unexpected fields"
+msgstr "包含意外字段"
+
+#: lib/codex_pooler_web/validation_messages.ex:61
+#, elixir-autogen, elixir-format
+msgid "could not be stored"
+msgstr "无法存储"
+
+#: lib/codex_pooler_web/validation_messages.ex:42
+#, elixir-autogen, elixir-format
+msgid "does not exist in %{timezone} because the clocks move forward"
+msgstr "由于时钟向前调整，该时间在 %{timezone} 中不存在"
+
+#: lib/codex_pooler_web/validation_messages.ex:96
+#, elixir-autogen, elixir-format
+msgid "instance setting secret operation failed"
+msgstr "实例设置密钥操作失败"
+
+#: lib/codex_pooler_web/validation_messages.ex:66
+#, elixir-autogen, elixir-format
+msgid "is not supported for this rule kind"
+msgstr "此规则类型不支持"
+
+#: lib/codex_pooler_web/validation_messages.ex:58
+#, elixir-autogen, elixir-format
+msgid "is only available for email channels"
+msgstr "仅适用于电子邮件渠道"
+
+#: lib/codex_pooler_web/validation_messages.ex:35
+#, elixir-autogen, elixir-format
+msgid "is required"
+msgstr "必填"
+
+#: lib/codex_pooler_web/validation_messages.ex:24
+#, elixir-autogen, elixir-format
+msgid "is required for model policy bindings"
+msgstr "模型策略绑定必须提供"
+
+#: lib/codex_pooler_web/validation_messages.ex:28
+#, elixir-autogen, elixir-format
+msgid "labels must be a list of strings"
+msgstr "labels 必须是字符串列表"
+
+#: lib/codex_pooler_web/validation_messages.ex:48
+#, elixir-autogen, elixir-format
+msgid "must be 0 unless forwarded client IP source is X-Forwarded-For"
+msgstr "除非转发客户端 IP 来源为 X-Forwarded-For，否则必须为 0"
+
+#: lib/codex_pooler_web/validation_messages.ex:34
+#, elixir-autogen, elixir-format
+msgid "must be a boolean"
+msgstr "必须是布尔值"
+
+#: lib/codex_pooler_web/validation_messages.ex:26
+#, elixir-autogen, elixir-format
+msgid "must be a list of non-empty strings"
+msgstr "必须是非空字符串列表"
+
+#: lib/codex_pooler_web/validation_messages.ex:93
+#, elixir-autogen, elixir-format
+msgid "must be a map"
+msgstr "必须是映射"
+
+#: lib/codex_pooler_web/validation_messages.ex:27
+#, elixir-autogen, elixir-format
+msgid "must be a non-empty model identifier without whitespace"
+msgstr "必须是无空格的非空模型标识符"
+
+#: lib/codex_pooler_web/validation_messages.ex:30
+#, elixir-autogen, elixir-format
+msgid "must be a policy form"
+msgstr "必须为策略表单"
+
+#: lib/codex_pooler_web/validation_messages.ex:40
+#, elixir-autogen, elixir-format
+msgid "must be a positive whole number"
+msgstr "必须是正整数"
+
+#: lib/codex_pooler_web/validation_messages.ex:15
+#, elixir-autogen, elixir-format
+msgid "must be a valid IANA time zone"
+msgstr "必须是有效的 IANA 时区"
+
+#: lib/codex_pooler_web/validation_messages.ex:44
+#, elixir-autogen, elixir-format
+msgid "must be a valid date and time"
+msgstr "必须是有效的日期和时间"
+
+#: lib/codex_pooler_web/validation_messages.ex:20
+#, elixir-autogen, elixir-format
+msgid "must be a valid email"
+msgstr "必须是有效的电子邮件"
+
+#: lib/codex_pooler_web/validation_messages.ex:19
+#, elixir-autogen, elixir-format
+msgid "must be a valid email address"
+msgstr "必须是有效的电子邮件地址"
+
+#: lib/codex_pooler_web/validation_messages.ex:62
+#, elixir-autogen, elixir-format
+msgid "must be a valid host"
+msgstr "必须是有效的主机"
+
+#: lib/codex_pooler_web/validation_messages.ex:60
+#, elixir-autogen, elixir-format
+msgid "must be a valid https URL"
+msgstr "必须是有效的 HTTPS URL"
+
+#: lib/codex_pooler_web/validation_messages.ex:22
+#, elixir-autogen, elixir-format
+msgid "must be an active Pool"
+msgstr "必须是启用的 Pool"
+
+#: lib/codex_pooler_web/validation_messages.ex:65
+#, elixir-autogen, elixir-format
+msgid "must be blank"
+msgstr "必须为空"
+
+#: lib/codex_pooler_web/validation_messages.ex:23
+#, elixir-autogen, elixir-format
+msgid "must be empty for default policy bindings"
+msgstr "默认策略绑定必须为空"
+
+#: lib/codex_pooler_web/validation_messages.ex:39
+#, elixir-autogen, elixir-format
+msgid "must be enabled or disabled"
+msgstr "必须启用或停用"
+
+#: lib/codex_pooler_web/validation_messages.ex:53
+#, elixir-autogen, elixir-format
+msgid "must be less than or equal to %{number}, a third of the owner lease TTL"
+msgstr "必须小于或等于 %{number}，即所有者租约 TTL 的三分之一"
+
+#: lib/codex_pooler_web/validation_messages.ex:50
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP is enabled"
+msgstr "启用 SMTP 时必须提供"
+
+#: lib/codex_pooler_web/validation_messages.ex:52
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP password is set"
+msgstr "设置 SMTP 密码时必须提供"
+
+#: lib/codex_pooler_web/validation_messages.ex:51
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP username is set"
+msgstr "设置 SMTP 用户名时必须提供"
+
+#: lib/codex_pooler_web/validation_messages.ex:49
+#, elixir-autogen, elixir-format
+msgid "must be the public app URL without /login"
+msgstr "必须是不带 /login 的公开应用 URL"
+
+#: lib/codex_pooler_web/validation_messages.ex:18
+#, elixir-autogen, elixir-format
+msgid "must contain only lowercase letters, numbers, and hyphens"
+msgstr "只能包含小写字母、数字和连字符"
+
+#: lib/codex_pooler_web/validation_messages.ex:56
+#, elixir-autogen, elixir-format
+msgid "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
+msgstr "必须包含正数 max_concurrency、非负 queue_limit 和正数 queue_timeout_ms"
+
+#: lib/codex_pooler_web/validation_messages.ex:14
+#, elixir-autogen, elixir-format
+msgid "must have the @ sign and no spaces"
+msgstr "必须包含 @ 符号且不能有空格"
+
+#: lib/codex_pooler_web/validation_messages.ex:55
+#, elixir-autogen, elixir-format
+msgid "must include exactly the known route classes"
+msgstr "必须准确包含已知路由类别"
+
+#: lib/codex_pooler_web/validation_messages.ex:57
+#, elixir-autogen, elixir-format
+msgid "must map non-empty model ids to positive integers"
+msgstr "必须将非空模型 ID 映射为正整数"
+
+#: lib/codex_pooler_web/validation_messages.ex:64
+#, elixir-autogen, elixir-format
+msgid "must not include query strings or fragments"
+msgstr "不能包含查询字符串或片段"
+
+#: lib/codex_pooler_web/validation_messages.ex:63
+#, elixir-autogen, elixir-format
+msgid "must start with /"
+msgstr "必须以 / 开头"
+
+#: lib/codex_pooler_web/validation_messages.ex:59
+#, elixir-autogen, elixir-format
+msgid "must use https"
+msgstr "必须使用 HTTPS"
+
+#: lib/codex_pooler_web/validation_messages.ex:43
+#, elixir-autogen, elixir-format
+msgid "needs a valid account timezone"
+msgstr "需要有效的账号时区"
+
+#: lib/codex_pooler_web/validation_messages.ex:41
+#, elixir-autogen, elixir-format
+msgid "occurs twice in %{timezone}; choose a time outside the repeated hour"
+msgstr "在 %{timezone} 中出现两次；请选择重复小时之外的时间"
+
+#: lib/codex_pooler_web/validation_messages.ex:36
+#, elixir-autogen, elixir-format
+msgid "only the provider credits control may be changed"
+msgstr "只能更改服务商额度控制项"
+
+#: lib/codex_pooler_web/validation_messages.ex:29
+#, elixir-autogen, elixir-format
+msgid "operator_notes must be a string"
+msgstr "operator_notes 必须是字符串"
+
+#: lib/codex_pooler_web/validation_messages.ex:32
+#, elixir-autogen, elixir-format
+msgid "type the account label exactly"
+msgstr "请准确输入账号标签"
+
+#: lib/codex_pooler_web/validation_messages.ex:47
+#, elixir-autogen, elixir-format
+msgid "was updated by another operator"
+msgstr "已被其他运营者更新"

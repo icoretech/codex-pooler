@@ -108,6 +108,17 @@ defmodule CodexPooler.Accounts.OperatorManagement do
 
   def update_current_operator_profile(_user, _attrs, _metadata), do: {:error, :invalid_session}
 
+  @spec update_user_locale(User.t(), String.t() | nil) ::
+          {:ok, User.t()} | {:error, Ecto.Changeset.t() | :database_failed}
+  def update_user_locale(%User{} = user, locale) do
+    user
+    |> User.locale_changeset(%{locale: locale})
+    |> put_change(:updated_at, DateTime.utc_now())
+    |> Repo.update(stale_error_field: :locale)
+  rescue
+    _error in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :database_failed}
+  end
+
   @spec deactivate_operator(Scope.t() | User.t(), User.t() | Ecto.UUID.t(), map(), map()) ::
           {:ok, User.t()} | {:error, Ecto.Changeset.t() | atom()}
   def deactivate_operator(actor, operator, attrs, metadata \\ %{})

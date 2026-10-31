@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Router do
     }
 
     plug :fetch_current_scope_for_user
+    plug CodexPoolerWeb.Plugs.Locale
     plug :admin_browser_admission
   end
 
@@ -25,6 +26,7 @@ defmodule CodexPoolerWeb.Router do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
+    plug CodexPoolerWeb.Plugs.Locale
     plug :put_browser_root_layout
     plug :protect_from_forgery
 
@@ -58,9 +60,11 @@ defmodule CodexPoolerWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    post "/locale", LocaleController, :create
 
     live_session :current_user,
-      on_mount: [{CodexPoolerWeb.UserAuth, :mount_current_scope}] do
+      session: {CodexPoolerWeb.Locale, :live_session, []},
+      on_mount: [{CodexPoolerWeb.Locale, :assign_locale}, {CodexPoolerWeb.UserAuth, :mount_current_scope}] do
       live "/bootstrap", AuthLive.Bootstrap, :new
       live "/login", AuthLive.Login, :new
       live "/onboarding/invites/:invite_token", OnboardingLive.Invite, :show
@@ -87,7 +91,7 @@ defmodule CodexPoolerWeb.Router do
 
     live_session :observatory,
       session: {CodexPoolerWeb.ObservatoryAuth, :live_session, []},
-      on_mount: [{CodexPoolerWeb.ObservatoryAuth, :require_authenticated}] do
+      on_mount: [{CodexPoolerWeb.Locale, :assign_locale}, {CodexPoolerWeb.ObservatoryAuth, :require_authenticated}] do
       live "/", ObservatoryLive, :index
     end
   end
@@ -180,12 +184,14 @@ defmodule CodexPoolerWeb.Router do
     post "/settings/password", UserSessionController, :change_password
 
     live_session :require_authenticated_user,
-      on_mount: [{CodexPoolerWeb.UserAuth, :require_authenticated}] do
+      session: {CodexPoolerWeb.Locale, :live_session, []},
+      on_mount: [{CodexPoolerWeb.Locale, :assign_locale}, {CodexPoolerWeb.UserAuth, :require_authenticated}] do
       live "/password/change-required", AuthLive.ForcePasswordChange, :edit
     end
 
     live_session :require_authenticated_password_current,
-      on_mount: [{CodexPoolerWeb.UserAuth, :require_authenticated_password_current}] do
+      session: {CodexPoolerWeb.Locale, :live_session, []},
+      on_mount: [{CodexPoolerWeb.Locale, :assign_locale}, {CodexPoolerWeb.UserAuth, :require_authenticated_password_current}] do
       live "/admin/operators", Admin.OperatorsLive, :index
       live "/admin/request-logs", Admin.RequestLogsLive, :index
       live "/admin/lens", Admin.LensLive, :index

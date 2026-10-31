@@ -97,6 +97,22 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
     refute_forbidden_values(body)
   end
 
+  test "email language and renderer locale never change webhook JSON bytes" do
+    incident = incident_fixture()
+    channel = channel_fixture()
+    attempt = attempt_fixture(channel.id, incident.id)
+    Gettext.put_locale("en")
+    english = WebhookPayload.encode(incident, channel, attempt)
+
+    Gettext.put_locale("zh_CN")
+    chinese = WebhookPayload.encode(incident, %{channel | locale: "zh-CN"}, attempt)
+
+    assert chinese == english
+    assert chinese.body =~ ~s("severity":"critical")
+    assert chinese.body =~ ~s("rule_kind":"pool_no_usable_assignments")
+    refute chinese.body =~ "locale"
+  end
+
   test "safe evidence summary allowlist excludes unsafe values and unsupported shapes" do
     summary = WebhookPayload.safe_evidence_summary(unsafe_evidence())
 

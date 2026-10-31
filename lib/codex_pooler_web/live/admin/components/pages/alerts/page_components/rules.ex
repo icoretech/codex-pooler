@@ -15,14 +15,15 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
   attr :rule_form_mode, :atom, required: true
   attr :rule_form, :any, required: true
 
+  @spec rules_section(map()) :: Phoenix.LiveView.Rendered.t()
   def rules_section(assigns) do
     ~H"""
     <AdminComponents.extended_notice
       :if={@selected_tab == "rules" and @manageable_pools == []}
       id="alerts-no-manageable-pools-notice"
       icon="hero-server-stack"
-      title="No manageable Pools"
-      description="Ask an instance owner to assign an active Pool before creating alert rules."
+      title={gettext("No manageable Pools")}
+      description={gettext("Ask an instance owner to assign an active Pool before creating alert rules.")}
       tone={:info}
     />
 
@@ -33,16 +34,16 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
     >
       <AdminComponents.admin_surface
         id="alerts-rules-list"
-        title="Rules"
-        description="Pool-first alert definitions evaluated from persisted metadata only."
+        title={gettext("Rules")}
+        description={gettext("Pool-first alert definitions evaluated from persisted metadata only.")}
         count={rule_count_label(@rules)}
         overflow={:visible}
       >
         <AdminComponents.empty_state
           :if={@rules == []}
           id="alerts-rules-empty-state"
-          title="No alert rules"
-          description="Create a rule for an active Pool to start tracking serving risk and quota evidence."
+          title={gettext("No alert rules")}
+          description={gettext("Create a rule for an active Pool to start tracking serving risk and quota evidence.")}
           icon="hero-bell-alert"
         />
 
@@ -50,13 +51,13 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
           <table id="alerts-rule-table" class="table min-w-[52rem]">
             <thead>
               <tr>
-                <th>Rule</th>
-                <th>Pool</th>
-                <th class="text-center">State</th>
-                <th>Route class</th>
-                <th>Threshold</th>
-                <th class="text-center">Cooldown</th>
-                <th class="text-right">Actions</th>
+                <th>{gettext("Rule")}</th>
+                <th>{gettext("Pool")}</th>
+                <th class="text-center">{gettext("State")}</th>
+                <th>{gettext("Route class")}</th>
+                <th>{gettext("Threshold")}</th>
+                <th class="text-center">{gettext("Cooldown")}</th>
+                <th class="text-right">{gettext("Actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -100,7 +101,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                   id={"alert-rule-row-#{rule.id}-route-class"}
                   class="font-mono text-xs text-base-content/70"
                 >
-                  {rule.route_class || "any"}
+                  {rule.route_class || gettext("any")}
                 </td>
                 <td
                   id={"alert-rule-row-#{rule.id}-threshold"}
@@ -112,14 +113,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                   id={"alert-rule-row-#{rule.id}-cooldown"}
                   class="text-center font-mono text-xs tabular-nums text-base-content/70"
                 >
-                  {rule.cooldown_minutes} min
+                  {ngettext("%{count} min", "%{count} min", rule.cooldown_minutes)}
                 </td>
                 <td class="text-right">
                   <div class="flex justify-end gap-2">
                     <AdminComponents.action_button
                       id={"alert-rule-edit-#{rule.id}"}
                       icon="hero-pencil-square"
-                      label="Edit"
+                      label={gettext("Edit")}
                       phx-click="open_edit_rule"
                       phx-value-id={rule.id}
                     />
@@ -127,14 +128,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                       :if={rule.state == AlertRule.active_state()}
                       id={"alert-rule-disable-#{rule.id}"}
                       icon="hero-pause"
-                      label="Disable"
+                      label={gettext("Disable")}
                       phx-click="disable_rule"
                       phx-value-id={rule.id}
                     />
                     <AdminComponents.action_button
                       id={"alert-rule-delete-#{rule.id}"}
                       icon="hero-trash"
-                      label="Delete"
+                      label={gettext("Delete")}
                       phx-click="open_delete_rule"
                       phx-value-id={rule.id}
                       variant={:danger}
@@ -150,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
       <AdminComponents.admin_surface
         id="alerts-rule-form-panel"
         title={rule_form_title(@rule_form_mode)}
-        description="The rule form is always available on this tab. Edit an existing row or save the inline values below."
+        description={gettext("The rule form is always available on this tab. Edit an existing row or save the inline values below.")}
         overflow={:visible}
       >
         <.form
@@ -167,9 +168,9 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-pool-id"
               field={@rule_form[:pool_id]}
               type="select"
-              label="Pool"
+              label={gettext("Pool")}
               options={AlertRuleForm.pool_options(@manageable_pools)}
-              prompt="Choose Pool"
+              prompt={gettext("Choose Pool")}
               required
               disabled={@manageable_pools == []}
             />
@@ -177,15 +178,15 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-display-name"
               field={@rule_form[:display_name]}
               type="text"
-              label="Rule name"
-              placeholder="Primary Pool serving risk"
+              label={gettext("Rule name")}
+              placeholder={gettext("Primary Pool serving risk")}
               required
             />
             <.input
               id="alert-rule-kind"
               field={@rule_form[:rule_kind]}
               type="select"
-              label="Condition"
+              label={gettext("Condition")}
               options={AlertRuleForm.rule_kind_options()}
               required
             />
@@ -196,21 +197,21 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-severity"
               field={@rule_form[:severity]}
               type="select"
-              label="Severity"
+              label={gettext("Severity")}
               options={AlertRuleForm.severity_options()}
             />
             <.input
               id="alert-rule-state"
               field={@rule_form[:state]}
               type="select"
-              label="Rule state"
+              label={gettext("Rule state")}
               options={AlertRuleForm.state_options()}
             />
             <.input
               id="alert-rule-cooldown-minutes"
               field={@rule_form[:cooldown_minutes]}
               type="number"
-              label="Cooldown minutes"
+              label={gettext("Cooldown minutes")}
               min={AlertRule.cooldown_minimum_minutes()}
               max={AlertRule.cooldown_maximum_minutes()}
               required
@@ -229,8 +230,8 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                 id="alert-rule-model"
                 field={@rule_form[:model]}
                 type="text"
-                label="Model scope"
-                placeholder="All models"
+                label={gettext("Model scope")}
+                placeholder={gettext("All models")}
                 autocomplete="off"
               />
               <p id="alert-rule-model-scope-help" class="px-1 text-xs leading-5 text-base-content/55">
@@ -246,15 +247,15 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                 id="alert-rule-route-class"
                 field={@rule_form[:route_class]}
                 type="select"
-                label="Route class"
+                label={gettext("Route class")}
                 options={AlertRuleForm.route_class_options()}
-                prompt="All route classes"
+                prompt={gettext("All route classes")}
               />
               <p
                 id="alert-rule-route-class-help"
                 class="px-1 text-xs leading-5 text-base-content/55"
               >
-                Leave blank for all route classes. This uses worst-wins evaluation across every class.
+                {gettext("Leave blank for all route classes. This uses worst-wins evaluation across every class.")}
               </p>
             </div>
           </div>
@@ -264,7 +265,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
             class="grid gap-4 rounded-box border border-base-300 bg-base-200 p-4"
           >
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Rule-specific fields
+              {gettext("Rule-specific fields")}
             </p>
 
             <.input
@@ -272,7 +273,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-min-usable-assignments"
               field={@rule_form[:min_usable_assignments]}
               type="number"
-              label="Minimum usable assignments"
+              label={gettext("Minimum usable assignments")}
               min="1"
             />
 
@@ -284,7 +285,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-target-state"
               field={@rule_form[:target_state]}
               type="select"
-              label="Target state"
+              label={gettext("Target state")}
               options={AlertRuleForm.target_state_options(AlertRuleForm.value(@rule_form[:rule_kind]))}
             />
 
@@ -293,7 +294,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-window-selector"
               field={@rule_form[:window_selector]}
               type="select"
-              label="Quota window"
+              label={gettext("Quota window")}
               options={AlertRuleForm.window_selector_options()}
             />
 
@@ -302,7 +303,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-threshold-used-percent"
               field={@rule_form[:threshold_used_percent]}
               type="number"
-              label="Used threshold percent"
+              label={gettext("Used threshold percent")}
               min="0"
               max="100"
               step="0.1"
@@ -313,7 +314,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-no-extra-fields"
               class="text-sm leading-6 text-base-content/65"
             >
-              This rule fires when the selected Pool has no usable upstream assignments for the optional model scope.
+              {gettext("This rule fires when the selected Pool has no usable upstream assignments for the optional model scope.")}
             </p>
             <p
               :if={
@@ -323,14 +324,14 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-no-extra-fields"
               class="text-sm leading-6 text-base-content/65"
             >
-              This rule fires when persisted saved-reset metadata first shows a banked saved reset for an assigned upstream account.
+              {gettext("This rule fires when persisted saved-reset metadata first shows a banked saved reset for an assigned upstream account.")}
             </p>
           </div>
 
           <div class="flex flex-wrap justify-end gap-2">
             <AdminComponents.action_button
               id="alert-rule-cancel"
-              label="Cancel"
+              label={gettext("Cancel")}
               phx-click="cancel_rule_form"
             />
             <AdminComponents.action_button
@@ -365,23 +366,23 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
 
   defp model_scope_help(rule_kind) do
     if model_scope_supported?(rule_kind) do
-      "Optional. Leave blank to evaluate all models for this Pool; set a model id to scope assignment coverage or quota evidence."
+      gettext("Optional. Leave blank to evaluate all models for this Pool; set a model id to scope assignment coverage or quota evidence.")
     else
-      "This condition does not use model scope. Clear the stored value and save if this rule was created before the form was simplified."
+      gettext("This condition does not use model scope. Clear the stored value and save if this rule was created before the form was simplified.")
     end
   end
 
   defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_string?(_value), do: false
-  defp rule_form_title(:edit), do: "Edit rule"
-  defp rule_form_title(_mode), do: "Create rule"
+  defp rule_form_title(:edit), do: gettext("Edit rule")
+  defp rule_form_title(_mode), do: gettext("Create rule")
 
-  defp rule_form_submit_label(:edit), do: "Save rule"
-  defp rule_form_submit_label(_mode), do: "Create rule"
+  defp rule_form_submit_label(:edit), do: gettext("Save rule")
+  defp rule_form_submit_label(_mode), do: gettext("Create rule")
 
-  defp rule_count_label([]), do: "0 rules"
-  defp rule_count_label([_rule]), do: "1 rule"
-  defp rule_count_label(rules), do: "#{length(rules)} rules"
+  defp rule_count_label(rules) do
+    ngettext("%{count} rule", "%{count} rules", length(rules))
+  end
 
   defp pool_name_for(pool_lookup, pool_id),
     do: pool_lookup |> Map.fetch!(pool_id) |> Map.fetch!(:name)
@@ -390,19 +391,19 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
     do: pool_lookup |> Map.fetch!(pool_id) |> Map.fetch!(:slug)
 
   defp threshold_summary(%AlertRule{rule_kind: "pool_low_usable_assignments"} = rule),
-    do: "Minimum #{rule.min_usable_assignments || 1} usable assignments"
+    do: ngettext("Minimum %{count} usable assignments", "Minimum %{count} usable assignments", rule.min_usable_assignments || 1)
 
   defp threshold_summary(%AlertRule{rule_kind: "pool_all_assignments_in_state"} = rule),
-    do: "All assignments #{AlertRuleForm.target_state_label(rule.target_state)}"
+    do: gettext("All assignments %{state}", state: AlertRuleForm.target_state_label(rule.target_state))
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_quota_threshold"} = rule),
-    do: "#{AlertRuleForm.window_selector_label(rule.window_selector)} at #{AlertRuleForm.threshold_label(rule.threshold_used_percent)}"
+    do: gettext("%{window} at %{threshold}", window: AlertRuleForm.window_selector_label(rule.window_selector), threshold: AlertRuleForm.threshold_label(rule.threshold_used_percent))
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_auth_state"} = rule),
-    do: "Assigned upstream #{AlertRuleForm.target_state_label(rule.target_state)}"
+    do: gettext("Assigned upstream %{state}", state: AlertRuleForm.target_state_label(rule.target_state))
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_saved_reset_banked_first_seen"}),
-    do: "First banked reset observed"
+    do: gettext("First banked reset observed")
 
-  defp threshold_summary(_rule), do: "No usable assignments"
+  defp threshold_summary(_rule), do: gettext("No usable assignments")
 end

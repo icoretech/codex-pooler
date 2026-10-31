@@ -125,15 +125,15 @@ defmodule CodexPooler.InstanceSettings do
     end
   end
 
-  @spec send_smtp_test_email(map(), Scope.t()) ::
+  @spec send_smtp_test_email(map(), Scope.t(), String.t() | nil) ::
           {:ok, map()} | {:error, Ecto.Changeset.t() | map() | Pools.access_error()}
-  def send_smtp_test_email(attrs, %Scope{} = scope) when is_map(attrs) do
-    send_smtp_test_email(ensure_singleton!(), attrs, scope)
+  def send_smtp_test_email(attrs, %Scope{} = scope, locale) when is_map(attrs) do
+    send_smtp_test_email(ensure_singleton!(), attrs, scope, locale)
   end
 
-  @spec send_smtp_test_email(settings(), map(), Scope.t()) ::
+  @spec send_smtp_test_email(settings(), map(), Scope.t(), String.t() | nil) ::
           {:ok, map()} | {:error, Ecto.Changeset.t() | map() | Pools.access_error()}
-  def send_smtp_test_email(%Settings{} = settings, attrs, %Scope{} = scope) when is_map(attrs) do
+  def send_smtp_test_email(%Settings{} = settings, attrs, %Scope{} = scope, locale) when is_map(attrs) do
     attrs = strip_context_attrs(attrs)
 
     changeset = Settings.changeset(settings, attrs)
@@ -143,7 +143,7 @@ defmodule CodexPooler.InstanceSettings do
          {:ok, recipient_email} <- smtp_test_operator_email(scope),
          {:ok, delivery_config} <- MailerConfig.from_settings(candidate),
          {:ok, delivery_config} <- smtp_test_delivery_config(delivery_config) do
-      Mailer.send_smtp_test_email(recipient_email, delivery_config)
+      Mailer.send_smtp_test_email(recipient_email, delivery_config, locale)
     else
       {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
       {:error, %{code: :invalid_mailer_config} = reason} -> {:error, reason}

@@ -1,3 +1,5 @@
+import { hookLabel, interpolateLabel } from "./hook_labels.mjs";
+
 const REPAINT_INTERVAL_MS = 30_000;
 const MINUTE_SECONDS = 60;
 const HOUR_SECONDS = 60 * MINUTE_SECONDS;
@@ -15,7 +17,7 @@ const durationParts = (parts) =>
 		.map(([value, unit]) => `${value}${unit}`)
 		.join(" ");
 
-export const formatRelativeCountdown = (resetAt, now = Date.now()) => {
+const countdownDuration = (resetAt, now) => {
 	const resetAtMs = Date.parse(resetAt);
 	if (!Number.isFinite(resetAtMs)) return null;
 
@@ -48,10 +50,20 @@ export const formatRelativeCountdown = (resetAt, now = Date.now()) => {
 	return "<1m";
 };
 
+export const formatRelativeCountdown = (resetAt, now = Date.now(), labels = {}) => {
+	const duration = countdownDuration(resetAt, now);
+	if (duration === null) return null;
+	const value = duration === "due"
+		? hookLabel(labels, "countdownDueLabel", "due")
+		: duration;
+	return interpolateLabel(hookLabel(labels, "countdownLabel", "%{duration}"), { duration: value });
+};
+
 export const createRelativeCountdownController = ({
 	clock = defaultClock,
 	onLabel,
 	resetAt,
+	labels = {},
 }) => {
 	let destroyed = false;
 	let started = false;
@@ -65,11 +77,12 @@ export const createRelativeCountdownController = ({
 	};
 
 	const repaint = () => {
-		const label = formatRelativeCountdown(target, clock.now());
+		const now = clock.now();
+		const label = formatRelativeCountdown(target, now, labels);
 		if (label === null) return false;
 
 		onLabel(label);
-		return label !== "due";
+		return Date.parse(target) > now;
 	};
 
 	const schedule = () => {
@@ -92,9 +105,10 @@ export const createRelativeCountdownController = ({
 			started = true;
 			schedule();
 		},
-		sync(nextResetAt) {
+		sync(nextResetAt, nextLabels = labels) {
 			if (destroyed) return;
 			target = nextResetAt;
+			labels = nextLabels;
 			schedule();
 		},
 		destroy() {
@@ -104,10 +118,12 @@ export const createRelativeCountdownController = ({
 	};
 };
 
-export const createRelativeCountdownHook = () => ({
+export const createRelativeCountdownHook = (options = {}) => ({
 	mounted() {
 		this.value = this.el.querySelector("[data-role='relative-countdown-value']");
 		this.controller = createRelativeCountdownController({
+			clock: options.clock ?? defaultClock,
+			labels: this.el.dataset,
 			onLabel: (label) => {
 				if (this.value) this.value.textContent = label;
 			},
@@ -117,7 +133,7 @@ export const createRelativeCountdownHook = () => ({
 	},
 	updated() {
 		this.value = this.el.querySelector("[data-role='relative-countdown-value']");
-		this.controller.sync(this.el.dataset.countdownAt);
+		this.controller.sync(this.el.dataset.countdownAt, this.el.dataset);
 	},
 	destroyed() {
 		this.controller.destroy();

@@ -65,3 +65,13 @@ test("classifies connected longpoll as browser admin fallback", () => {
     visualState: "longPollFallback",
   })
 })
+
+test("transport labels accept translated copy without changing transport keys", () => {
+  const labels = {transportPending: "待连接", transportUnknown: "未知", transportLongPolling: "长轮询", transportWebsocket: "WebSocket"}
+  assert.deepEqual(classifyLiveSocketConnection(null, null, labels), {transportKey: "pending", transportLabel: "待连接", visualState: "connecting"})
+  assert.deepEqual(normalizeLiveSocketTransport({}, labels), {transportKey: "unknown", transportLabel: "未知"})
+  const longpoll = {transport: function At() {}, transportName: () => "LongPoll", connectionState: () => "open"}
+  assert.deepEqual(classifyLiveSocketConnection({isConnected: () => true}, longpoll, labels), {transportKey: "longpoll", transportLabel: "长轮询", visualState: "longPollFallback"})
+  const websocket = {transport: function wt() {}, transportName: () => "WebSocket", connectionState: () => "open"}
+  assert.equal(normalizeLiveSocketTransport(websocket, labels).transportKey, "websocket")
+})

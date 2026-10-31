@@ -11,18 +11,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PolicyEditorComponents
 
-  @steps [
-    %{id: :basics, label: "Basics", description: "Name and state"},
-    %{id: :models, label: "Models", description: "Model access"},
-    %{id: :enforcement, label: "Enforcement", description: "Enforced request fields"},
-    %{id: :limits, label: "Limits", description: "Policy caps"},
-    %{id: :review, label: "Review", description: "Effective policy"}
-  ]
-  @step_ids Enum.map(@steps, &Atom.to_string(&1.id))
-  @api_key_docs_url "https://www.codex-pooler.com/docs/operators/api-keys/#create-api-key"
+  @step_ids ~w(basics models enforcement limits review)
 
   @spec steps() :: [map()]
-  def steps, do: @steps
+  def steps do
+    [
+      %{id: :basics, label: gettext("Basics"), description: gettext("Name and state")},
+      %{id: :models, label: gettext("Models"), description: gettext("Model access")},
+      %{id: :enforcement, label: gettext("Enforcement"), description: gettext("Enforced request fields")},
+      %{id: :limits, label: gettext("Limits"), description: gettext("Policy caps")},
+      %{id: :review, label: gettext("Review"), description: gettext("Effective policy")}
+    ]
+  end
+
+  @api_key_docs_url "https://www.codex-pooler.com/docs/operators/api-keys/#create-api-key"
 
   @spec normalize_step(term()) :: String.t()
   def normalize_step(step) do
@@ -40,37 +42,38 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   attr :pool_options, :list, required: true
   attr :disabled, :boolean, default: false
 
+  @spec api_key_basics_step(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_basics_step(assigns) do
     assigns = assign(assigns, :expiry_valid?, ApiKeyPolicyForm.expiry_errors(assigns.form.params) == [])
 
     ~H"""
     <section id="api-key-step-basics-panel" class="grid min-w-0 gap-5">
       <div class="grid gap-1">
-        <h3 class="text-lg font-semibold text-base-content">Name and availability</h3>
+        <h3 class="text-lg font-semibold text-base-content">{gettext("Name and availability")}</h3>
         <p class="text-sm leading-6 text-base-content/65">
-          Set the operator label, owning Pool, current state, and optional expiry.
+          {gettext("Set the operator label, owning Pool, current state, and optional expiry.")}
         </p>
       </div>
       <div class="grid gap-4 md:grid-cols-2">
         <.input
           field={@form[:display_name]}
           type="text"
-          label="Display name"
-          placeholder="Production gateway key"
+          label={gettext("Display name")}
+          placeholder={gettext("Production gateway key")}
           required
           disabled={@disabled}
         />
         <.input
           field={@form[:pool_id]}
           type="select"
-          label="Pool"
+          label={gettext("Pool")}
           options={@pool_options}
           disabled={@disabled}
         />
         <.input
           field={@form[:status]}
           type="select"
-          label="Status"
+          label={gettext("Status")}
           options={status_options()}
           disabled={@disabled}
         />
@@ -78,7 +81,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           <.input
             field={@form[:expires_at]}
             type="datetime-local"
-            label={"Expires at - #{ApiKeyPolicyForm.expiry_timezone(@form.params)}"}
+            label={gettext("Expires at - %{timezone}", timezone: ApiKeyPolicyForm.expiry_timezone(@form.params))}
             aria-describedby={if @expiry_valid?, do: "api-key-expiry-summary"}
             disabled={@disabled}
           />
@@ -93,7 +96,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           <.input
             field={@form[:dashboard_access]}
             type="checkbox"
-            label="Observatory access"
+            label={gettext("Observatory access")}
             class="checkbox checkbox-primary checkbox-sm"
             disabled={@disabled}
           />
@@ -101,19 +104,19 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
             id="api-key-dashboard-access-help"
             class="text-sm leading-5 text-base-content/60"
           >
-            Allow this key to open the read-only Observatory.
+            {gettext("Allow this key to open the read-only Observatory.")}
           </p>
         </div>
       </div>
       <p id="api-key-availability-help" class="text-sm leading-5 text-base-content/65">
-        To stop access immediately, set Status to Paused. Resume it later without changing the expiry.
+        {gettext("To stop access immediately, set Status to Paused. Resume it later without changing the expiry.")}
       </p>
       <.input
         field={@form[:operator_notes]}
         type="textarea"
-        label="Operator notes"
+        label={gettext("Operator notes")}
         rows="3"
-        placeholder="Operator-only notes; no secrets"
+        placeholder={gettext("Operator-only notes; no secrets")}
         disabled={@disabled}
       />
     </section>
@@ -123,6 +126,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   attr :form, :any, required: true
   attr :selector_state, :map, required: true
 
+  @spec api_key_models_step(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_models_step(assigns) do
     assigns =
       assign(
@@ -134,9 +138,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
     ~H"""
     <section id="api-key-step-models-panel" class="grid min-w-0 gap-5">
       <div class="grid gap-1">
-        <h3 class="text-lg font-semibold text-base-content">Model access</h3>
+        <h3 class="text-lg font-semibold text-base-content">{gettext("Model access")}</h3>
         <p class="text-sm leading-6 text-base-content/65">
-          Choose which models this key may use.
+          {gettext("Choose which models this key may use.")}
         </p>
       </div>
 
@@ -145,23 +149,23 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           id="api-key-model-mode-all"
           field={@form[:model_mode]}
           value="all_models"
-          label="All models"
-          description="Allow current and future routable models."
+          label={gettext("All models")}
+          description={gettext("Allow current and future routable models.")}
           default
         />
         <.policy_mode_card
           id="api-key-model-mode-selected"
           field={@form[:model_mode]}
           value="selected_models"
-          label="Selected"
-          description="Allow only checked or manual model IDs."
+          label={gettext("Selected")}
+          description={gettext("Allow only checked or manual model IDs.")}
         />
         <.policy_mode_card
           id="api-key-model-mode-deny"
           field={@form[:model_mode]}
           value="deny_all_models"
-          label="Deny all"
-          description="Keep the key valid but block model use."
+          label={gettext("Deny all")}
+          description={gettext("Keep the key valid but block model use.")}
         />
       </div>
 
@@ -176,13 +180,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         <div class="grid min-w-0 gap-3">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="grid gap-1">
-              <h3 class="text-lg font-semibold text-base-content">Catalog models</h3>
+              <h3 class="text-lg font-semibold text-base-content">{gettext("Catalog models")}</h3>
               <p class="text-sm leading-6 text-base-content/65">
-                Routable models from this Pool's catalog.
+                {gettext("Routable models from this Pool's catalog.")}
               </p>
             </div>
             <span class={AdminBadges.count_chip_class()}>
-              {length(@selector_state.options)} options
+              {ngettext("%{count} options", "%{count} options", length(@selector_state.options))}
             </span>
           </div>
 
@@ -232,13 +236,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
               />
             </div>
             <p :if={@selector_state.options == []} class="text-sm text-base-content/60">
-              No routable catalog models are available for this Pool.
+              {gettext("No routable catalog models are available for this Pool.")}
             </p>
           </div>
 
           <div :if={@selector_state.selected_unavailable_chips != []} class="grid gap-2">
             <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-              Saved unavailable models
+              {gettext("Saved unavailable models")}
             </p>
             <label
               :for={chip <- @selector_state.selected_unavailable_chips}
@@ -265,7 +269,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         <.input
           field={@form[:manual_model_identifiers_text]}
           type="textarea"
-          label="Manual model identifiers"
+          label={gettext("Manual model identifiers")}
           rows="3"
           placeholder="custom/manual-test-model"
         />
@@ -293,6 +297,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   attr :reasoning_effort_options, :list, required: true
   attr :service_tier_options, :list, required: true
 
+  @spec api_key_enforcement_step(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_enforcement_step(assigns) do
     ~H"""
     <section id="api-key-step-enforcement-panel" class="grid min-w-0 gap-5">
@@ -303,9 +308,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         class="grid min-w-0 gap-5"
       >
         <div class="grid gap-1">
-          <h3 class="text-lg font-semibold text-base-content">Reasoning effort policy</h3>
+          <h3 class="text-lg font-semibold text-base-content">{gettext("Reasoning effort policy")}</h3>
           <p id="api-key-reasoning-policy-help" class="text-sm leading-6 text-base-content/65">
-            Leave requests unchanged, set a ceiling, or always send one effort.
+            {gettext("Leave requests unchanged, set a ceiling, or always send one effort.")}
           </p>
         </div>
         <div class="grid gap-3 md:grid-cols-3">
@@ -313,50 +318,48 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
             id="api_key_reasoning_policy_mode_unrestricted"
             field={@form[:reasoning_policy_mode]}
             value="unrestricted"
-            label="Unrestricted"
-            description="Keep request values unchanged."
+            label={gettext("Unrestricted")}
+            description={gettext("Keep request values unchanged.")}
             default
           />
           <.reasoning_policy_mode
             id="api_key_reasoning_policy_mode_allow_up_to"
             field={@form[:reasoning_policy_mode]}
             value="allow_up_to"
-            label="Allow up to"
-            description="Permit request values through a selected ceiling."
+            label={gettext("Allow up to")}
+            description={gettext("Permit request values through a selected ceiling.")}
           />
           <.reasoning_policy_mode
             id="api_key_reasoning_policy_mode_always_use"
             field={@form[:reasoning_policy_mode]}
             value="always_use"
-            label="Always use"
-            description="Replace every request value with one effort."
+            label={gettext("Always use")}
+            description={gettext("Replace every request value with one effort.")}
           />
         </div>
         <.input
           :if={field_string_value(@form[:reasoning_policy_mode]) == "allow_up_to"}
           field={@form[:maximum_reasoning_effort]}
           type="select"
-          label="Maximum reasoning effort"
+          label={gettext("Maximum reasoning effort")}
           options={@reasoning_effort_options}
         />
         <.input
           :if={field_string_value(@form[:reasoning_policy_mode]) == "always_use"}
           field={@form[:enforced_reasoning_effort]}
           type="select"
-          label="Enforced reasoning effort"
+          label={gettext("Enforced reasoning effort")}
           options={@reasoning_effort_options}
         />
         <p class="text-sm leading-6 text-base-content/60">
-          Reasoning "None" is an enforced upstream value; it is different from leaving the field unset.
-          Minimal is sent upstream as low, and Ultra is sent upstream as max for backend Codex
-          compatibility; use Max or Ultra only when the target model/upstream supports them.
+          {gettext("Reasoning \"None\" is an enforced upstream value; it is different from leaving the field unset. Minimal is sent upstream as low, and Ultra is sent upstream as max for backend Codex compatibility; use Max or Ultra only when the target model/upstream supports them.")}
         </p>
       </div>
 
       <div class="grid gap-1 border-t border-base-300/60 pt-5">
-        <h3 class="text-lg font-semibold text-base-content">Enforced request fields</h3>
+        <h3 class="text-lg font-semibold text-base-content">{gettext("Enforced request fields")}</h3>
         <p class="text-sm leading-6 text-base-content/65">
-          Optionally pin the model and service tier sent upstream, regardless of request values.
+          {gettext("Optionally pin the model and service tier sent upstream, regardless of request values.")}
         </p>
       </div>
 
@@ -364,21 +367,19 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         <.input
           field={@form[:enforced_model_identifier]}
           type="select"
-          label="Enforced model"
+          label={gettext("Enforced model")}
           options={@enforced_model_options}
         />
         <.input
           field={@form[:enforced_service_tier]}
           type="select"
-          label="Enforced service tier"
+          label={gettext("Enforced service tier")}
           options={@service_tier_options}
         />
       </div>
 
       <p class="text-sm leading-6 text-base-content/60">
-        Service tier is only enforced when selected. Auto lets the upstream choose, default requests
-        standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the
-        highest available tier.
+        {gettext("Service tier is only enforced when selected. Auto lets the upstream choose, default requests standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the highest available tier.")}
       </p>
 
       <div
@@ -388,7 +389,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
       >
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <div class="grid gap-1">
-          <p class="font-semibold">Enforced model unavailable</p>
+          <p class="font-semibold">{gettext("Enforced model unavailable")}</p>
           <p class="text-sm">{@selector_state.enforced_unavailable_warning.message}</p>
         </div>
       </div>
@@ -407,10 +408,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   slot :limits, required: true
   slot :review, required: true
 
+  @spec api_key_wizard(map()) :: Phoenix.LiveView.Rendered.t()
   def api_key_wizard(assigns) do
     assigns =
       assigns
-      |> assign(:steps, @steps)
+      |> assign(:steps, steps())
       |> assign(:title, title(assigns.mode))
       |> assign(:description, description(assigns.mode))
       |> assign(:cancel_event, cancel_event(assigns.mode))
@@ -421,12 +423,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
     ~H"""
     <PolicyEditorComponents.policy_editor_dialog
       id="api-key"
-      eyebrow="API key policy"
+      eyebrow={gettext("API key policy")}
       title={@title}
       description={@description}
       steps={@steps}
       current_step={@current_step}
-      sections_label="API key policy sections"
+      sections_label={gettext("API key policy sections")}
       step_event="api_key_wizard_step"
       backdrop_event={@cancel_event}
       docs_url={@api_key_docs_url}
@@ -485,7 +487,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
       <:actions>
         <AdminComponents.action_button
           id={@cancel_id}
-          label="Cancel"
+          label={gettext("Cancel")}
           variant={:ghost}
           phx-click={@cancel_event}
         />
@@ -516,20 +518,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
     ]
   end
 
-  defp title(:create), do: "Create API key"
-  defp title(:edit), do: "Edit API key"
+  defp title(:create), do: gettext("Create API key")
+  defp title(:edit), do: gettext("Edit API key")
 
   defp description(:create),
-    do: "Define Pool ownership, model access, enforced request fields, and limits before copying the generated secret once."
+    do: gettext("Define Pool ownership, model access, enforced request fields, and limits before copying the generated secret once.")
 
-  defp description(:edit), do: "Update policy sections without exposing stored secret material."
+  defp description(:edit), do: gettext("Update policy sections without exposing stored secret material.")
 
   defp cancel_event(:create), do: "cancel_create"
   defp cancel_event(:edit), do: "cancel_edit"
   defp cancel_id(:create), do: "api-key-cancel-create"
   defp cancel_id(:edit), do: "api-key-cancel-edit"
-  defp submit_label(:create), do: "Create API key"
-  defp submit_label(:edit), do: "Save API key"
+  defp submit_label(:create), do: gettext("Create API key")
+  defp submit_label(:edit), do: gettext("Save API key")
 
   attr :id, :string, required: true
   attr :field, :any, required: true
@@ -550,7 +552,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           class="hidden size-3 text-primary group-has-[.policy-mode-radio:checked]/policymode:inline-block"
         />
         <span :if={@default} class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70">
-          Default
+          {gettext("Default")}
         </span>
       </span>
       <input
@@ -584,7 +586,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           class="hidden size-3 text-primary group-has-[.policy-mode-radio:checked]/policymode:inline-block"
         />
         <span :if={@default} class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70">
-          Default
+          {gettext("Default")}
         </span>
       </span>
       <input
@@ -604,18 +606,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   end
 
   defp status_options do
-    [{"Active", "active"}, {"Paused", "paused"}]
+    [{gettext("Active"), "active"}, {gettext("Paused"), "paused"}]
   end
 
   defp catalog_attention_label(%{status: status, message: message}) do
     cond do
       status in [:synced, nil] -> nil
       is_binary(message) and message != "" -> message
-      true -> "Catalog #{status}"
+      true -> gettext("Catalog %{status}", status: catalog_status_label(status))
     end
   end
 
-  defp catalog_attention_label(_catalog), do: "Catalog unavailable"
+  defp catalog_attention_label(_catalog), do: gettext("Catalog unavailable")
+
+  defp catalog_status_label(:syncing), do: gettext("syncing")
+  defp catalog_status_label(:stale), do: gettext("stale")
+  defp catalog_status_label(:failed), do: gettext("failed")
+  defp catalog_status_label(:unavailable), do: gettext("unavailable")
+  defp catalog_status_label(status), do: to_string(status)
 
   defp field_array_name(field), do: "#{field.name}[]"
   defp field_string_value(field), do: to_string(field.value || "")

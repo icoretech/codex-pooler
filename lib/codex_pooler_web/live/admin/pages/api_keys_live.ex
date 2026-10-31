@@ -20,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "API keys",
+       page_title: gettext("API keys"),
        pools: [],
        pool_lookup: %{},
        api_keys: [],
@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       _errors ->
         {:noreply,
          socket
-         |> put_flash(:error, "Resolve the policy warnings before saving")
+         |> put_flash(:error, gettext("Resolve the policy warnings before saving"))
          |> assign(:api_key_wizard_step, "review")}
     end
   end
@@ -151,21 +151,21 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   end
 
   def handle_event("disable_api_key", %{"id" => api_key_id}, socket) do
-    key_action(socket, api_key_id, &Access.pause_api_key/2, "API key disabled")
+    key_action(socket, api_key_id, &Access.pause_api_key/2, gettext("API key disabled"))
   end
 
   def handle_event("enable_api_key", %{"id" => api_key_id}, socket) do
-    key_action(socket, api_key_id, &Access.resume_api_key/2, "API key enabled")
+    key_action(socket, api_key_id, &Access.resume_api_key/2, gettext("API key enabled"))
   end
 
   def handle_event("revoke_api_key", %{"id" => api_key_id}, socket) do
-    key_action(socket, api_key_id, &Access.revoke_api_key/2, "API key revoked")
+    key_action(socket, api_key_id, &Access.revoke_api_key/2, gettext("API key revoked"))
   end
 
   def handle_event("delete_api_key", %{"id" => api_key_id}, socket) do
     case find_api_key(socket, api_key_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "API key was not found")}
+        {:noreply, put_flash(socket, :error, gettext("API key was not found"))}
 
       %{id: _id} = api_key ->
         {:noreply,
@@ -201,8 +201,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       # shows it as deleting until the job removes it (findings#206 row 206-561).
       message =
         if status == :ok,
-          do: "API key deleted",
-          else: "API key revoked. Its deletion started; the key disappears once its request history has been detached."
+          do: gettext("API key deleted"),
+          else: gettext("API key revoked. Its deletion started; the key disappears once its request history has been detached.")
 
       {:noreply,
        socket
@@ -213,11 +213,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       false ->
         {:noreply,
          socket
-         |> put_flash(:error, "Type the API key prefix to confirm deletion")
+         |> put_flash(:error, gettext("Type the API key prefix to confirm deletion"))
          |> reset_delete_form()}
 
       nil ->
-        {:noreply, put_flash(socket, :error, "API key was not found")}
+        {:noreply, put_flash(socket, :error, gettext("API key was not found"))}
 
       {:error, reason} ->
         {:noreply,
@@ -233,7 +233,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         {:noreply,
          socket
          |> cancel_api_key_budget_usage()
-         |> put_flash(:info, "API key rotated")
+         |> put_flash(:info, gettext("API key rotated"))
          |> assign(:created_secret, Support.created_secret(api_key, raw_key))
          |> assign(:creating_api_key, false)
          |> assign(:editing_api_key, nil)
@@ -279,7 +279,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         &close_create_dialog/1
       )
 
-    {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+    {:noreply, if(closed?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
   end
 
   defp close_if({socket, _closed?}, true, close), do: {close.(socket), true}
@@ -334,6 +334,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:api_keys}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -341,15 +343,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       <section id="admin-api-keys-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="api-key-page-header"
-          title="API keys"
-          description="The keys clients use to reach a Pool, each with its own model access and policies."
+          title={gettext("API keys")}
+          description={gettext("The keys clients use to reach a Pool, each with its own model access and policies.")}
         >
           <:actions>
             <AdminComponents.action_button
               :if={@pools == [] && Pools.owner?(@current_scope)}
               id="api-key-page-create-action"
               icon="hero-server-stack"
-              label="Create Pool"
+              label={gettext("Create Pool")}
               navigate={~p"/admin/pools"}
               size={:md}
               variant={:primary}
@@ -358,7 +360,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
               :if={@pools != []}
               id="api-key-page-create-action"
               icon="hero-key"
-              label="Create API key"
+              label={gettext("Create API key")}
               phx-click="open_create_api_key"
               size={:md}
               variant={:primary}
@@ -475,7 +477,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         {:noreply,
          socket
          |> cancel_api_key_budget_usage()
-         |> put_flash(:info, "API key created")
+         |> put_flash(:info, gettext("API key created"))
          |> assign(:created_secret, Support.created_secret(api_key, raw_key))
          |> assign(:creating_api_key, false)
          |> assign(:editing_api_key, nil)
@@ -500,17 +502,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         {:noreply,
          socket
          |> cancel_api_key_budget_usage()
-         |> put_flash(:info, "API key updated")
+         |> put_flash(:info, gettext("API key updated"))
          |> assign(:created_secret, nil)
          |> assign(:creating_api_key, false)
          |> assign(:editing_api_key, nil)
          |> load_api_keys(reset_form: true)}
 
-      {:error, %{code: :api_key_edit_conflict, message: message}} ->
+      {:error, %{code: :api_key_edit_conflict} = reason} ->
         {:noreply,
          socket
          |> assign_api_key_wizard_state(api_key_params)
-         |> assign(api_key_wizard_step: "review", api_key_review_errors: [message])}
+         |> assign(api_key_wizard_step: "review", api_key_review_errors: [error_message(reason)])}
 
       {:error, reason} ->
         {:noreply,
@@ -569,6 +571,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   defp start_api_key_budget_usage(socket, %APIKey{id: api_key_id, pool_id: pool_id}) do
     async_key = {:api_key_budget_usage, api_key_id, make_ref()}
+    locale = Gettext.get_locale()
 
     socket
     |> assign(
@@ -576,7 +579,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       api_key_budget_usage_loading?: true,
       api_key_budget_usage_async_key: async_key
     )
-    |> start_async(async_key, fn -> ApiKeysReadModel.budget_usage(pool_id, api_key_id) end)
+    |> start_async(async_key, fn -> Gettext.with_locale(locale, fn -> ApiKeysReadModel.budget_usage(pool_id, api_key_id) end) end)
   end
 
   defp cancel_api_key_budget_usage(socket) do

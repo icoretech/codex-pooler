@@ -27,6 +27,16 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     :ok
   end
 
+  test "Chinese jobs translate filters and empty state", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/jobs")
+
+    assert has_element?(view, "#admin-jobs-page-header", "系统任务")
+    assert has_element?(view, "#job-state-filter [data-role='state-filter-trigger']", "任意状态")
+    assert has_element?(view, "#job-worker-filter [data-role='worker-filter-trigger']", "任意工作进程")
+    assert has_element?(view, "#job-show-completed-filter [data-role='show-completed-filter-trigger']", "隐藏已完成")
+    assert has_element?(view, "#admin-jobs-empty-state", "没有符合这些筛选条件的任务")
+  end
+
   test "denies instance admins without loading global jobs", %{scope: scope} do
     job =
       insert_job(

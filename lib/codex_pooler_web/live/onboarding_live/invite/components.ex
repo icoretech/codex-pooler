@@ -16,12 +16,16 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
   attr :invite_state, :atom, required: true
   attr :error_message, :any, required: true
   attr :now, :any, default: nil
+  attr :locale, :map, default: nil
+  attr :locale_preference, :string, default: nil
+
+  @spec invite_page(map()) :: Phoenix.LiveView.Rendered.t()
 
   def invite_page(assigns) do
     assigns = assign(assigns, :now, assigns.now || DateTime.utc_now())
 
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} chrome={:invite}>
+    <Layouts.app flash={@flash} current_scope={@current_scope} locale={@locale} locale_preference={@locale_preference} chrome={:invite}>
       <section class="mx-auto grid min-h-[calc(100svh-4rem)] w-full max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
         <div
           id="invite-page"
@@ -30,13 +34,13 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
           <div class="grid gap-8 border-b border-base-300 bg-base-200/60 p-6 sm:p-8 lg:border-b-0 lg:border-r">
             <div class="space-y-4">
               <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-primary">
-                device onboarding
+                {gettext("device onboarding")}
               </p>
               <h1 class="max-w-md text-3xl font-bold uppercase text-primary sm:text-4xl">
-                Connect your Codex account
+                {gettext("Connect your Codex account")}
               </h1>
               <p class="max-w-md text-sm leading-6 text-base-content/70">
-                Approve this invite with the OpenAI device page. Codex Pooler stores only the account connection metadata needed for the selected Pool.
+                {gettext("Approve this invite with the OpenAI device page. Codex Pooler stores only the account connection metadata needed for the selected Pool.")}
               </p>
             </div>
           </div>
@@ -49,15 +53,15 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
             >
               <div id="invite-contract" class="contents">
                 <div class="space-y-2">
-                  <h2 class="text-xl font-semibold text-base-content">Invite details</h2>
+                  <h2 class="text-xl font-semibold text-base-content">{gettext("Invite details")}</h2>
                   <p class="text-sm leading-6 text-base-content/70">
-                    Confirm the inviter and target email before starting the device approval.
+                    {gettext("Confirm the inviter and target email before starting the device approval.")}
                   </p>
                 </div>
 
                 <div class="min-w-0 rounded-box border border-base-300 bg-base-200/40 p-4">
                   <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                    Target Pool
+                    {gettext("Target Pool")}
                   </p>
                   <p
                     id="invite-pool-name"
@@ -70,7 +74,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                 <dl class="grid min-w-0 gap-3 sm:grid-cols-2">
                   <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                      Invited by
+                      {gettext("Invited by")}
                     </dt>
                     <dd
                       id="invite-inviter"
@@ -81,7 +85,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   </div>
                   <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                      Invited email
+                      {gettext("Invited email")}
                     </dt>
                     <dd
                       id="invite-invited-email"
@@ -92,7 +96,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   </div>
                   <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                      Invite status
+                      {gettext("Invite status")}
                     </dt>
                     <dd id="invite-status" class="mt-2 font-semibold text-base-content">
                       {invite_status_label(@contract.status)}
@@ -100,7 +104,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   </div>
                   <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                      Expires
+                      {gettext("Expires")}
                     </dt>
                     <dd id="invite-expiry-countdown" class="mt-2 font-semibold text-base-content">
                       {expiry_countdown(@contract.expires_at, @now)}
@@ -118,17 +122,17 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                     type="button"
                     class="btn btn-primary w-full gap-2 sm:w-fit"
                     phx-click="start_device"
-                    phx-disable-with="Starting device approval..."
+                    phx-disable-with={gettext("Starting device approval...")}
                   >
                     <.icon name="hero-device-phone-mobile" class="size-4" />
                     <span>
                       {if @invite_state == :device_error,
-                        do: "Try device approval again",
-                        else: "Start device approval"}
+                        do: gettext("Try device approval again"),
+                        else: gettext("Start device approval")}
                     </span>
                   </button>
                   <p class="text-sm leading-6 text-base-content/65">
-                    Keep this page open after entering the code. It will continue automatically when approval is complete.
+                    {gettext("Keep this page open after entering the code. It will continue automatically when approval is complete.")}
                   </p>
                 </div>
 
@@ -140,7 +144,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   <div class="grid gap-4">
                     <div class="min-w-0">
                       <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                        Device code
+                        {gettext("Device code")}
                       </p>
                       <div class="mt-2 flex items-center gap-2">
                         <p
@@ -153,7 +157,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                           id="invite-device-code-copy"
                           type="button"
                           class="btn btn-secondary btn-outline btn-square btn-sm shrink-0"
-                          aria-label="Copy device code"
+                          aria-label={gettext("Copy device code")}
                           phx-hook="ClipboardCopy"
                           data-copy-text={@device_authorization.user_code}
                         >
@@ -164,7 +168,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
 
                     <div class="grid gap-2">
                       <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                        Verification page
+                        {gettext("Verification page")}
                       </p>
                       <.link
                         id="device-verification-url"
@@ -216,12 +220,12 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   <.icon name="hero-check-circle" class="size-6" />
                 </span>
                 <div class="grid gap-1">
-                  <p class="text-lg font-semibold">Codex account connected</p>
+                  <p class="text-lg font-semibold">{gettext("Codex account connected")}</p>
                   <p id="completed-account-email" class="text-sm leading-6 text-base-content/75">
-                    {@completed_onboarding.account_email || "Account verified"}
+                    {@completed_onboarding.account_email || gettext("Account verified")}
                   </p>
                   <p class="text-sm leading-6 text-base-content/70">
-                    The upstream account is linked. Configure Codex with this load-balancer endpoint and your Pooler API key.
+                    {gettext("The upstream account is linked. Configure Codex with this load-balancer endpoint and your Pooler API key.")}
                   </p>
                 </div>
               </div>
@@ -230,10 +234,10 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p class="text-xs font-semibold uppercase tracking-wide text-primary">
-                      Codex config.toml
+                      {gettext("Codex config.toml")}
                     </p>
                     <p class="mt-1 text-sm text-base-content/65">
-                      Store the API key in <code>CODEX_POOLER_API_KEY</code>; it is not embedded here.
+                      {gettext("Store the API key in %{variable}; it is not embedded here.", variable: "CODEX_POOLER_API_KEY")}
                     </p>
                   </div>
                   <button
@@ -242,11 +246,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                     class="btn btn-primary btn-sm gap-2"
                     phx-hook="ClipboardCopy"
                     data-copy-text={@completed_onboarding.config_text}
-                    data-copy-label="Copy config"
-                    data-copied-label="Copied"
+                    data-copy-label={gettext("Copy config")}
+                    data-copied-label={gettext("Copied")}
                   >
                     <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-                    <span data-copy-label>Copy config</span>
+                    <span data-copy-label>{gettext("Copy config")}</span>
                   </button>
                 </div>
                 <pre
@@ -263,9 +267,9 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
             >
               <.icon name="hero-clock" class="mt-0.5 size-5" />
               <div>
-                <p class="font-semibold">Invite expired</p>
+                <p class="font-semibold">{gettext("Invite expired")}</p>
                 <p class="text-sm leading-6">
-                  This invite expired before onboarding completed. Ask the operator for a fresh invite.
+                  {gettext("This invite expired before onboarding completed. Ask the operator for a fresh invite.")}
                 </p>
               </div>
             </div>
@@ -277,7 +281,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
             >
               <.icon name="hero-exclamation-triangle" class="mt-0.5 size-5" />
               <div>
-                <p class="font-semibold">Invite unavailable</p>
+                <p class="font-semibold">{gettext("Invite unavailable")}</p>
                 <p class="text-sm leading-6">{@error_message}</p>
               </div>
             </div>
@@ -289,18 +293,21 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
   end
 
   defp invited_email_label(email) when is_binary(email) and email != "", do: email
-  defp invited_email_label(_email), do: "Codex account email required"
+  defp invited_email_label(_email), do: gettext("Codex account email required")
 
-  defp invite_status_label("active"), do: "Active invite"
+  defp invite_status_label("active"), do: gettext("Active invite")
+  defp invite_status_label("accepted"), do: gettext("Accepted")
+  defp invite_status_label("revoked"), do: gettext("Revoked")
+  defp invite_status_label("expired"), do: gettext("Expired")
   defp invite_status_label(status) when is_binary(status), do: String.capitalize(status)
-  defp invite_status_label(_status), do: "Unknown"
+  defp invite_status_label(_status), do: gettext("Unknown")
 
-  defp expiry_countdown(nil, _now), do: "No expiry date"
+  defp expiry_countdown(nil, _now), do: gettext("No expiry date")
 
   defp expiry_countdown(expires_at, now) when is_binary(expires_at) do
     case DateTime.from_iso8601(expires_at) do
       {:ok, expires_at, _offset} -> expiry_countdown(expires_at, now)
-      _error -> "Expiry unavailable"
+      _error -> gettext("Expiry unavailable")
     end
   end
 
@@ -308,11 +315,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
     seconds = RelativeTime.seconds_until(expires_at, now)
 
     cond do
-      DateTime.compare(expires_at, now) != :gt -> "Expired"
-      seconds < 60 -> "Expires in under 1 minute"
-      seconds < 3_600 -> "Expires in #{ceil_div(seconds, 60)} minutes"
-      seconds < 86_400 -> "Expires in #{ceil_div(seconds, 3_600)} hours"
-      true -> "Expires in #{ceil_div(seconds, 86_400)} days"
+      DateTime.compare(expires_at, now) != :gt -> gettext("Expired")
+      seconds < 60 -> gettext("Expires in under 1 minute")
+      seconds < 3_600 -> ngettext("Expires in %{count} minute", "Expires in %{count} minutes", ceil_div(seconds, 60), count: ceil_div(seconds, 60))
+      seconds < 86_400 -> ngettext("Expires in %{count} hour", "Expires in %{count} hours", ceil_div(seconds, 3_600), count: ceil_div(seconds, 3_600))
+      true -> ngettext("Expires in %{count} day", "Expires in %{count} days", ceil_div(seconds, 86_400), count: ceil_div(seconds, 86_400))
     end
   end
 

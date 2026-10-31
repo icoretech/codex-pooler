@@ -4,6 +4,8 @@ defmodule CodexPooler.Access.Invite do
 
   import Ecto.Changeset
 
+  alias CodexPooler.SupportedLocales
+
   @type t :: %__MODULE__{}
   @type attrs :: map()
 
@@ -11,6 +13,7 @@ defmodule CodexPooler.Access.Invite do
     field :pool_id, :binary_id
     field :token_hash, :binary
     field :invited_email, :string
+    field :locale, :string
     field :status, :string
     field :expires_at, :utc_datetime_usec
     field :created_by_user_id, :binary_id
@@ -28,6 +31,7 @@ defmodule CodexPooler.Access.Invite do
       :pool_id,
       :token_hash,
       :invited_email,
+      :locale,
       :status,
       :expires_at,
       :created_by_user_id,
@@ -48,6 +52,8 @@ defmodule CodexPooler.Access.Invite do
     ])
     |> validate_format(:invited_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "must be a valid email address")
     |> validate_inclusion(:status, ~w(active accepted revoked expired))
+    |> validate_inclusion(:locale, SupportedLocales.tags())
+    |> check_constraint(:locale, name: :invites_locale_check)
     |> check_constraint(:invited_email, name: :invites_invited_email_not_blank_check)
     |> unique_constraint(:token_hash, name: :invites_token_hash_uq)
     |> unique_constraint(:invited_email,

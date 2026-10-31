@@ -17,7 +17,6 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
       event_summary_rows: 1,
       event_title: 1,
       format_datetime: 2,
-      format_total: 1,
       target_link: 1
     ]
 
@@ -29,6 +28,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   attr :previous_path, :string, default: nil
   attr :next_path, :string, default: nil
 
+  @spec audit_prose_ledger(map()) :: Phoenix.LiveView.Rendered.t()
   def audit_prose_ledger(assigns) do
     assigns =
       assigns
@@ -43,7 +43,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
       <LogPagination.pager
         :if={@audit_logs.items != []}
         id="audit-log-pagination"
-        label="Audit log pagination"
+        label={gettext("Audit log pagination")}
         page={@page}
         previous_path={@previous_path}
         next_path={@next_path}
@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
         :if={@audit_logs.items == []}
         id="audit-log-empty-state"
         icon="hero-clipboard-document-list"
-        title="No audit events"
+        title={gettext("No audit events")}
         description={empty_copy()}
       />
 
@@ -62,8 +62,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
         list and its total for a screen reader before the sentences, which is
         the one thing the pager cannot do. --%>
         <p class="sr-only">
-          Audit logs, {format_total(@audit_logs.total)}{if Map.get(@audit_logs, :total_exact?) == false,
-            do: " or more"} matching redacted audit events
+          {audit_total_label(@audit_logs)}
         </p>
         <section
           :for={{day, events} <- @day_groups}
@@ -86,8 +85,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                 type="button"
                 data-role="audit-prose-family"
                 class="mt-[1.5px] flex shrink-0 cursor-pointer transition-opacity hover:opacity-70"
-                aria-label={"Filter by event: #{event_title(event)}"}
-                title={"Filter by event: #{event_title(event)}"}
+                aria-label={gettext("Filter by event: %{event}", event: event_title(event))}
+                title={gettext("Filter by event: %{event}", event: event_title(event))}
                 phx-click="select_action_filter"
                 phx-value-action={event.action}
               >
@@ -108,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                 class="flex shrink-0 self-center cursor-pointer text-base-content/25 transition-colors hover:text-primary"
                 aria-haspopup="dialog"
                 aria-controls="audit-event-details-sidebar"
-                aria-label={"Inspect event details for #{event_title(event)}"}
+                aria-label={gettext("Inspect event details for %{event}", event: event_title(event))}
                 phx-click="show_audit_event"
                 phx-value-id={event.id}
               >
@@ -136,19 +135,20 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
            datetime_preferences
          ) do
       %{date: date} -> date
-      nil -> "Undated"
+      nil -> gettext("Undated")
     end
   end
 
   attr :selected_audit_event, :map, default: nil
   attr :datetime_preferences, :map, required: true
 
+  @spec audit_event_drawer(map()) :: Phoenix.LiveView.Rendered.t()
   def audit_event_drawer(assigns) do
     ~H"""
     <div class="drawer-side z-[70]">
       <label
         for="audit-event-details-drawer"
-        aria-label="close event details"
+        aria-label={gettext("close event details")}
         class="drawer-overlay"
         phx-click="close_audit_event"
       ></label>
@@ -164,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <p class="text-xs font-semibold uppercase tracking-wide text-primary">
-                  Event details
+                  {gettext("Event details")}
                 </p>
                 <h2
                   id="audit-event-details-title"
@@ -180,7 +180,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                 id="audit-event-details-close"
                 type="button"
                 class="btn btn-ghost btn-sm btn-square"
-                aria-label="Close event details"
+                aria-label={gettext("Close event details")}
                 phx-click="close_audit_event"
               >
                 <.icon name="hero-x-mark" class="size-5" />
@@ -207,20 +207,20 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                 navigate={actor_link(@selected_audit_event)}
                 class="btn btn-outline btn-sm"
               >
-                Open operator
+                {gettext("Open operator")}
               </.link>
               <.link
                 :if={target_link(@selected_audit_event)}
                 navigate={target_link(@selected_audit_event)}
                 class="btn btn-primary btn-sm"
               >
-                Open related record
+                {gettext("Open related record")}
               </.link>
             </div>
 
             <div id="audit-event-detail-metadata" class="mt-5">
               <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                Sanitized details
+                {gettext("Sanitized details")}
               </h3>
               <dl class="mt-2 grid gap-2 text-sm">
                 <div
@@ -236,14 +236,14 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                   :if={detail_rows(@selected_audit_event.details) == []}
                   class="rounded-box bg-base-200/60 px-3 py-2 text-sm text-base-content/60"
                 >
-                  No extra sanitized details recorded.
+                  {gettext("No extra sanitized details recorded.")}
                 </p>
               </dl>
             </div>
           </section>
         <% else %>
           <div class="grid min-h-full place-items-center p-6 text-center text-sm text-base-content/60">
-            Select an event time to inspect its details.
+            {gettext("Select an event time to inspect its details.")}
           </div>
         <% end %>
       </aside>
@@ -251,7 +251,15 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
     """
   end
 
+  defp audit_total_label(%{total_exact?: false, total: total}) do
+    ngettext("Audit logs, %{count} or more matching redacted audit event", "Audit logs, %{count} or more matching redacted audit events", total || 0)
+  end
+
+  defp audit_total_label(%{total: total}) do
+    ngettext("Audit logs, %{count} matching redacted audit event", "Audit logs, %{count} matching redacted audit events", total || 0)
+  end
+
   defp empty_copy do
-    "No audit logs yet. Create operator activity or loosen the filters to see redacted audit events."
+    gettext("No audit logs yet. Create operator activity or loosen the filters to see redacted audit events.")
   end
 end

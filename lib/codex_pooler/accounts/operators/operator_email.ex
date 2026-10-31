@@ -3,6 +3,8 @@ defmodule CodexPooler.Accounts.OperatorEmail do
   Email builders and delivery helpers for operator account access flows.
   """
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Swoosh.Email
 
   require Logger
@@ -10,10 +12,7 @@ defmodule CodexPooler.Accounts.OperatorEmail do
   alias CodexPooler.Accounts.User
   alias CodexPooler.InstanceSettings
   alias CodexPooler.Mailer
-
-  @access_subject "Codex Pooler operator access"
-  @temporary_password_subject "Codex Pooler temporary password"
-  @password_change_required_notice "You will be asked to change this password after sign in."
+  alias CodexPooler.SupportedLocales
 
   @type temporary_password_result :: %{
           required(:user) => User.t(),
@@ -25,42 +24,29 @@ defmodule CodexPooler.Accounts.OperatorEmail do
           {:ok, temporary_password_result()} | {:error, Ecto.Changeset.t() | atom()}
   @type delivery_result :: {:ok, term()} | {:error, term()}
 
-  @spec operator_access_email(String.t(), binary(), boolean()) :: Swoosh.Email.t()
-  def operator_access_email(operator_email, temporary_password, password_change_required \\ true) do
-    build_email(@access_subject, operator_email, temporary_password, password_change_required)
+  @spec operator_access_email(String.t(), binary(), boolean(), String.t() | nil) :: Swoosh.Email.t()
+  def operator_access_email(operator_email, temporary_password, password_change_required, locale) do
+    Gettext.with_locale(SupportedLocales.gettext_locale(locale), fn ->
+      build_email(dgettext("emails", "Codex Pooler operator access"), operator_email, temporary_password, password_change_required)
+    end)
   end
 
-  @spec temporary_password_email(String.t(), binary(), boolean()) :: Swoosh.Email.t()
-  def temporary_password_email(
-        operator_email,
-        temporary_password,
-        password_change_required \\ true
-      ) do
-    build_email(
-      @temporary_password_subject,
-      operator_email,
-      temporary_password,
-      password_change_required
-    )
+  @spec temporary_password_email(String.t(), binary(), boolean(), String.t() | nil) :: Swoosh.Email.t()
+  def temporary_password_email(operator_email, temporary_password, password_change_required, locale) do
+    Gettext.with_locale(SupportedLocales.gettext_locale(locale), fn ->
+      build_email(dgettext("emails", "Codex Pooler temporary password"), operator_email, temporary_password, password_change_required)
+    end)
   end
 
-  @spec deliver_operator_access(String.t(), binary(), boolean()) :: delivery_result()
-  def deliver_operator_access(
-        operator_email,
-        temporary_password,
-        password_change_required \\ true
-      ) do
-    operator_access_email(operator_email, temporary_password, password_change_required)
+  @spec deliver_operator_access(String.t(), binary(), boolean(), String.t() | nil) :: delivery_result()
+  def deliver_operator_access(operator_email, temporary_password, password_change_required, locale) do
+    operator_access_email(operator_email, temporary_password, password_change_required, locale)
     |> Mailer.deliver()
   end
 
-  @spec deliver_temporary_password(String.t(), binary(), boolean()) :: delivery_result()
-  def deliver_temporary_password(
-        operator_email,
-        temporary_password,
-        password_change_required \\ true
-      ) do
-    temporary_password_email(operator_email, temporary_password, password_change_required)
+  @spec deliver_temporary_password(String.t(), binary(), boolean(), String.t() | nil) :: delivery_result()
+  def deliver_temporary_password(operator_email, temporary_password, password_change_required, locale) do
+    temporary_password_email(operator_email, temporary_password, password_change_required, locale)
     |> Mailer.deliver()
   end
 
@@ -71,7 +57,8 @@ defmodule CodexPooler.Accounts.OperatorEmail do
       deliver_operator_access(
         result.user.email,
         result.temporary_password,
-        result.user.password_change_required
+        result.user.password_change_required,
+        result.user.locale
       )
     end)
     |> then(&{:ok, &1})
@@ -86,7 +73,8 @@ defmodule CodexPooler.Accounts.OperatorEmail do
       deliver_temporary_password(
         result.user.email,
         result.temporary_password,
-        result.user.password_change_required
+        result.user.password_change_required,
+        result.user.locale
       )
     end)
     |> then(&{:ok, &1})
@@ -104,14 +92,14 @@ defmodule CodexPooler.Accounts.OperatorEmail do
 
   defp text_body(operator_email, temporary_password, password_change_required) do
     [
-      "An administrator created or updated Codex Pooler operator access for this email.",
-      "If you did not expect this email, do not sign in with this password. Contact your system administrator or ignore this email.",
-      "Never forward this temporary password. Codex Pooler administrators will not ask you to send it back.",
+      dgettext("emails", "An administrator created or updated Codex Pooler operator access for this email."),
+      dgettext("emails", "If you did not expect this email, do not sign in with this password. Contact your system administrator or ignore this email."),
+      dgettext("emails", "Never forward this temporary password. Codex Pooler administrators will not ask you to send it back."),
       "",
-      "Login URL: #{login_url()}",
-      "Operator email: #{operator_email}",
-      "Temporary password: #{temporary_password}",
-      password_change_required && @password_change_required_notice
+      dgettext("emails", "Login URL: %{url}", url: login_url()),
+      dgettext("emails", "Operator email: %{email}", email: operator_email),
+      dgettext("emails", "Temporary password: %{password}", password: temporary_password),
+      password_change_required && dgettext("emails", "You will be asked to change this password after sign in.")
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")

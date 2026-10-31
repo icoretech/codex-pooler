@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
   attr :content_id, :string, required: true
   attr :token_burn, :map, required: true
 
+  @spec token_burn_popover(map()) :: Phoenix.LiveView.Rendered.t()
   def token_burn_popover(assigns) do
     ~H"""
     <span
@@ -24,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
         data-usage-state={usage_state(@token_burn)}
         class="inline-flex cursor-pointer items-center justify-end gap-1 rounded px-1 text-xs font-medium text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         tabindex="0"
-        aria-label={"Token burn calculation: #{@token_burn.title}"}
+        aria-label={gettext("Token burn calculation: %{title}", title: @token_burn.title)}
         aria-haspopup="true"
         aria-describedby={@content_id}
         title={@token_burn.title}
@@ -40,20 +41,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
       >
         <span class="grid gap-2 px-4 pb-3 pt-3.5">
           <span class="block font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-            Token burn
+            {gettext("Token burn")}
           </span>
           <span class="block text-xs leading-5 text-base-content/60">
-            Settled tokens from the last 5 minutes against the previous 1 hour baseline.
+            {gettext("Settled tokens from the last 5 minutes against the previous 1 hour baseline.")}
           </span>
           <span class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs leading-5">
-            <span class="font-medium text-base-content/55">Last 5 minutes</span>
+            <span class="font-medium text-base-content/55">{gettext("Last 5 minutes")}</span>
             <span class="text-right tabular-nums text-base-content">
               {token_burn_recent_token_label(@token_burn)}<span
                 :if={recent_rate_label(@token_burn)}
                 class="ml-1 text-[10.5px] text-base-content/50"
               >{recent_rate_label(@token_burn)}</span>
             </span>
-            <span class="font-medium text-base-content/55">Previous 1 hour</span>
+            <span class="font-medium text-base-content/55">{gettext("Previous 1 hour")}</span>
             <span class="text-right tabular-nums text-base-content">
               {token_burn_baseline_token_label(@token_burn)}<span
                 :if={baseline_rate_label(@token_burn)}
@@ -82,26 +83,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
     """
   end
 
-  defp token_burn_recent_token_label(%{usage_state: :unknown}), do: "Usage unavailable"
+  defp token_burn_recent_token_label(%{usage_state: :unknown}), do: gettext("Usage unavailable")
 
   defp token_burn_recent_token_label(%{usage_state: :partial, recent_tokens: tokens})
        when is_integer(tokens) and tokens >= 0 do
-    "at least #{Format.token_count(tokens)} tokens"
+    ngettext("at least %{tokens} token", "at least %{tokens} tokens", tokens, tokens: Format.token_count(tokens))
   end
 
   defp token_burn_recent_token_label(%{recent_tokens: tokens})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)} tokens"
+    ngettext("%{tokens} token", "%{tokens} tokens", tokens, tokens: Format.token_count(tokens))
   end
 
-  defp token_burn_recent_token_label(_token_burn), do: "0 tokens"
+  defp token_burn_recent_token_label(_token_burn), do: ngettext("%{count} token", "%{count} tokens", 0)
 
   defp token_burn_baseline_token_label(%{baseline_tokens: tokens})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)} tokens"
+    ngettext("%{tokens} token", "%{tokens} tokens", tokens, tokens: Format.token_count(tokens))
   end
 
-  defp token_burn_baseline_token_label(_token_burn), do: "0 tokens"
+  defp token_burn_baseline_token_label(_token_burn), do: ngettext("%{count} token", "%{count} tokens", 0)
 
   defp usage_state(%{usage_state: usage_state})
        when usage_state in [:idle, :complete, :partial, :unknown],
@@ -109,18 +110,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
 
   defp usage_state(_token_burn), do: :idle
 
-  defp usage_state_label(%{usage_state: :idle}), do: "No recent usage"
-  defp usage_state_label(%{usage_state: :complete}), do: "Usage complete"
-  defp usage_state_label(%{usage_state: :partial}), do: "Usage partially reported"
-  defp usage_state_label(%{usage_state: :unknown}), do: "Usage unavailable"
-  defp usage_state_label(_token_burn), do: "No recent usage"
+  defp usage_state_label(%{usage_state: :idle}), do: gettext("No recent usage")
+  defp usage_state_label(%{usage_state: :complete}), do: gettext("Usage complete")
+  defp usage_state_label(%{usage_state: :partial}), do: gettext("Usage partially reported")
+  defp usage_state_label(%{usage_state: :unknown}), do: gettext("Usage unavailable")
+  defp usage_state_label(_token_burn), do: gettext("No recent usage")
 
-  defp missing_usage_label(%{unknown_request_count: 1}), do: "1 usage record missing"
+  defp missing_usage_label(%{unknown_request_count: count}) when is_integer(count) and count > 0,
+    do: ngettext("%{count} usage record missing", "%{count} usage records missing", count)
 
-  defp missing_usage_label(%{unknown_request_count: count}) when is_integer(count) and count > 1,
-    do: "#{count} usage records missing"
-
-  defp missing_usage_label(_token_burn), do: "Usage records missing"
+  defp missing_usage_label(_token_burn), do: gettext("Usage records missing")
 
   defp missing_usage_role(%{usage_state: :unknown}), do: "upstream-token-burn-usage-unavailable"
   defp missing_usage_role(_token_burn), do: "upstream-token-burn-missing-usage"
@@ -128,12 +127,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
   defp recent_rate_label(%{usage_state: :unknown}), do: nil
 
   defp recent_rate_label(%{recent_tokens: tokens}) when is_integer(tokens) and tokens > 0,
-    do: "#{Format.token_count(tokens / 5)}/min"
+    do: gettext("%{rate}/min", rate: Format.token_count(tokens / 5))
 
   defp recent_rate_label(_token_burn), do: nil
 
   defp baseline_rate_label(%{baseline_tokens: tokens}) when is_integer(tokens) and tokens > 0,
-    do: "#{Format.token_count(tokens / 60)}/min"
+    do: gettext("%{rate}/min", rate: Format.token_count(tokens / 60))
 
   defp baseline_rate_label(_token_burn), do: nil
 

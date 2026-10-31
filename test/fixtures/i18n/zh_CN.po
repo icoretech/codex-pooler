@@ -1,0 +1,28 @@
+msgid ""
+msgstr ""
+"Language: zh_CN\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "打开"
+
+msgctxt "state"
+msgid "Open"
+msgstr "开启"
+
+msgid "Hello %{name}, 100% ready"
+msgstr "%{name}，已 100% 就绪"
+
+msgid "%{count} request for %{name}"
+msgid_plural "%{count} requests for %{name}"
+msgstr[0] "%{name} 的 %{count} 个请求"
+
+msgid "OpenAI is reporting an incident"
+msgid_plural "OpenAI is reporting %{count} incidents"
+msgstr[0] "OpenAI 报告了 %{count} 个事件"
+
+msgid "First line\nSecond \"quoted\" line"
+msgstr "第一行\n第二行（带\"引号\"）"

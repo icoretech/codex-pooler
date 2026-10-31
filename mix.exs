@@ -43,6 +43,10 @@ defmodule CodexPooler.MixProject do
         "quality.dialyzer": :test,
         "quality.security": :test,
         "quality.xref": :test,
+        "quality.i18n": :test,
+        "codex_pooler.i18n.extract": :test,
+        "codex_pooler.i18n.check": :test,
+        "codex_pooler.i18n.scan": :test,
         six: :test,
         "six.detail": :test,
         "six.html": :test
@@ -141,13 +145,15 @@ defmodule CodexPooler.MixProject do
       "quality.credo": ["credo --strict"],
       "quality.dialyzer": ["compile --warnings-as-errors", "dialyzer --no-compile"],
       "quality.security": ["sobelow --exit --threshold medium --skip"],
+      "quality.i18n": ["gettext.extract --check-up-to-date", "codex_pooler.i18n.check", "codex_pooler.i18n.scan --check"],
       quality: [
         "quality.test_cleanup",
         "quality.format",
         "quality.xref",
         "quality.credo",
         "quality.dialyzer",
-        "quality.security"
+        "quality.security",
+        "quality.i18n"
       ],
       coverage: ["test --cover"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

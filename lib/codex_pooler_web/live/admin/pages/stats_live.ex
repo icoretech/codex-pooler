@@ -17,18 +17,11 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   @dashboard_build_telemetry_event [:codex_pooler, :admin, :stats, :dashboard, :build]
   @telemetry_windows ~w(1h 5h 24h 7d)
 
-  @window_options [
-    {"Last 1 hour", "1h"},
-    {"Last 5 hours", "5h"},
-    {"Last 24 hours", "24h"},
-    {"Last 7 days", "7d"}
-  ]
-
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Stats",
+       page_title: gettext("Stats"),
        dashboard: nil,
        dashboard_loading?: true,
        filter_form: to_form(%{"pool_id" => "", "window" => "24h"}, as: :filters),
@@ -161,6 +154,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:stats}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -173,8 +168,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
         <div class="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-end">
           <AdminComponents.page_header
             id="stats-page-header"
-            title="Usage"
-            description="Tokens, spend, latency, and cache activity for the Pools and window you pick."
+            title={gettext("Usage")}
+            description={gettext("Tokens, spend, latency, and cache activity for the Pools and window you pick.")}
           />
 
           <AdminComponents.filter_form
@@ -185,7 +180,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           >
             <PoolFilterComponents.pool_filter_dropdown
               id="stats-pool-filter-control"
-              label="Scope"
+              label={gettext("Scope")}
               hidden_id="stats-pool-filter"
               selected_value={@filter_form.params["pool_id"] || ""}
               selected={stats_pool_filter_selected(@pool_filter_options)}
@@ -205,7 +200,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
               >
                 <summary
                   data-role="window-filter-trigger"
-                  aria-label="Range"
+                  aria-label={gettext("Range")}
                   class="select flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
                 >
                   <.icon name="hero-clock" class="size-4 shrink-0 text-base-content/60" />
@@ -241,8 +236,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
         <div :if={@filter_error} id="stats-filter-error" class="alert alert-warning items-start">
           <.icon name="hero-exclamation-triangle" class="size-5" />
           <div>
-            <p class="font-semibold">Filters were not applied</p>
-            <p class="text-sm">{@filter_error.message}</p>
+            <p class="font-semibold">{gettext("Filters were not applied")}</p>
+            <p class="text-sm">{stats_error_message(@filter_error)}</p>
           </div>
         </div>
 
@@ -271,11 +266,11 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
         <% else %>
           <AdminComponents.empty_state
             id={if @dashboard_loading?, do: "stats-dashboard-loading", else: "stats-dashboard-error"}
-            title={if @dashboard_loading?, do: "Loading stats", else: "Stats are not available"}
+            title={if @dashboard_loading?, do: gettext("Loading stats"), else: gettext("Stats are not available")}
             description={
               if @dashboard_loading?,
-                do: "Building the dashboard for the Pools and window you picked.",
-                else: "Change filters or sign in with an operator account that can manage pools."
+                do: gettext("Building the dashboard for the Pools and window you picked."),
+                else: gettext("Change filters or sign in with an operator account that can manage pools.")
             }
             icon={if @dashboard_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}
             loading?={@dashboard_loading?}
@@ -374,11 +369,12 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   defp start_stats_dashboard(socket, generation) do
     preparation = socket.assigns.stats_dashboard_preparation
+    locale = Gettext.get_locale()
 
     socket
     |> assign(stats_dashboard_running?: true, stats_dashboard_rerun?: false)
     |> start_async({:stats_dashboard, generation, socket.assigns.stats_dashboard_reason}, fn ->
-      build_prepared_dashboard_with_telemetry(preparation)
+      Gettext.with_locale(locale, fn -> build_prepared_dashboard_with_telemetry(preparation) end)
     end)
   end
 
@@ -615,7 +611,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   defp stats_pool_filter_selected([]) do
     %{
-      label: "No assigned Pools",
+      label: gettext("No assigned Pools"),
       value: "",
       icon: "hero-server-stack",
       icon_class: "text-base-content/60",
@@ -630,18 +626,30 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp stats_scope_label(%{selected_pool: %{name: name}}) when is_binary(name) and name != "",
     do: name
 
-  defp stats_scope_label(_dashboard), do: "all visible pools"
+  defp stats_scope_label(_dashboard), do: gettext("all visible pools")
 
-  defp window_options, do: @window_options
+  defp window_options do
+    [
+      {ngettext("Last %{count} hour", "Last %{count} hours", 1), "1h"},
+      {ngettext("Last %{count} hour", "Last %{count} hours", 5), "5h"},
+      {ngettext("Last %{count} hour", "Last %{count} hours", 24), "24h"},
+      {ngettext("Last %{count} day", "Last %{count} days", 7), "7d"}
+    ]
+  end
 
   defp selected_window_filter_label(filter_form) do
     selected_window = filter_form.params["window"] || "24h"
 
     window_options()
-    |> Enum.find_value("Last 24 hours", fn {label, window} ->
+    |> Enum.find_value(ngettext("Last %{count} hour", "Last %{count} hours", 24), fn {label, window} ->
       if window == selected_window, do: label
     end)
   end
+
+  defp stats_error_message(%{code: :unauthorized}), do: gettext("admin statistics require an authenticated operator")
+  defp stats_error_message(%{code: :pool_not_found}), do: gettext("pool filter is not available")
+  defp stats_error_message(%{code: :invalid_window}), do: gettext("window must be one of 1h, 5h, 24h, or 7d")
+  defp stats_error_message(_error), do: gettext("statistics could not be loaded")
 
   defp normalize_window(window) when window in ["1h", "5h", "24h", "7d"], do: window
   defp normalize_window(_window), do: "24h"

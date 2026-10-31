@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   import Phoenix.Component, only: [assign: 2, assign: 3, to_form: 2]
   import Phoenix.LiveView, only: [put_flash: 3]
 
@@ -19,7 +21,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
         socket,
         identity_id,
         &Upstreams.pause_account_for_scope/3,
-        "Upstream account paused",
+        gettext("Upstream account paused"),
         reload_fun
       )
 
@@ -32,7 +34,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
         socket,
         identity_id,
         &Upstreams.reactivate_account_for_scope/3,
-        "Upstream account reactivated",
+        gettext("Upstream account reactivated"),
         reload_fun
       )
 
@@ -43,7 +45,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
     case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id, trigger_kind: "admin_upstreams_live") do
       {:ok, %{job: job}} ->
         message =
-          if job.conflict?, do: "Token refresh is already queued", else: "Token refresh queued"
+          if job.conflict?, do: gettext("Token refresh is already queued"), else: gettext("Token refresh queued")
 
         socket
         |> put_flash(:info, message)
@@ -58,10 +60,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
   def open_delete(socket, identity_id) do
     case find_account(socket, identity_id) do
       nil ->
-        put_flash(socket, :error, "Upstream account was not found")
+        put_flash(socket, :error, gettext("Upstream account was not found"))
 
       %{can_delete?: false} ->
-        put_flash(socket, :error, "Upstream account deletion is unavailable")
+        put_flash(socket, :error, gettext("Upstream account deletion is unavailable"))
 
       account ->
         assign(socket,
@@ -99,7 +101,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
            confirmation_label: delete_params["confirmation_label"]
          }) do
       {status, _result} when status in [:ok, :deleting] ->
-        message = if status == :ok, do: "Upstream account deleted", else: "Upstream account deletion queued"
+        message = if status == :ok, do: gettext("Upstream account deleted"), else: gettext("Upstream account deletion queued")
 
         socket
         |> put_flash(:info, message)
@@ -140,7 +142,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
          ) do
       {:ok, _result} ->
         socket
-        |> put_flash(:info, "Upstream account renamed")
+        |> put_flash(:info, gettext("Upstream account renamed"))
         |> close_fun.()
         |> reload_fun.()
 

@@ -1,14 +1,11 @@
 defmodule CodexPoolerWeb.Admin.SystemSettingsGroupContract do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.InstanceSettings.Defaults
 
   @groups ~w(gateway ingress files transcription operator catalog development mcp metrics smtp)
-  @forwarded_client_ip_source_options [
-    {"Peer connection", "peer"},
-    {"X-Forwarded-For", "x_forwarded_for"},
-    {"X-Real-IP", "x_real_ip"}
-  ]
   @group_members %{
     "gateway" => ~w(gateway files transcription)
   }
@@ -29,7 +26,13 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsGroupContract do
   def known?(group), do: group in @groups
 
   @spec forwarded_client_ip_source_options() :: [{String.t(), String.t()}]
-  def forwarded_client_ip_source_options, do: @forwarded_client_ip_source_options
+  def forwarded_client_ip_source_options do
+    [
+      {gettext("Peer connection"), "peer"},
+      {gettext("X-Forwarded-For"), "x_forwarded_for"},
+      {gettext("X-Real-IP"), "x_real_ip"}
+    ]
+  end
 
   @spec members(String.t()) :: [String.t()]
   def members(group) when group in @groups, do: Map.get(@group_members, group, [group])

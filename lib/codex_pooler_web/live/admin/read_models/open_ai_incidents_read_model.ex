@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
   @moduledoc "Metadata-only projection for the authenticated OpenAI incidents page."
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Freshness
@@ -81,8 +82,12 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
   defp status_key(%Incident{status: "Resolved"}), do: :resolved
   defp status_key(%Incident{}), do: :unknown
 
-  defp display_status(%Incident{retired_at: %DateTime{}}), do: "Retired"
-  defp display_status(%Incident{status: status}), do: safe_text(status) || "Unknown"
+  defp display_status(%Incident{retired_at: %DateTime{}}), do: gettext("Retired")
+  defp display_status(%Incident{status: "Investigating"}), do: gettext("Investigating")
+  defp display_status(%Incident{status: "Identified"}), do: gettext("Identified")
+  defp display_status(%Incident{status: "Monitoring"}), do: gettext("Monitoring")
+  defp display_status(%Incident{status: "Resolved"}), do: gettext("Resolved")
+  defp display_status(%Incident{status: status}), do: safe_text(status) || gettext("Unknown")
 
   defp safe_text(nil), do: nil
   defp safe_text(value) when is_binary(value), do: String.trim(value)
@@ -90,8 +95,8 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
 
   defp safe_component(value) do
     case safe_text(value) do
-      nil -> "Unspecified"
-      "" -> "Unspecified"
+      nil -> gettext("Unspecified")
+      "" -> gettext("Unspecified")
       component -> component
     end
   end

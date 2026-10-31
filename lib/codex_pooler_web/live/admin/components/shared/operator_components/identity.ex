@@ -10,12 +10,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Identity do
   attr :status, :string, default: "active"
   attr :class, :any, default: nil
 
+  @spec operator_avatar(map()) :: Phoenix.LiveView.Rendered.t()
   def operator_avatar(assigns) do
     ~H"""
     <div
       id={@id}
       class={[operator_avatar_class(@status), @class]}
-      aria-label={"Operator #{operator_display_name(@operator)}"}
+      aria-label={gettext("Operator %{operator}", operator: operator_display_name(@operator))}
       title={operator_display_name(@operator)}
     >
       <div class="size-10 rounded-full ring-1 ring-base-300">
@@ -31,6 +32,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Identity do
     """
   end
 
+  @spec operator_display_name(map()) :: String.t()
   def operator_display_name(%{display_name: display_name, email: email}) do
     case display_name && String.trim(display_name) do
       value when is_binary(value) and value != "" -> value

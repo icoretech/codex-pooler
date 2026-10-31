@@ -18,6 +18,31 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
   alias CodexPooler.Repo
   setup :register_and_log_in_user
 
+  test "email channel language picker persists the selected language and displays it on the channel row", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/alerts?tab=channels")
+    assert has_element?(view, "#alert-channel-locale option[value='en'][selected]")
+    assert has_element?(view, "label", "邮件语言")
+
+    view |> form("#alerts-channel-form", alert_channel: %{channel_type: "email", display_name: "Localized channel", email_to: "localized-alerts@example.com", locale: "zh-CN"}) |> render_submit()
+
+    channel = Repo.get_by!(AlertChannel, display_name: "Localized channel")
+    assert channel.locale == "zh-CN"
+    assert has_element?(view, "#alert-channel-row-#{channel.id}-locale", "邮件语言：简体中文")
+
+    view |> element("#alert-channel-edit-#{channel.id}") |> render_click()
+    assert has_element?(view, "#alert-channel-locale option[value='zh-CN'][selected]")
+  end
+
+  test "webhook channel form hides email language and rejects a submitted language", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts?tab=channels")
+    view |> form("#alerts-channel-form", alert_channel: %{channel_type: "webhook"}) |> render_change()
+    refute has_element?(view, "#alert-channel-locale")
+
+    render_submit(view, "save_channel", %{"alert_channel" => %{"channel_type" => "webhook", "display_name" => "Rejected localized webhook", "endpoint_url" => "https://alerts.example.com/notify", "locale" => "zh-CN"}})
+
+    refute Repo.get_by(AlertChannel, display_name: "Rejected localized webhook")
+  end
+
   test "renders rule workspace and creates a Pool alert rule", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "alerts-create", name: "Alerts Create"})
 

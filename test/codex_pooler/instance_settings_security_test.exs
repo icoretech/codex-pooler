@@ -102,7 +102,8 @@ defmodule CodexPooler.InstanceSettingsSecurityTest do
              InstanceSettings.send_smtp_test_email(
                settings,
                %{"smtp" => %{"enabled" => true}},
-               admin_scope
+               admin_scope,
+               "en"
              )
 
     assert InstanceSettings.get!().lock_version == settings.lock_version

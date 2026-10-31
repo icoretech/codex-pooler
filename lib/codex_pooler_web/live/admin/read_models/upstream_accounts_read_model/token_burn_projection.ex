@@ -1,13 +1,14 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Accounting
   alias CodexPooler.Catalog
   alias CodexPoolerWeb.Admin.Format
 
   @token_burn_recent_seconds 5 * 60
   @token_burn_baseline_seconds 60 * 60
-  @unknown_model_label "unknown model"
 
   @type recent_model :: %{
           required(:label) => String.t(),
@@ -110,10 +111,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
 
   defp recent_models(model_totals, model_labels) do
     model_totals
-    |> Enum.group_by(fn row -> Map.get(model_labels, row.model_id, @unknown_model_label) end)
+    |> Enum.group_by(fn row -> Map.get(model_labels, row.model_id) end)
     |> Enum.map(fn {label, rows} ->
       %{
-        label: label,
+        label: label || gettext("unknown model"),
         tokens: rows |> Enum.map(& &1.total_tokens) |> Enum.sum(),
         cost_micros: rows |> Enum.map(& &1.settled_cost_micros) |> Enum.sum()
       }
@@ -183,11 +184,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
     end
   end
 
-  defp level_label(:unknown, _level), do: "usage unavailable"
+  defp level_label(:unknown, _level), do: gettext("usage unavailable")
   defp level_label(_usage_state, level), do: "x#{level}"
 
   defp usage_title(:idle, _recent_tokens, _baseline_tokens, _recent_requests, _known, _unknown),
-    do: "No requests in the last 5 minutes."
+    do: gettext("No requests in the last 5 minutes.")
 
   defp usage_title(
          :complete,
@@ -197,8 +198,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          _known,
          _unknown
        ) do
-    token_comparison_title(recent_tokens, baseline_tokens) <>
-      "; complete usage for #{request_count_label(recent_requests)}"
+    gettext("%{comparison}; complete usage for %{requests}", comparison: token_comparison_title(recent_tokens, baseline_tokens), requests: request_count_label(recent_requests))
   end
 
   defp usage_title(
@@ -209,8 +209,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          known_request_count,
          unknown_request_count
        ) do
-    token_comparison_title(recent_tokens, baseline_tokens) <>
-      "; settled usage reported for #{known_request_count} of #{recent_requests} requests; #{usage_record_count_label(unknown_request_count)} missing"
+    gettext("%{comparison}; settled usage reported for %{known} of %{total} requests; %{missing} missing", comparison: token_comparison_title(recent_tokens, baseline_tokens), known: known_request_count, total: recent_requests, missing: usage_record_count_label(unknown_request_count))
   end
 
   defp usage_title(
@@ -221,16 +220,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          _known,
          unknown_request_count
        ) do
-    "last 5m: #{request_count_label(recent_requests)}; #{usage_record_count_label(unknown_request_count)} missing"
+    gettext("last 5m: %{requests}; %{missing} missing", requests: request_count_label(recent_requests), missing: usage_record_count_label(unknown_request_count))
   end
 
   defp token_comparison_title(recent_tokens, baseline_tokens) do
-    "last 5m: #{Format.token_count(recent_tokens)} tokens; previous 1h: #{Format.token_count(baseline_tokens)} tokens"
+    gettext("last 5m: %{recent} tokens; previous 1h: %{baseline} tokens", recent: Format.token_count(recent_tokens), baseline: Format.token_count(baseline_tokens))
   end
 
-  defp request_count_label(1), do: "1 request"
-  defp request_count_label(count), do: "#{count} requests"
+  defp request_count_label(count), do: ngettext("%{count} request", "%{count} requests", count)
 
-  defp usage_record_count_label(1), do: "1 usage record"
-  defp usage_record_count_label(count), do: "#{count} usage records"
+  defp usage_record_count_label(count), do: ngettext("%{count} usage record", "%{count} usage records", count)
 end

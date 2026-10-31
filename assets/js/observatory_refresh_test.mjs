@@ -86,7 +86,8 @@ const buildStatusRoot = (dataset) => {
 	const freshness = {
 		dataset: {},
 		classList: { toggle() {} },
-		setAttribute() {},
+		attrs: {},
+		setAttribute(name, value) { this.attrs[name] = value; },
 	};
 	const label = { textContent: "" };
 	const spoken = { textContent: "" };
@@ -100,7 +101,7 @@ const buildStatusRoot = (dataset) => {
 		return null;
 	};
 
-	return { label, root };
+	return { freshness, label, root, spoken };
 };
 
 const buildController = ({
@@ -456,3 +457,65 @@ test(
 		]);
 	},
 );
+
+test("refresh hook reads translated status, spoken labels and aria names from data attributes", () => {
+	const clock = new FakeClock(10_000);
+	const documentTarget = new FakeDocument();
+	const refreshLabels = {
+		disconnectedAria: "刷新已断开", disconnectedLabel: "连接中断", disconnectedSpoken: "已断开连接",
+		pausedAria: "刷新已暂停", pausedLabel: "更新已暂停", pausedSpoken: "已暂停",
+		hiddenAria: "标签页隐藏时暂停刷新", hiddenLabel: "隐藏时暂停更新", hiddenSpoken: "隐藏时已暂停",
+		liveAria: "实时刷新", updatingLabel: "正在更新用量", liveSpoken: "实时",
+		secondsAgo: "%{seconds}s 前",
+	};
+	const { freshness, label, root, spoken } = buildStatusRoot({
+		freshnessGeneration: "0", lastAppliedAtMs: "", paused: "false", requestGeneration: "0",
+		refreshLabels: JSON.stringify(refreshLabels),
+	});
+	const context = { el: root, pushEvent() {} };
+	const hook = createObservatoryRefreshHook({ clock, documentTarget });
+	hook.mounted.call(context);
+	assert.equal(label.textContent, "正在更新用量");
+	assert.equal(freshness.attrs["aria-label"], "实时刷新");
+	assert.equal(spoken.textContent, "实时");
+	root.dataset.freshnessGeneration = "1";
+	root.dataset.lastAppliedAtMs = "5000";
+	hook.updated.call(context);
+	clock.advanceBy(4_000);
+	assert.equal(label.textContent, "4s 前");
+	root.dataset.paused = "true";
+	hook.updated.call(context);
+	assert.equal(label.textContent, "更新已暂停");
+	assert.equal(freshness.attrs["aria-label"], "刷新已暂停");
+	assert.equal(spoken.textContent, "已暂停");
+	root.dataset.paused = "false";
+	hook.updated.call(context);
+	documentTarget.setVisibility("hidden");
+	assert.equal(label.textContent, "隐藏时暂停更新");
+	assert.equal(freshness.attrs["aria-label"], "标签页隐藏时暂停刷新");
+	assert.equal(spoken.textContent, "隐藏时已暂停");
+	hook.disconnected.call(context);
+	assert.equal(label.textContent, "连接中断");
+	assert.equal(freshness.attrs["aria-label"], "刷新已断开");
+	assert.equal(spoken.textContent, "已断开连接");
+	hook.destroyed.call(context);
+});
+
+test("refresh hook keeps English for malformed labels and consumes changed translations after a patch", () => {
+	const clock = new FakeClock();
+	const documentTarget = new FakeDocument();
+	const { label, root, spoken } = buildStatusRoot({
+		freshnessGeneration: "0", lastAppliedAtMs: "", paused: "false", requestGeneration: "0",
+		refreshLabels: "invalid-json",
+	});
+	const context = { el: root, pushEvent() {} };
+	const hook = createObservatoryRefreshHook({ clock, documentTarget });
+	hook.mounted.call(context);
+	assert.equal(label.textContent, "Updating usage");
+	assert.equal(spoken.textContent, "Live");
+	root.dataset.refreshLabels = JSON.stringify({ updatingLabel: "正在更新用量", liveSpoken: "实时" });
+	hook.updated.call(context);
+	assert.equal(label.textContent, "正在更新用量");
+	assert.equal(spoken.textContent, "实时");
+	hook.destroyed.call(context);
+});

@@ -7,6 +7,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
   alias CodexPooler.Alerts.Delivery.ChannelEndpoint
   alias CodexPooler.Alerts.StatusVocabulary.Channel, as: ChannelStatus
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.SupportedLocales
 
   @derive {Inspect,
            except: [
@@ -38,6 +39,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
     field :display_name, :string
     field :state, :string, default: "active"
     field :email_to, :string
+    field :locale, :string
     field :endpoint_url, :string, virtual: true, redact: true
     field :delivery_endpoint_url, :string, virtual: true, redact: true
     field :endpoint_scheme, :string
@@ -69,6 +71,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
       :display_name,
       :state,
       :email_to,
+      :locale,
       :endpoint_url,
       :delivery_endpoint_url,
       :endpoint_scheme,
@@ -115,11 +118,14 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
     |> validate_inclusion(:state, @states)
     |> validate_inclusion(:endpoint_scheme, @endpoint_schemes)
     |> validate_channel_contract()
+    |> validate_email_locale()
     |> validate_endpoint_url_storage()
     |> validate_webhook_secret_storage()
     |> check_constraint(:channel_type, name: :alert_channels_channel_type_check)
     |> check_constraint(:state, name: :alert_channels_state_check)
     |> check_constraint(:endpoint_scheme, name: :alert_channels_endpoint_scheme_check)
+    |> check_constraint(:locale, name: :alert_channels_locale_check)
+    |> check_constraint(:locale, name: :alert_channels_email_locale_check)
     |> check_constraint(:metadata, name: :alert_channels_metadata_shape_check)
     |> check_constraint(:endpoint_url_aad,
       name: :alert_channels_endpoint_url_aad_shape_check
@@ -143,6 +149,20 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
 
   @spec disabled_state() :: state()
   defdelegate disabled_state(), to: ChannelStatus
+
+  defp validate_email_locale(changeset) do
+    if get_field(changeset, :channel_type) == "email" do
+      validate_inclusion(changeset, :locale, SupportedLocales.tags())
+    else
+      submitted? = Map.has_key?(changeset.params || %{}, "locale")
+
+      if submitted? or not is_nil(get_field(changeset, :locale)) do
+        add_error(changeset, :locale, "is only available for email channels")
+      else
+        changeset
+      end
+    end
+  end
 
   defp normalize_endpoint_url(changeset) do
     case get_change(changeset, :endpoint_url) do

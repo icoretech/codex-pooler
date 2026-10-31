@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   alias CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow
   alias CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
+  alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
   alias CodexPoolerWeb.DateTimeDisplay
 
   @saved_reset_status_interval_ms 5_000
@@ -31,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       socket
       |> assign(
         cockpit: nil,
-        page_title: "Upstream health",
+        page_title: gettext("Upstream health"),
         refresh_data_message: nil,
         auth_json_form: UpstreamAuthJsonImport.empty_form(),
         auth_json_upload_limit_label: UpstreamAuthJsonImport.upload_limit_label(),
@@ -86,7 +87,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       :error ->
         {:ok,
          socket
-         |> put_flash(:error, "Upstream account was not found")
+         |> put_flash(:error, gettext("Upstream account was not found"))
          |> redirect(to: ~p"/admin/upstreams")}
     end
   end
@@ -133,13 +134,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
           |> assign_cockpit(preserve_request_metrics(socket, cockpit))
           |> request_cockpit_metrics()
 
-        {:noreply, if(closed?, do: put_flash(socket, :info, "Your Pool access changed"), else: socket)}
+        {:noreply, if(closed?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
 
       :error ->
         {:noreply,
          socket
          |> clear_inaccessible_cockpit()
-         |> put_flash(:info, "Your Pool access changed")
+         |> put_flash(:info, gettext("Your Pool access changed"))
          |> push_navigate(to: ~p"/admin/upstreams")}
     end
   end
@@ -188,7 +189,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     {:noreply,
      socket
      |> load_cockpit()
-     |> assign(:refresh_data_message, "Account data refreshed")}
+     |> assign(:refresh_data_message, gettext("Account data refreshed"))}
   end
 
   @impl true
@@ -241,7 +242,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   def handle_event("open_oauth_relink", %{"id" => identity_id}, socket) do
     cond do
       identity_id != socket.assigns.cockpit.identity.id ->
-        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+        {:noreply, put_flash(socket, :error, gettext("Upstream account was not found"))}
 
       action_available?(socket, :oauth_relink, identity_id) ->
         {:noreply,
@@ -293,17 +294,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         {:ok, _flow} ->
           {:noreply,
            socket
-           |> put_flash(:info, "OAuth relink flow cancelled")
+           |> put_flash(:info, gettext("OAuth relink flow cancelled"))
            |> load_cockpit()}
 
-        {:error, %{message: message}} when is_binary(message) ->
-          {:noreply, put_flash(socket, :error, "Could not cancel OAuth flow: #{message}")}
-
-        {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, "Could not cancel OAuth flow")}
+        {:error, reason} when is_map(reason) ->
+          {:noreply, put_flash(socket, :error, gettext("Could not cancel OAuth flow: %{reason}", reason: WorkflowError.message(reason)))}
       end
     else
-      {:noreply, put_flash(socket, :error, "OAuth flow was not found")}
+      {:noreply, put_flash(socket, :error, gettext("OAuth flow was not found"))}
     end
   end
 
@@ -435,7 +433,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         {:noreply,
          socket
          |> assign(:cockpit_metrics_loading?, false)
-         |> put_flash(:error, "Could not refresh request metrics")
+         |> put_flash(:error, gettext("Could not refresh request metrics"))
          |> maybe_restart_cockpit_metrics()}
       else
         {:noreply, start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)}
@@ -462,6 +460,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     <AdminComponents.admin_shell
       flash={@flash}
       current_scope={@current_scope}
+      locale={@locale}
+      locale_preference={@locale_preference}
       active_nav={:upstreams}
       alert_notification_center={@alert_notification_center}
       openai_status_aggregate={@openai_status_aggregate}
@@ -524,7 +524,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       :error ->
         socket
         |> clear_inaccessible_cockpit()
-        |> put_flash(:error, "Upstream account was not found")
+        |> put_flash(:error, gettext("Upstream account was not found"))
         |> redirect(to: ~p"/admin/upstreams")
     end
   end
@@ -567,6 +567,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     scope = socket.assigns.current_scope
     identity_id = socket.assigns.cockpit.identity.id
     deletion_state = socket.assigns.cockpit.deletion_state
+    locale = Gettext.get_locale()
 
     token = %{
       generation: socket.assigns.saved_reset_status_generation + 1,
@@ -578,7 +579,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     socket
     |> assign(saved_reset_status_generation: token.generation, saved_reset_status_running: token, saved_reset_status_rerun?: false, saved_reset_status_force?: false)
     |> start_async({:saved_reset_status, token}, fn ->
-      UpstreamCockpitReadModel.refresh_visible_status(scope, identity_id, deletion_state)
+      Gettext.with_locale(locale, fn -> UpstreamCockpitReadModel.refresh_visible_status(scope, identity_id, deletion_state) end)
     end)
   end
 
@@ -603,12 +604,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   defp apply_saved_reset_status(socket, :deleted, _token) do
     socket
     |> clear_inaccessible_cockpit()
-    |> put_flash(:info, "Upstream account permanently deleted")
+    |> put_flash(:info, gettext("Upstream account permanently deleted"))
     |> push_navigate(to: ~p"/admin/upstreams")
   end
 
   defp apply_saved_reset_status(socket, :error, _token) do
-    message = if socket.assigns.cockpit.deletion_state in [:in_progress, :failed], do: "Upstream account is no longer available", else: "Your Pool access changed"
+    message = if socket.assigns.cockpit.deletion_state in [:in_progress, :failed], do: gettext("Upstream account is no longer available"), else: gettext("Your Pool access changed")
 
     socket
     |> clear_inaccessible_cockpit()
@@ -701,6 +702,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   defp start_cockpit_metrics_task(socket, generation) do
     scope = socket.assigns.current_scope
     cockpit = socket.assigns.cockpit
+    locale = Gettext.get_locale()
 
     socket
     |> assign(
@@ -709,7 +711,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       cockpit_metrics_rerun?: false
     )
     |> start_async({:cockpit_metrics, generation}, fn ->
-      UpstreamCockpitReadModel.deferred_request_data(scope, cockpit)
+      Gettext.with_locale(locale, fn -> UpstreamCockpitReadModel.deferred_request_data(scope, cockpit) end)
     end)
   end
 
@@ -826,12 +828,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   defp put_unavailable_action_error(socket, action_key) do
     action = Map.fetch!(socket.assigns.cockpit.actions, action_key)
-    reason = action.reason || "action is unavailable"
-    put_flash(socket, :error, "#{action_label(action_key)} is not available: #{reason}")
+    reason = action.reason || gettext("action is unavailable")
+    put_flash(socket, :error, gettext("%{action} is not available: %{reason}", action: action_label(action_key), reason: reason))
   end
 
-  defp action_label(:replace_auth_json), do: "Replace auth.json"
-  defp action_label(:oauth_relink), do: "OAuth relink"
+  defp action_label(:replace_auth_json), do: gettext("Replace auth.json")
+  defp action_label(:oauth_relink), do: gettext("OAuth relink")
 
   defp selected_pool(scope, pool_id) when is_binary(pool_id) do
     scope
@@ -846,7 +848,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     |> Pools.list_visible_pools()
     |> Enum.map(&{&1.name, &1.id})
     |> case do
-      [] -> [{"No active Pools available", ""}]
+      [] -> [{gettext("No active Pools available"), ""}]
       options -> options
     end
   end

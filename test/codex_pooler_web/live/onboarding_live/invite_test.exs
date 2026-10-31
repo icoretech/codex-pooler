@@ -96,6 +96,25 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     end
   end
 
+  test "Chinese locale translates an expired invite state" do
+    pool = pool_fixture(%{slug: "expired-zh-pool", name: "Expired Pool"})
+    scope = fixture_owner_scope()
+
+    {:ok, %{token: token}} =
+      Access.create_invite(scope, pool, %{
+        invited_email: "expired-zh@example.com",
+        expires_at: DateTime.utc_now() |> DateTime.add(-60, :second)
+      })
+
+    {:ok, view, _html} =
+      build_conn()
+      |> put_locale("zh-CN")
+      |> live(~p"/onboarding/invites/#{token}")
+
+    assert has_element?(view, "#invite-expired")
+    assert has_element?(view, "#invite-expired", "邀请已过期")
+  end
+
   test "public invite identity values keep an overflow-safe wrapping contract" do
     long_value = String.duplicate("identity", 20)
 

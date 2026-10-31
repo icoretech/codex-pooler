@@ -6,19 +6,6 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias Phoenix.HTML.Form
 
-  @settings_group_submit_labels %{
-    "gateway" => "Save gateway controls",
-    "ingress" => "Save runtime ingress",
-    "files" => "Save file limits",
-    "transcription" => "Save audio limit",
-    "operator" => "Save operator URL",
-    "catalog" => "Save catalog source",
-    "development" => "Save development helpers",
-    "mcp" => "Save MCP service",
-    "metrics" => "Save metrics token",
-    "smtp" => "Save SMTP delivery"
-  }
-
   attr :group, :string, required: true
   attr :form, :any, required: true
   attr :status, :map, default: nil
@@ -26,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
 
   slot :inner_block, required: true
 
+  @spec settings_card(map()) :: Phoenix.LiveView.Rendered.t()
   def settings_card(assigns) do
     ~H"""
     <.form
@@ -78,6 +66,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
 
   slot :inner_block, required: true
 
+  @spec settings_group(map()) :: Phoenix.LiveView.Rendered.t()
   def settings_group(assigns) do
     ~H"""
     <section id={@id} class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-4">
@@ -100,6 +89,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :form, :any, required: true
   attr :controls, :list, required: true
 
+  @spec scalar_controls(map()) :: Phoenix.LiveView.Rendered.t()
   def scalar_controls(assigns) do
     ~H"""
     <.scalar_control :for={control <- @controls} form={@form} control={control} />
@@ -168,6 +158,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :label, :string, required: true
   attr :hint, :string, default: nil
 
+  @spec toggle_input(map()) :: Phoenix.LiveView.Rendered.t()
   def toggle_input(assigns) do
     assigns =
       assigns
@@ -206,6 +197,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :label, :string, required: true
   attr :hint, :string, default: nil
 
+  @spec number_input(map()) :: Phoenix.LiveView.Rendered.t()
   def number_input(assigns) do
     ~H"""
     <div class="grid gap-1">
@@ -218,6 +210,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :id, :string, required: true
   attr :form, :any, required: true
 
+  @spec form_error_summary(map()) :: Phoenix.LiveView.Rendered.t()
   def form_error_summary(assigns) do
     assigns = assign(assigns, :errors, form_error_messages(assigns.form))
 
@@ -230,7 +223,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
       ]}
       role="alert"
     >
-      <p :if={@errors != []} class="font-semibold">Review this card before saving.</p>
+      <p :if={@errors != []} class="font-semibold">{gettext("Review this card before saving.")}</p>
       <ul :if={@errors != []} class="mt-2 list-disc space-y-1 pl-5">
         <li :for={error <- @errors}>{error}</li>
       </ul>
@@ -244,13 +237,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :value, :string, required: true
   attr :placeholder, :string, default: nil
 
+  @spec list_textarea(map()) :: Phoenix.LiveView.Rendered.t()
   def list_textarea(assigns) do
     ~H"""
     <label class="fieldset mb-2" for={@id}>
       <span class="label mb-1">{@label}</span>
       <textarea id={@id} name={@name} rows="4" class="w-full textarea" placeholder={@placeholder}>{@value}</textarea>
       <span class="text-xs leading-5 text-base-content/55">
-        One value per line or comma-separated.
+        {gettext("One value per line or comma-separated.")}
       </span>
     </label>
     """
@@ -260,17 +254,18 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :name, :string, required: true
   attr :values, :list, required: true
 
+  @spec compressed_json_encoding_checkboxes(map()) :: Phoenix.LiveView.Rendered.t()
   def compressed_json_encoding_checkboxes(assigns) do
     assigns = assign(assigns, :options, accepted_compressed_json_encoding_options())
 
     ~H"""
     <fieldset id={@id} class="grid gap-2 rounded-box border border-base-300 bg-base-200/40 p-3">
       <legend class="px-1 text-sm font-semibold text-base-content">
-        Accepted compressed JSON encodings
+        {gettext("Accepted compressed JSON encodings")}
       </legend>
       <input type="hidden" name={"#{@name}[]"} value="" />
       <p id={"#{@id}-help"} class="text-xs leading-5 text-base-content/60">
-        Uncompressed JSON is always accepted. Compressed JSON must declare one of these values in Content-Encoding. Body size, decompressed size, ratio, and timeout limits still apply. If no encodings are selected, compressed JSON requests return 415.
+        {gettext("Uncompressed JSON is always accepted. Compressed JSON must declare one of these values in Content-Encoding. Body size, decompressed size, ratio, and timeout limits still apply. If no encodings are selected, compressed JSON requests return 415.")}
       </p>
       <div class="grid gap-2 sm:grid-cols-3">
         <label
@@ -301,13 +296,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :value, :string, required: true
   attr :hint, :string, default: nil
 
+  @spec json_textarea(map()) :: Phoenix.LiveView.Rendered.t()
   def json_textarea(assigns) do
     ~H"""
     <label class="fieldset mb-2" for={@id}>
       <span class="label mb-1">{@label}</span>
       <textarea id={@id} name={@name} rows="7" class="w-full textarea font-mono text-xs leading-5">{@value}</textarea>
       <span class="text-xs leading-5 text-base-content/55">
-        {@hint || "JSON object. Leave existing keys intact unless intentionally changing this policy."}
+        {@hint || gettext("JSON object. Leave existing keys intact unless intentionally changing this policy.")}
       </span>
     </label>
     """
@@ -317,12 +313,18 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   attr :name, :string, required: true
   attr :action_name, :string, required: true
   attr :label, :string, required: true
-  attr :status_label, :string, default: "Stored value"
-  attr :clear_label, :string, default: "Clear stored value"
+  attr :status_label, :string, default: nil
+  attr :clear_label, :string, default: nil
   attr :action, :string, required: true
   attr :status, :atom, default: nil
 
+  @spec write_only_secret_input(map()) :: Phoenix.LiveView.Rendered.t()
   def write_only_secret_input(assigns) do
+    assigns =
+      assigns
+      |> assign(:status_label, assigns.status_label || gettext("Stored value"))
+      |> assign(:clear_label, assigns.clear_label || gettext("Clear stored value"))
+
     ~H"""
     <div class="grid gap-2">
       <label class="fieldset mb-0" for={@id}>
@@ -334,7 +336,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
           type="password"
           autocomplete="new-password"
           class="w-full input"
-          placeholder="Leave blank to preserve"
+          placeholder={gettext("Leave blank to preserve")}
         />
       </label>
       <div class="flex flex-wrap items-center justify-between gap-3">
@@ -358,10 +360,19 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
     """
   end
 
-  defp submit_label(group), do: Map.fetch!(@settings_group_submit_labels, group)
+  defp submit_label("gateway"), do: gettext("Save gateway controls")
+  defp submit_label("ingress"), do: gettext("Save runtime ingress")
+  defp submit_label("files"), do: gettext("Save file limits")
+  defp submit_label("transcription"), do: gettext("Save audio limit")
+  defp submit_label("operator"), do: gettext("Save operator URL")
+  defp submit_label("catalog"), do: gettext("Save catalog source")
+  defp submit_label("development"), do: gettext("Save development helpers")
+  defp submit_label("mcp"), do: gettext("Save MCP service")
+  defp submit_label("metrics"), do: gettext("Save metrics token")
+  defp submit_label("smtp"), do: gettext("Save SMTP delivery")
 
-  defp card_status_message(nil, true), do: "Changes save automatically."
-  defp card_status_message(nil, false), do: "No changes saved in this card yet."
+  defp card_status_message(nil, true), do: gettext("Changes save automatically.")
+  defp card_status_message(nil, false), do: gettext("No changes saved in this card yet.")
   defp card_status_message(%{message: message}, _autosave), do: message
 
   defp card_status_class(%{tone: :success}) do
@@ -387,10 +398,10 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   defp option_label({label, _value}), do: label
   defp option_value({_label, value}), do: value
 
-  defp secret_status_label(:configured), do: "configured"
-  defp secret_status_label(:intentionally_unset), do: "not configured"
-  defp secret_status_label(:unavailable), do: "unavailable"
-  defp secret_status_label(_status), do: "not configured"
+  defp secret_status_label(:configured), do: gettext("configured")
+  defp secret_status_label(:intentionally_unset), do: gettext("not configured")
+  defp secret_status_label(:unavailable), do: gettext("unavailable")
+  defp secret_status_label(_status), do: gettext("not configured")
 
   defp secret_status_class(:configured), do: "font-semibold text-success"
   defp secret_status_class(:unavailable), do: "font-semibold text-warning"
@@ -400,11 +411,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
 
   defp form_error_messages(%Phoenix.HTML.Form{} = form) do
     form.source
-    |> Ecto.Changeset.traverse_errors(fn {message, opts} ->
-      Enum.reduce(opts, message, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
+    |> Ecto.Changeset.traverse_errors(&translate_error/1)
     |> flatten_error_map()
     |> Enum.uniq()
   end
@@ -414,12 +421,106 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
   end
 
   defp flatten_error_value(path, messages) when is_list(messages) do
-    Enum.map(messages, fn message -> "#{error_path_label(path)} #{message}" end)
+    Enum.map(messages, fn message ->
+      gettext("%{field} %{message}", field: error_path_label(path), message: message)
+    end)
   end
 
   defp flatten_error_value(path, errors) when is_map(errors) do
     Enum.flat_map(errors, fn {field, value} -> flatten_error_value(path ++ [field], value) end)
   end
 
-  defp error_path_label(path), do: Enum.map_join(path, " ", &Phoenix.Naming.humanize/1)
+  defp error_path_label(path), do: Enum.map_join(path, " ", &error_field_label/1)
+
+  defp error_field_label(:gateway), do: gettext("Gateway")
+  defp error_field_label(:gateway_debug), do: gettext("Gateway debug")
+  defp error_field_label(:sse_keepalive_interval_ms), do: gettext("Sse keepalive interval ms")
+  defp error_field_label(:websocket_idle_timeout_ms), do: gettext("Websocket idle timeout ms")
+
+  defp error_field_label(:websocket_owner_idle_timeout_ms),
+    do: gettext("Websocket owner idle timeout ms")
+
+  defp error_field_label(:upstream_connect_timeout_ms), do: gettext("Upstream connect timeout ms")
+  defp error_field_label(:upstream_pool_timeout_ms), do: gettext("Upstream pool timeout ms")
+  defp error_field_label(:upstream_receive_timeout_ms), do: gettext("Upstream receive timeout ms")
+
+  defp error_field_label(:upstream_conn_max_idle_time_ms),
+    do: gettext("Upstream conn max idle time ms")
+
+  defp error_field_label(:upstream_token_refresh_margin_seconds),
+    do: gettext("Upstream token refresh margin seconds")
+
+  defp error_field_label(:upstream_token_refresh_proactive_enabled),
+    do: gettext("Upstream token refresh proactive enabled")
+
+  defp error_field_label(:expired_alias_ttl_seconds), do: gettext("Expired alias ttl seconds")
+
+  defp error_field_label(:bridge_owner_lease_ttl_seconds),
+    do: gettext("Bridge owner lease ttl seconds")
+
+  defp error_field_label(:bridge_owner_lease_renewal_seconds),
+    do: gettext("Bridge owner lease renewal seconds")
+
+  defp error_field_label(:circuit_failure_threshold), do: gettext("Circuit failure threshold")
+  defp error_field_label(:circuit_open_seconds), do: gettext("Circuit open seconds")
+  defp error_field_label(:circuit_half_open_probe_limit), do: gettext("Circuit half open probe limit")
+  defp error_field_label(:circuit_success_threshold), do: gettext("Circuit success threshold")
+  defp error_field_label(:bulkheads), do: gettext("Bulkheads")
+
+  defp error_field_label(:model_context_window_overrides),
+    do: gettext("Model context window overrides")
+
+  defp error_field_label(:ingress), do: gettext("Ingress")
+  defp error_field_label(:firewall_allowlist), do: gettext("Firewall allowlist")
+  defp error_field_label(:trusted_proxies), do: gettext("Trusted proxies")
+  defp error_field_label(:forwarded_client_ip_source), do: gettext("Forwarded client ip source")
+  defp error_field_label(:forwarded_proxy_depth), do: gettext("Forwarded proxy depth")
+  defp error_field_label(:decompression_algorithms), do: gettext("Decompression algorithms")
+  defp error_field_label(:max_compressed_body_bytes), do: gettext("Max compressed body bytes")
+  defp error_field_label(:max_decompressed_body_bytes), do: gettext("Max decompressed body bytes")
+  defp error_field_label(:max_decompression_ratio), do: gettext("Max decompression ratio")
+  defp error_field_label(:decompression_timeout_ms), do: gettext("Decompression timeout ms")
+  defp error_field_label(:files), do: gettext("Files")
+  defp error_field_label(:max_size_bytes), do: gettext("Max size bytes")
+  defp error_field_label(:upload_ttl_seconds), do: gettext("Upload ttl seconds")
+  defp error_field_label(:transcription), do: gettext("Transcription")
+  defp error_field_label(:max_upload_bytes), do: gettext("Max upload bytes")
+  defp error_field_label(:operator), do: gettext("Operator")
+  defp error_field_label(:login_base_url), do: gettext("Login base url")
+
+  defp error_field_label(:openai_status_polling_enabled),
+    do: gettext("Openai status polling enabled")
+
+  defp error_field_label(:catalog), do: gettext("Catalog")
+  defp error_field_label(:openai_pricing_url), do: gettext("Openai pricing url")
+  defp error_field_label(:development), do: gettext("Development")
+  defp error_field_label(:impeccable_live_enabled), do: gettext("Impeccable live enabled")
+  defp error_field_label(:account_reconciliation_paused), do: gettext("Account reconciliation paused")
+  defp error_field_label(:mcp), do: gettext("Mcp")
+  defp error_field_label(:metrics), do: gettext("Metrics")
+  defp error_field_label(:bearer_token_hmac_digest), do: gettext("Bearer token hmac digest")
+  defp error_field_label(:bearer_token_fingerprint), do: gettext("Bearer token fingerprint")
+  defp error_field_label(:bearer_token_key_version), do: gettext("Bearer token key version")
+  defp error_field_label(:bearer_token), do: gettext("Bearer token")
+  defp error_field_label(:bearer_token_action), do: gettext("Bearer token action")
+  defp error_field_label(:smtp), do: gettext("Smtp")
+  defp error_field_label(:enabled), do: gettext("Enabled")
+  defp error_field_label(:host), do: gettext("Host")
+  defp error_field_label(:port), do: gettext("Port")
+  defp error_field_label(:username), do: gettext("Username")
+  defp error_field_label(:from), do: gettext("From")
+  defp error_field_label(:ssl), do: gettext("Ssl")
+  defp error_field_label(:tls), do: gettext("Tls")
+  defp error_field_label(:retries), do: gettext("Retries")
+  defp error_field_label(:password_ciphertext), do: gettext("Password ciphertext")
+  defp error_field_label(:password_nonce), do: gettext("Password nonce")
+  defp error_field_label(:password_aad), do: gettext("Password aad")
+  defp error_field_label(:password_key_version), do: gettext("Password key version")
+  defp error_field_label(:password), do: gettext("Password")
+  defp error_field_label(:password_action), do: gettext("Password action")
+  defp error_field_label(:singleton), do: gettext("Singleton")
+  defp error_field_label(:metadata), do: gettext("Metadata")
+  defp error_field_label(:lock_version), do: gettext("Lock version")
+  defp error_field_label(:updated_by_user_id), do: gettext("Updated by user")
+  defp error_field_label(field), do: Phoenix.Naming.humanize(field)
 end

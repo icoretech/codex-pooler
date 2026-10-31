@@ -25,18 +25,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.DeletionNotice do
         class={["size-8 text-base-content/60", !@paused && "admin-loading-icon"]}
       />
       <p class="text-base font-semibold leading-5 text-base-content">
-        Deleting account<span class="sr-only">: {@label}</span>
+        <span aria-hidden="true">{gettext("Deleting account")}</span><span class="sr-only">{gettext("Deleting account: %{label}", label: @label)}</span>
       </p>
       <p class="max-w-xs text-sm leading-5 text-base-content/70">
-        Cleanup continues in the background.
+        {gettext("Cleanup continues in the background.")}
         <%= if @surface == :card do %>
-          This card disappears when complete.
+          {gettext("This card disappears when complete.")}
         <% else %>
-          You will return to the account list when complete.
+          {gettext("You will return to the account list when complete.")}
         <% end %>
       </p>
       <p :if={@paused} data-role="upstream-deletion-paused" class="text-xs leading-5 text-base-content/70">
-        Live updates are paused. Resume updates to see the current deletion status.
+        {gettext("Live updates are paused. Resume updates to see the current deletion status.")}
       </p>
     </div>
     """

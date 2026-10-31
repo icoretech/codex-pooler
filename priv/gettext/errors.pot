@@ -107,3 +107,363 @@ msgstr ""
 
 msgid "must be equal to %{number}"
 msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:75
+#, elixir-autogen, elixir-format
+msgid "Channel changed since you opened it. Reopen it to review the latest values"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:76
+#, elixir-autogen, elixir-format
+msgid "Channel could not be saved"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:74
+#, elixir-autogen, elixir-format
+msgid "Channel is not available"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:72
+#, elixir-autogen, elixir-format
+msgid "Delivery channel is not available"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/bulkhead_editor.ex:280
+#, elixir-autogen, elixir-format
+msgid "Must be %{minimum} or more"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:69
+#, elixir-autogen, elixir-format
+msgid "Pool is not available"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:71
+#, elixir-autogen, elixir-format
+msgid "Rule changed since you opened it. Reopen it to review the latest values"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:73
+#, elixir-autogen, elixir-format
+msgid "Rule could not be saved"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:70
+#, elixir-autogen, elixir-format
+msgid "Rule is not available"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:82
+#, elixir-autogen, elixir-format
+msgid "Codex API-key auth.json is not supported"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:91
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json access token is expired"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:87
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json contains an invalid access_token"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:86
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json contains an invalid id_token"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:81
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is malformed"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:85
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing ChatGPT token data"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:89
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing access_token"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:92
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing account identity"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:88
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing id_token"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:90
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is missing refresh_token"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:79
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json is required"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:80
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json must be a JSON object"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:84
+#, elixir-autogen, elixir-format
+msgid "Codex auth.json must contain ChatGPT token auth"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:83
+#, elixir-autogen, elixir-format
+msgid "Codex personal access token auth.json is not supported in this cycle"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:33
+#, elixir-autogen, elixir-format
+msgid "account was not selected"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:21
+#, elixir-autogen, elixir-format
+msgid "already has an active invite for this Pool"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:25
+#, elixir-autogen, elixir-format
+msgid "cannot be set when exact reasoning effort is enforced"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:54
+#, elixir-autogen, elixir-format
+msgid "contains an invalid IP or CIDR rule"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:31
+#, elixir-autogen, elixir-format
+msgid "contains unexpected fields"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:61
+#, elixir-autogen, elixir-format
+msgid "could not be stored"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:42
+#, elixir-autogen, elixir-format
+msgid "does not exist in %{timezone} because the clocks move forward"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:96
+#, elixir-autogen, elixir-format
+msgid "instance setting secret operation failed"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:66
+#, elixir-autogen, elixir-format
+msgid "is not supported for this rule kind"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:58
+#, elixir-autogen, elixir-format
+msgid "is only available for email channels"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:35
+#, elixir-autogen, elixir-format
+msgid "is required"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:24
+#, elixir-autogen, elixir-format
+msgid "is required for model policy bindings"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:28
+#, elixir-autogen, elixir-format
+msgid "labels must be a list of strings"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:48
+#, elixir-autogen, elixir-format
+msgid "must be 0 unless forwarded client IP source is X-Forwarded-For"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:34
+#, elixir-autogen, elixir-format
+msgid "must be a boolean"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:26
+#, elixir-autogen, elixir-format
+msgid "must be a list of non-empty strings"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:93
+#, elixir-autogen, elixir-format
+msgid "must be a map"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:27
+#, elixir-autogen, elixir-format
+msgid "must be a non-empty model identifier without whitespace"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:30
+#, elixir-autogen, elixir-format
+msgid "must be a policy form"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:40
+#, elixir-autogen, elixir-format
+msgid "must be a positive whole number"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:15
+#, elixir-autogen, elixir-format
+msgid "must be a valid IANA time zone"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:44
+#, elixir-autogen, elixir-format
+msgid "must be a valid date and time"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:20
+#, elixir-autogen, elixir-format
+msgid "must be a valid email"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:19
+#, elixir-autogen, elixir-format
+msgid "must be a valid email address"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:62
+#, elixir-autogen, elixir-format
+msgid "must be a valid host"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:60
+#, elixir-autogen, elixir-format
+msgid "must be a valid https URL"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:22
+#, elixir-autogen, elixir-format
+msgid "must be an active Pool"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:65
+#, elixir-autogen, elixir-format
+msgid "must be blank"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:23
+#, elixir-autogen, elixir-format
+msgid "must be empty for default policy bindings"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:39
+#, elixir-autogen, elixir-format
+msgid "must be enabled or disabled"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:53
+#, elixir-autogen, elixir-format
+msgid "must be less than or equal to %{number}, a third of the owner lease TTL"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:50
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP is enabled"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:52
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP password is set"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:51
+#, elixir-autogen, elixir-format
+msgid "must be present when SMTP username is set"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:49
+#, elixir-autogen, elixir-format
+msgid "must be the public app URL without /login"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:18
+#, elixir-autogen, elixir-format
+msgid "must contain only lowercase letters, numbers, and hyphens"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:56
+#, elixir-autogen, elixir-format
+msgid "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:14
+#, elixir-autogen, elixir-format
+msgid "must have the @ sign and no spaces"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:55
+#, elixir-autogen, elixir-format
+msgid "must include exactly the known route classes"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:57
+#, elixir-autogen, elixir-format
+msgid "must map non-empty model ids to positive integers"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:64
+#, elixir-autogen, elixir-format
+msgid "must not include query strings or fragments"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:63
+#, elixir-autogen, elixir-format
+msgid "must start with /"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:59
+#, elixir-autogen, elixir-format
+msgid "must use https"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:43
+#, elixir-autogen, elixir-format
+msgid "needs a valid account timezone"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:41
+#, elixir-autogen, elixir-format
+msgid "occurs twice in %{timezone}; choose a time outside the repeated hour"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:36
+#, elixir-autogen, elixir-format
+msgid "only the provider credits control may be changed"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:29
+#, elixir-autogen, elixir-format
+msgid "operator_notes must be a string"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:32
+#, elixir-autogen, elixir-format
+msgid "type the account label exactly"
+msgstr ""
+
+#: lib/codex_pooler_web/validation_messages.ex:47
+#, elixir-autogen, elixir-format
+msgid "was updated by another operator"
+msgstr ""

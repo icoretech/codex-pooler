@@ -8,11 +8,13 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   alias CodexPooler.Catalog.ModelInfo
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
-  @mode_options [
-    {:auto, "Auto", "Recommended. Follow the capability discovered from current upstreams."},
-    {:lite, "Lite", "Always use the lighter Responses serving path for this model."},
-    {:full, "Full", "Force ordinary Responses when the selected upstream supports it."}
-  ]
+  defp mode_options do
+    [
+      {:auto, gettext("Auto"), gettext("Recommended. Follow the capability discovered from current upstreams.")},
+      {:lite, "Lite", gettext("Always use the lighter Responses serving path for this model.")},
+      {:full, "Full", gettext("Force ordinary Responses when the selected upstream supports it.")}
+    ]
+  end
 
   attr :projection, :any, default: nil
 
@@ -23,11 +25,12 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   attr :dirty?, :boolean, default: false
   attr :sync_pending?, :boolean, default: false
 
+  @spec model_serving_panel(map()) :: Phoenix.LiveView.Rendered.t()
   def model_serving_panel(assigns) do
     assigns =
       assigns
       |> assign(:html_form, to_form(%{}, as: :pool_model_serving))
-      |> assign(:mode_options, @mode_options)
+      |> assign(:mode_options, mode_options())
       |> assign(:summary, assigns.projection && serving_summary(assigns.projection.rows))
 
     ~H"""
@@ -37,15 +40,15 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
       aria-busy={to_string(@status in [:idle, :loading])}
       class="grid min-w-0 gap-4"
     >
-      <h3 id="pool-model-serving-title" class="sr-only">Model serving modes</h3>
+      <h3 id="pool-model-serving-title" class="sr-only">{gettext("Model serving modes")}</h3>
 
       <AdminComponents.extended_notice
         :if={@status in [:idle, :loading]}
         id="pool-model-serving-state-loading"
         icon="hero-arrow-path"
         loading?={true}
-        title="Loading model modes"
-        description="Reading the latest saved modes and routable model catalog."
+        title={gettext("Loading model modes")}
+        description={gettext("Reading the latest saved modes and routable model catalog.")}
       />
 
       <p
@@ -55,7 +58,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         aria-live="polite"
         class="sr-only"
       >
-        Model serving modes loaded.
+        {gettext("Model serving modes loaded.")}
       </p>
 
       <AdminComponents.extended_notice
@@ -64,8 +67,8 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         icon="hero-exclamation-triangle"
         tone={:error}
         role="alert"
-        title="Model catalog needs attention"
-        description="The latest catalog state could not be confirmed. Saved choices remain available when present, and invalid changes are never applied."
+        title={gettext("Model catalog needs attention")}
+        description={gettext("The latest catalog state could not be confirmed. Saved choices remain available when present, and invalid changes are never applied.")}
       />
 
       <AdminComponents.extended_notice
@@ -74,15 +77,15 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         icon="hero-exclamation-triangle"
         tone={:warning}
         role="status"
-        title="Model catalog may be stale"
+        title={gettext("Model catalog may be stale")}
         description={stale_description(@sync_pending?)}
       />
 
       <AdminComponents.guidance_notice
         :if={@status not in [:idle, :loading]}
         id="pool-model-serving-guidance"
-        title="Choose Auto unless an upstream requires an override"
-        description="Full is an advanced provider-dependent override using ordinary Responses; upstream compatibility can change or reject it. Pooler never silently downgrades Full — switch a model back to Auto or Lite to change its configured mode."
+        title={gettext("Choose Auto unless an upstream requires an override")}
+        description={gettext("Full is an advanced provider-dependent override using ordinary Responses; upstream compatibility can change or reject it. Pooler never silently downgrades Full — switch a model back to Auto or Lite to change its configured mode.")}
       />
 
       <div
@@ -94,8 +97,8 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         <AdminComponents.empty_state
           id="pool-model-serving-state-empty"
           icon="hero-cube-transparent"
-          title="No routable models"
-          description="This Pool has no routable catalog models or retained model overrides yet. Run model sync after assigning an active upstream."
+          title={gettext("No routable models")}
+          description={gettext("This Pool has no routable catalog models or retained model overrides yet. Run model sync after assigning an active upstream.")}
         />
       </div>
 
@@ -124,7 +127,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
           <dl class="flex min-w-0 flex-wrap items-baseline gap-x-5 gap-y-1">
             <div class="flex items-baseline gap-1.5">
               <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                Configured
+                {gettext("Configured")}
               </dt>
               <dd class="text-xs font-medium tabular-nums text-base-content/80">
                 {@summary.configured}
@@ -132,7 +135,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             </div>
             <div class="flex items-baseline gap-1.5">
               <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                Catalog
+                {gettext("Catalog")}
               </dt>
               <dd class="text-xs font-medium tabular-nums text-base-content/80">
                 {@summary.catalog}
@@ -140,7 +143,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             </div>
             <div class="flex items-baseline gap-1.5">
               <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
-                Effective (available)
+                {gettext("Effective (available)")}
               </dt>
               <dd class="text-xs font-medium tabular-nums text-base-content/80">
                 {@summary.effective}
@@ -153,15 +156,15 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             data-role="model-serving-set-all-auto"
             class="btn btn-outline btn-primary btn-xs"
           >
-            Set all to Auto
+            {gettext("Set all to Auto")}
           </button>
         </div>
 
         <div class="grid min-w-0 overflow-hidden rounded-box border border-base-300">
           <div class="hidden items-center gap-x-4 border-b border-base-300 px-3 py-1.5 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50 sm:grid sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem]">
-            <span>Model</span>
-            <span class="text-center">Configured mode</span>
-            <span class="text-right">Effective</span>
+            <span>{gettext("Model")}</span>
+            <span class="text-center">{gettext("Configured mode")}</span>
+            <span class="text-right">{gettext("Effective")}</span>
           </div>
 
           <fieldset
@@ -193,7 +196,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
                   :if={!row.available?}
                   class="rounded border border-warning/40 bg-warning/10 px-1 py-px text-[0.56rem] font-bold uppercase tracking-wide text-warning"
                 >
-                  unavailable
+                  {gettext("unavailable")}
                 </span>
               </div>
               <p class={[
@@ -290,18 +293,18 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
       |> Enum.frequencies_by(& &1.effective_badge.mode)
 
     %{
-      configured: "#{Map.get(configured, "auto", 0)} Auto · #{Map.get(configured, "lite", 0)} Lite · #{Map.get(configured, "full", 0)} Full",
-      catalog: "#{available} available · #{unavailable} unavailable",
-      effective: "#{Map.get(effective, "full", 0)} Full · #{Map.get(effective, "lite", 0)} Lite"
+      configured: gettext("%{auto} Auto · %{lite} Lite · %{full} Full", auto: Map.get(configured, "auto", 0), lite: Map.get(configured, "lite", 0), full: Map.get(configured, "full", 0)),
+      catalog: gettext("%{available} · %{unavailable}", available: ngettext("%{count} available", "%{count} available", available), unavailable: ngettext("%{count} unavailable", "%{count} unavailable", unavailable)),
+      effective: gettext("%{full} Full · %{lite} Lite", full: Map.get(effective, "full", 0), lite: Map.get(effective, "lite", 0))
     }
   end
 
   defp effective_pill_prefix(%{available?: false, effective_badge: %{mode: "removed"}}),
-    do: "removed"
+    do: gettext("removed")
 
-  defp effective_pill_prefix(%{available?: false}), do: "retained"
-  defp effective_pill_prefix(%{source: "override"}), do: "forced"
-  defp effective_pill_prefix(_row), do: "resolves"
+  defp effective_pill_prefix(%{available?: false}), do: gettext("retained")
+  defp effective_pill_prefix(%{source: "override"}), do: gettext("forced")
+  defp effective_pill_prefix(_row), do: gettext("resolves")
 
   defp effective_pill_text(%{effective_badge: %{mode: "removed"}}), do: "—"
   defp effective_pill_text(%{effective_badge: %{mode: mode}}), do: String.capitalize(mode)
@@ -314,15 +317,15 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp effective_mode_class(_row), do: "text-xs font-bold text-base-content/75"
 
   defp availability_warning_label(%{configured_mode: "auto"}),
-    do: "Selecting Auto removes this saved override when you save."
+    do: gettext("Selecting Auto removes this saved override when you save.")
 
-  defp availability_warning_label(_row), do: "Saved setting retained."
+  defp availability_warning_label(_row), do: gettext("Saved setting retained.")
 
   defp stale_description(true) do
-    "The catalog or saved modes changed while you were editing. Your unsaved choices are preserved; retry Save model modes to apply them to the latest saved revision. Reopen after saving to include newly synced models."
+    gettext("The catalog or saved modes changed while you were editing. Your unsaved choices are preserved; retry Save model modes to apply them to the latest saved revision. Reopen after saving to include newly synced models.")
   end
 
   defp stale_description(false) do
-    "Catalog evidence is older than the expected refresh window. You can review and save existing choices; revision checks reject conflicting updates."
+    gettext("Catalog evidence is older than the expected refresh window. You can review and save existing choices; revision checks reject conflicting updates.")
   end
 end

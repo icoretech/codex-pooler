@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.Admin.LensLive do
 
     {:ok,
      socket
-     |> assign(page_title: "Lens", params: filters, history: nil, history_loading?: true, history_error?: false, history_generation: 0, history_running?: false, history_rerun?: false, history_load_reason: :initial, history_reload_timer: nil, subscribed_pool_ids: MapSet.new(), filter_form: to_form(filters, as: :filters), pool_options: PoolFilterComponents.all_pool_filter_options(), model_options: LensFilterForm.model_options([], ""))
+     |> assign(page_title: gettext("Lens"), params: filters, history: nil, history_loading?: true, history_error?: false, history_generation: 0, history_running?: false, history_rerun?: false, history_load_reason: :initial, history_reload_timer: nil, subscribed_pool_ids: MapSet.new(), filter_form: to_form(filters, as: :filters), pool_options: PoolFilterComponents.all_pool_filter_options(), model_options: LensFilterForm.model_options([], ""))
      |> NotificationCenterHooks.follow_viewer_visibility()}
   end
 
@@ -126,11 +126,16 @@ defmodule CodexPoolerWeb.Admin.LensLive do
         scope = socket.assigns.current_scope
         params = socket.assigns.params
         generation = socket.assigns.history_generation
+        locale = Gettext.get_locale()
 
         socket
         |> assign(history_running?: true, history_rerun?: false)
-        |> start_async({:lens_history, generation}, fn -> LensReadModel.load(scope, params) end)
+        |> start_async({:lens_history, generation}, fn -> load_history_in_locale(scope, params, locale) end)
     end
+  end
+
+  defp load_history_in_locale(scope, params, locale) do
+    Gettext.with_locale(locale, fn -> LensReadModel.load(scope, params) end)
   end
 
   defp apply_history(socket, {:ok, result}) do
@@ -163,28 +168,28 @@ defmodule CodexPoolerWeb.Admin.LensLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <AdminComponents.admin_shell flash={@flash} current_scope={@current_scope} active_nav={:lens} alert_notification_center={@alert_notification_center} openai_status_aggregate={@openai_status_aggregate}>
+    <AdminComponents.admin_shell flash={@flash} current_scope={@current_scope} locale={@locale} locale_preference={@locale_preference} active_nav={:lens} alert_notification_center={@alert_notification_center} openai_status_aggregate={@openai_status_aggregate}>
       <section id="admin-model-history" class="grid min-w-0 gap-6" aria-busy={to_string(@history_loading?)}>
-        <AdminComponents.page_header id="model-history-header" title="Lens" description="Find responses where the provider reports a different model than the one sent, or changes the model name during the response.">
+        <AdminComponents.page_header id="model-history-header" title={gettext("Lens")} description={gettext("Find responses where the provider reports a different model than the one sent, or changes the model name during the response.")}>
           <:actions>
-            <.link id="lens-guide-link" href="https://www.codex-pooler.com/docs/operators/lens/" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm gap-1.5"><.icon name="hero-book-open" class="size-4" /><span class="admin-control-label">Lens guide</span></.link>
+            <.link id="lens-guide-link" href="https://www.codex-pooler.com/docs/operators/lens/" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm gap-1.5"><.icon name="hero-book-open" class="size-4" /><span class="admin-control-label">{gettext("Lens guide")}</span></.link>
           </:actions>
         </AdminComponents.page_header>
         <LensFilters.filters form={@filter_form} pool_options={@pool_options} model_options={@model_options} />
         <details id="lens-signal-help" class="text-sm text-base-content/70">
-          <summary class="cursor-pointer font-medium">What do these model differences mean?</summary>
+          <summary class="cursor-pointer font-medium">{gettext("What do these model differences mean?")}</summary>
           <div class="mt-3 grid gap-2">
-            <p><strong class="text-base-content">Different from sent:</strong> Pooler sent model A, but the provider first reported model B.</p>
-            <p><strong class="text-base-content">Name changed in response:</strong> the provider reported model A, then model B during the same attempt. This can happen even if the first name matched what Pooler sent.</p>
-            <p>One request may have several attempts after a retry. These signals count attempts, and one attempt can have both. The goal is to spot a different model, regardless of its quality. The evidence is the model name reported by the provider.</p>
+            <p>{gettext("Different from sent: Pooler sent model A, but the provider first reported model B.")}</p>
+            <p>{gettext("Name changed in response: the provider reported model A, then model B during the same attempt. This can happen even if the first name matched what Pooler sent.")}</p>
+            <p>{gettext("One request may have several attempts after a retry. These signals count attempts, and one attempt can have both. The goal is to spot a different model, regardless of its quality. The evidence is the model name reported by the provider.")}</p>
           </div>
         </details>
         <div :if={@history_error? && @history} class="grid gap-3">
-          <AdminComponents.extended_notice id="lens-refresh-error" title="Lens could not update" description="The previous snapshot is still displayed. Retry to load the current data." icon="hero-exclamation-triangle" tone={:warning} role="alert" />
+          <AdminComponents.extended_notice id="lens-refresh-error" title={gettext("Lens could not update")} description={gettext("The previous snapshot is still displayed. Retry to load the current data.")} icon="hero-exclamation-triangle" tone={:warning} role="alert" />
           <div><.retry_button /></div>
         </div>
         <LensPresentation.history :if={@history} history={@history} />
-        <AdminComponents.empty_state :if={!@history} id={if @history_error?, do: "lens-error", else: "lens-loading"} title={if @history_error?, do: "Lens could not be loaded", else: "Loading Lens"} description={if @history_error?, do: "Retry to load model declarations for the selected filters.", else: "Loading model declarations and charts for the selected filters."} icon={if @history_error?, do: "hero-exclamation-triangle", else: "hero-arrow-path"} loading?={!@history_error?}>
+        <AdminComponents.empty_state :if={!@history} id={if @history_error?, do: "lens-error", else: "lens-loading"} title={if @history_error?, do: gettext("Lens could not be loaded"), else: gettext("Loading Lens")} description={if @history_error?, do: gettext("Retry to load model declarations for the selected filters."), else: gettext("Loading model declarations and charts for the selected filters.")} icon={if @history_error?, do: "hero-exclamation-triangle", else: "hero-arrow-path"} loading?={!@history_error?}>
           <:actions :if={@history_error?}><.retry_button /></:actions>
         </AdminComponents.empty_state>
       </section>
@@ -195,7 +200,7 @@ defmodule CodexPoolerWeb.Admin.LensLive do
   defp retry_button(assigns) do
     ~H"""
     <button id="lens-retry" type="button" phx-click="retry" class="btn btn-sm gap-1.5">
-      <.icon name="hero-arrow-path" class="size-4" /><span class="admin-control-label">Retry</span>
+      <.icon name="hero-arrow-path" class="size-4" /><span class="admin-control-label">{gettext("Retry")}</span>
     </button>
     """
   end

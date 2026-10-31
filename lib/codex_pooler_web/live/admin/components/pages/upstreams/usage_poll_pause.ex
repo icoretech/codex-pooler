@@ -6,8 +6,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.UsagePollPause do
   attr :id_prefix, :string, required: true
   attr :pause, :map, default: nil
 
+  @spec usage_poll_pause(map()) :: Phoenix.LiveView.Rendered.t()
   def usage_poll_pause(assigns) do
-    assigns = assign(assigns, :heading, assigns.pause && "Usage polling paused until #{assigns.pause.paused_until_label}")
+    assigns = assign(assigns, :heading, assigns.pause && gettext("Usage polling paused until %{time}", time: assigns.pause.paused_until_label))
 
     ~H"""
     <section
@@ -24,23 +25,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.UsagePollPause do
         <h3 id={"#{@id_prefix}-usage-poll-pause-title"} title={@heading} class="min-w-0 flex-1 font-semibold text-base-content sm:truncate">
           {@heading}
         </h3>
-        <span id={"#{@id_prefix}-usage-poll-pause-remaining"} phx-hook="RelativeCountdown" data-countdown-at={DateTime.to_iso8601(@pause.paused_until)} class="shrink-0 text-xs text-base-content/55">
+        <span id={"#{@id_prefix}-usage-poll-pause-remaining"} phx-hook="RelativeCountdown" data-countdown-at={DateTime.to_iso8601(@pause.paused_until)} data-countdown-due-label={gettext("due")} class="shrink-0 text-xs text-base-content/55">
           <span data-role="relative-countdown-value">{@pause.remaining_label}</span>
         </span>
       </div>
       <p id={"#{@id_prefix}-usage-poll-pause-origin"} class="text-xs text-base-content/70">
-        The provider answered a usage read with {@pause.origin_label}.
-        Quota and saved-reset reads for this account resume on their own at that time.
-        The provider throttles the account, so refreshing, re-importing or reactivating
-        its credentials does not end the pause; until then routing uses its quota
-        evidence only while that evidence stays fresh.
+        {gettext("The provider answered a usage read with %{origin}. Quota and saved-reset reads for this account resume on their own at that time. The provider throttles the account, so refreshing, re-importing or reactivating its credentials does not end the pause; until then routing uses its quota evidence only while that evidence stays fresh.", origin: @pause.origin_label)}
       </p>
       <p
         :if={@pause.origin_count > 1}
         id={"#{@id_prefix}-usage-poll-pause-origin-count"}
         class="text-xs text-base-content/55"
       >
-        Paused on {@pause.origin_count} usage hosts; the latest deadline is shown.
+        {ngettext("Paused on %{count} usage host; the latest deadline is shown.", "Paused on %{count} usage hosts; the latest deadline is shown.", @pause.origin_count)}
       </p>
     </section>
     """

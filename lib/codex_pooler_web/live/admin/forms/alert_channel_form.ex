@@ -1,10 +1,13 @@
 defmodule CodexPoolerWeb.Admin.AlertChannelForm do
   @moduledoc false
+  use Gettext, backend: CodexPoolerWeb.Gettext
 
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Alerts.Schemas.AlertChannel
   alias CodexPooler.Alerts.StatusVocabulary.Channel, as: ChannelStatus
+  alias CodexPooler.SupportedLocales
+  alias CodexPoolerWeb.Locale
 
   @type attrs :: %{String.t() => term()}
   @type channel_projection :: CodexPooler.Alerts.channel_projection()
@@ -13,21 +16,12 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
   @default_channel_type "email"
   @default_state ChannelStatus.active_state()
 
-  @channel_type_options [
-    {"Email", "email"},
-    {"Webhook", "webhook"}
-  ]
-
-  @state_options [
-    {"Enabled", "active"},
-    {"Disabled", "disabled"}
-  ]
-
   @spec create_form(attrs() | map(), keyword()) :: Phoenix.HTML.Form.t()
   def create_form(attrs \\ %{}, opts \\ []) do
     attrs
     |> default_attrs()
     |> normalize_attrs()
+    |> display_locale()
     |> to_form(as: :alert_channel, errors: Keyword.get(opts, :errors, []))
   end
 
@@ -37,6 +31,7 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
     |> attrs_from_channel()
     |> Map.merge(Map.new(attrs))
     |> normalize_attrs()
+    |> display_locale()
     |> to_form(as: :alert_channel, errors: Keyword.get(opts, :errors, []))
   end
 
@@ -55,6 +50,7 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
       "display_name",
       "state",
       "email_to",
+      "locale",
       "endpoint_url",
       "webhook_signing_secret",
       "webhook_signing_secret_action"
@@ -67,20 +63,29 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
   def changeset_errors(%Ecto.Changeset{} = changeset), do: changeset.errors
 
   @spec channel_type_options() :: [option()]
-  def channel_type_options, do: @channel_type_options
+  def channel_type_options, do: [{gettext("Email"), "email"}, {gettext("Webhook"), "webhook"}]
 
   @spec state_options() :: [option()]
-  def state_options, do: @state_options
+  def state_options, do: [{gettext("Enabled"), "active"}, {gettext("Disabled"), "disabled"}]
 
   @spec channel_type_label(String.t()) :: String.t()
-  def channel_type_label(value), do: label_for(@channel_type_options, value, "Channel")
+  def channel_type_label(value), do: label_for(channel_type_options(), value, gettext("Channel"))
 
   @spec state_label(String.t()) :: String.t()
-  def state_label(value), do: label_for(@state_options, value, "Unknown state")
+  def state_label(value), do: label_for(state_options(), value, gettext("Unknown state"))
+
+  @spec locale_options() :: [option()]
+  def locale_options, do: Enum.map(Locale.locales(), &{&1.label, &1.tag})
+
+  @spec locale_label(String.t() | nil) :: String.t()
+  def locale_label(tag) do
+    locale = if tag in SupportedLocales.tags(), do: Locale.fetch(tag)
+    (locale || Locale.default()).label
+  end
 
   @spec secret_status_label(String.t() | nil) :: String.t()
-  def secret_status_label(value) when is_binary(value) and value != "", do: "configured"
-  def secret_status_label(_value), do: "not configured"
+  def secret_status_label(value) when is_binary(value) and value != "", do: gettext("configured")
+  def secret_status_label(_value), do: gettext("not configured")
 
   @spec value(Phoenix.HTML.FormField.t()) :: term()
   def value(field), do: field.value
@@ -105,6 +110,7 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
       "display_name" => channel.display_name,
       "state" => channel.state,
       "email_to" => channel.email_to || "",
+      "locale" => Map.get(channel, :locale) || if(channel.channel_type == "email", do: "en"),
       "endpoint_url" => "",
       "webhook_signing_secret" => "",
       "webhook_signing_secret_action" => "preserve"
@@ -130,7 +136,14 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
       "webhook_signing_secret_action",
       normalize_secret_action(string_value(attrs, "webhook_signing_secret_action"))
     )
+    |> default_email_locale()
   end
+
+  defp display_locale(%{"channel_type" => "webhook"} = attrs), do: Map.delete(attrs, "locale")
+  defp display_locale(attrs), do: attrs
+
+  defp default_email_locale(%{"channel_type" => "email"} = attrs), do: Map.put_new(attrs, "locale", "en")
+  defp default_email_locale(attrs), do: attrs
 
   defp stringify_keys(attrs) do
     Map.new(attrs, fn {key, value} -> {to_string(key), normalize_value(value)} end)

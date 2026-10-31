@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   @moduledoc false
 
+  use Gettext, backend: CodexPoolerWeb.Gettext
+
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
@@ -132,13 +134,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   def model_selector_state(%Pool{} = pool, params) do
     pool
     |> Catalog.api_key_model_selector_state(ApiKeyPolicyForm.model_selector_attrs(params))
+    |> localize_model_selector_state()
     |> add_enforced_model_warning(params)
   end
 
   @spec empty_model_selector_state() :: map()
   def empty_model_selector_state do
     %{
-      catalog: %{status: :unavailable, message: "Select a Pool first", severity: :warning},
+      catalog: %{status: :unavailable, message: gettext("Select a Pool first"), severity: :warning},
       mode: :all_models,
       options: [],
       selected_options: [],
@@ -152,7 +155,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   end
 
   @spec pool_options([Pool.t()]) :: [option()]
-  def pool_options([]), do: [{"No active Pools available", ""}]
+  def pool_options([]), do: [{gettext("No active Pools available"), ""}]
 
   def pool_options(pools) do
     Enum.map(pools, &{&1.name, &1.id})
@@ -195,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
           %{
             id: nil,
             dom_id: "unknown-pool",
-            name: "Unknown Pool",
+            name: gettext("Unknown Pool"),
             api_keys: sort_api_keys(unknown_api_keys),
             count_label: api_key_count_label(length(unknown_api_keys))
           }
@@ -219,8 +222,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   defp created_at_desc_rank(_created_at), do: 0
 
   @spec model_policy_label(nil | [String.t()]) :: String.t()
-  def model_policy_label(nil), do: "All models"
-  def model_policy_label([]), do: "No models"
+  def model_policy_label(nil), do: gettext("All models")
+  def model_policy_label([]), do: gettext("No models")
   def model_policy_label(models), do: Enum.join(models, ", ")
 
   @spec model_policy_unavailable?(model_policy_summary() | nil) :: boolean()
@@ -232,8 +235,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   def model_policy_warning_label(_summary), do: nil
 
   @spec unavailable_model_policy_count_label(non_neg_integer()) :: String.t()
-  def unavailable_model_policy_count_label(1), do: "1 affected key"
-  def unavailable_model_policy_count_label(count), do: "#{count} affected keys"
+  def unavailable_model_policy_count_label(count), do: ngettext("%{count} affected key", "%{count} affected keys", count)
 
   @spec api_key_operator_notes(api_key_row() | APIKey.t() | term()) :: String.t() | nil
   def api_key_operator_notes(%{metadata: metadata}) when is_map(metadata) do
@@ -251,8 +253,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
       {:error, reason} ->
         empty_admin_options(:api_keys, reason, %{
-          title: "API keys unavailable",
-          message: "API key data could not be loaded. Empty results may be incomplete."
+          title: gettext("API keys unavailable"),
+          message: gettext("API key data could not be loaded. Empty results may be incomplete.")
         })
     end
   end
@@ -321,11 +323,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
          true,
          enforced_model_identifier
        ) do
-    "Enforced model #{enforced_model_identifier} is unavailable"
+    gettext("Enforced model %{model} is unavailable", model: enforced_model_identifier)
   end
-
-  defp model_policy_warning_label([_identifier], false, _enforced_model_identifier),
-    do: "1 selected model is unavailable"
 
   defp model_policy_warning_label(
          unavailable_allowed_identifiers,
@@ -333,7 +332,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
          _enforced_model_identifier
        )
        when unavailable_allowed_identifiers != [] do
-    "#{length(unavailable_allowed_identifiers)} selected models are unavailable"
+    ngettext("%{count} selected model is unavailable", "%{count} selected models are unavailable", length(unavailable_allowed_identifiers))
   end
 
   defp model_policy_warning_label(
@@ -367,8 +366,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     end
   end
 
-  defp api_key_count_label(1), do: "1 key"
-  defp api_key_count_label(count), do: "#{count} keys"
+  defp api_key_count_label(count), do: ngettext("%{count} key", "%{count} keys", count)
 
   defp pool_filter_value(%Pool{id: pool_id}), do: pool_id
   defp pool_filter_value(_pool), do: ""
@@ -392,7 +390,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       warning = %{
         code: :enforced_model_unavailable,
         severity: :warning,
-        message: "Enforced model #{enforced_model_identifier} is not in the current routable catalog; runtime requests will fail until this is changed",
+        message: gettext("Enforced model %{model} is not in the current routable catalog; runtime requests will fail until this is changed", model: enforced_model_identifier),
         requires_acknowledgement?: false
       }
 
@@ -403,6 +401,48 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       Map.put(selector_state, :enforced_unavailable_warning, nil)
     end
   end
+
+  @spec status_label(String.t()) :: String.t()
+  def status_label("active"), do: gettext("active")
+  def status_label("paused"), do: gettext("paused")
+  def status_label("revoked"), do: gettext("revoked")
+  def status_label(status), do: status
+
+  defp localize_model_selector_state(state) do
+    state
+    |> Map.update!(:catalog, fn catalog -> Map.put(catalog, :message, catalog_message(catalog.status, catalog.reason)) end)
+    |> Map.update!(:selected_unavailable_chips, fn chips ->
+      Enum.map(chips, &Map.put(&1, :warning, gettext("Saved model is not available in the current routable catalog")))
+    end)
+    |> Map.update!(:manual_chips, fn chips ->
+      Enum.map(chips, fn chip -> Map.put(chip, :warning, manual_model_warning(chip.status)) end)
+    end)
+    |> Map.update!(:warnings, fn warnings ->
+      Enum.map(warnings, fn warning -> Map.put(warning, :message, catalog_message(warning.code, warning.reason)) end)
+    end)
+  end
+
+  defp manual_model_warning(:custom), do: gettext("Manual model will be allowed even though it is not in the catalog")
+  defp manual_model_warning(_status), do: gettext("Manual model cannot be verified until the catalog is available")
+
+  defp catalog_message(:synced, _reason), do: nil
+  defp catalog_message(:syncing, _reason), do: gettext("Model catalog sync is still running")
+  defp catalog_message(:stale, _reason), do: gettext("Model catalog is stale")
+  defp catalog_message(:failed, nil), do: gettext("Model catalog sync failed")
+  defp catalog_message(:failed, reason), do: catalog_failure_message(reason)
+  defp catalog_message(:unavailable, _reason), do: gettext("Model catalog has not been synced yet")
+  defp catalog_message(:empty, _reason), do: gettext("Model catalog has no routable models")
+
+  defp catalog_failure_message("Model catalog sync failed"), do: gettext("Model catalog sync failed")
+  defp catalog_failure_message("model catalog sync failed"), do: gettext("model catalog sync failed")
+  defp catalog_failure_message("model catalog sync failed unexpectedly"), do: gettext("model catalog sync failed unexpectedly")
+  defp catalog_failure_message("catalog sync timed out before completion"), do: gettext("catalog sync timed out before completion")
+  defp catalog_failure_message("catalog sync already running"), do: gettext("catalog sync already running")
+  defp catalog_failure_message("upstream model catalog contains invalid entries"), do: gettext("upstream model catalog contains invalid entries")
+  defp catalog_failure_message("upstream base URL is invalid"), do: gettext("upstream base URL is invalid")
+  defp catalog_failure_message("catalog sync no longer owns a running claim"), do: gettext("catalog sync no longer owns a running claim")
+  defp catalog_failure_message("model list request failed with " <> status), do: gettext("model list request failed with %{status}", status: status)
+  defp catalog_failure_message(reason), do: reason
 
   defp normalize_model_identifier_list(nil), do: []
 

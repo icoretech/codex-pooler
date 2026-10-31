@@ -15,6 +15,7 @@ defmodule CodexPooler.Access.Invites do
   alias CodexPooler.Pools.Authorization, as: PoolAuthorization
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.SupportedLocales
 
   @invite_token_bytes 32
   @default_invite_ttl_seconds 24 * 60 * 60
@@ -50,6 +51,7 @@ defmodule CodexPooler.Access.Invites do
         pool_id: pool.id,
         token_hash: hash_invite_token(token),
         invited_email: Map.get(attrs, :invited_email) || Map.get(attrs, "invited_email"),
+        locale: Map.get(attrs, :locale) || Map.get(attrs, "locale"),
         status: @status_active,
         expires_at: expires_at,
         created_by_user_id: scope.user.id,
@@ -414,6 +416,7 @@ defmodule CodexPooler.Access.Invites do
       pool_id: locked.pool_id,
       token_hash: hash_invite_token(token),
       invited_email: locked.invited_email,
+      locale: if(is_nil(locked.locale) or locked.locale in SupportedLocales.tags(), do: locked.locale, else: "en"),
       status: @status_active,
       expires_at: DateTime.add(now, @default_invite_ttl_seconds, :second),
       created_by_user_id: scope.user.id,

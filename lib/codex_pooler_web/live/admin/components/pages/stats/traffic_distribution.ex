@@ -16,7 +16,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
     ~H"""
     <AdminComponents.admin_surface
       id="stats-upstream-surface"
-      title="Traffic distribution"
+      title={gettext("Traffic distribution")}
       description={description(@scope_label, @window_label)}
     >
       <ol
@@ -61,8 +61,8 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
               ]}
               max="100"
               value={format_share_value(row.traffic_share_percent)}
-              aria-label={"#{upstream_label(row)} traffic share"}
-              aria-valuetext={"#{format_share(row.traffic_share_percent)} of accounted requests"}
+              aria-label={gettext("%{upstream} traffic share", upstream: upstream_label(row))}
+              aria-valuetext={gettext("%{share} of accounted requests", share: format_share(row.traffic_share_percent))}
             >
               {format_share(row.traffic_share_percent)}
             </progress>
@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
 
           <dl class="grid grid-cols-3 gap-3 text-right text-xs sm:min-w-64">
             <div class="min-w-0">
-              <dt class="text-base-content/50">Requests</dt>
+              <dt class="text-base-content/50">{gettext("Requests")}</dt>
               <dd
                 data-role="upstream-requests"
                 class="truncate font-semibold tabular-nums text-base-content"
@@ -79,7 +79,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
               </dd>
             </div>
             <div class="min-w-0">
-              <dt class="text-base-content/50">Tokens</dt>
+              <dt class="text-base-content/50">{gettext("Tokens")}</dt>
               <dd
                 data-role="upstream-tokens"
                 class="truncate font-semibold tabular-nums text-base-content"
@@ -88,7 +88,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
               </dd>
             </div>
             <div class="min-w-0">
-              <dt class="truncate text-base-content/50">Settled cost</dt>
+              <dt class="truncate text-base-content/50">{gettext("Settled cost")}</dt>
               <dd
                 data-role="upstream-settled-cost"
                 class="truncate font-semibold tabular-nums text-base-content"
@@ -103,8 +103,8 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
       <div :if={@rows == []} class="p-4">
         <AdminComponents.empty_state
           id="stats-upstream-empty-state"
-          title="No upstream identities"
-          description="No upstream identities are visible in this scope."
+          title={gettext("No upstream identities")}
+          description={gettext("No upstream identities are visible in this scope.")}
           icon="hero-server-stack"
         />
       </div>
@@ -113,15 +113,15 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
   end
 
   defp description(scope_label, window_label),
-    do: "Share of accounted requests across #{scope_label} in the #{String.downcase(window_label)}."
+    do: gettext("Share of accounted requests across %{scope} in the %{window}.", scope: scope_label, window: String.downcase(window_label))
 
   defp upstream_label(row) do
     label = UpstreamNaming.account_name(%{account_label: row.upstream_label})
 
     case row.lifecycle_state do
       :current -> label
-      :deleted -> "#{label} (deleted)"
-      :removed -> "#{label} (removed from selected Pools)"
+      :deleted -> gettext("%{label} (deleted)", label: label)
+      :removed -> gettext("%{label} (removed from selected Pools)", label: label)
     end
   end
 
@@ -130,6 +130,6 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
   defp format_share_value(value) when is_number(value),
     do: :erlang.float_to_binary(value / 1, decimals: 1)
 
-  defp format_micros(nil), do: "unavailable"
+  defp format_micros(nil), do: gettext("unavailable")
   defp format_micros(micros), do: Format.money_precise_from_micros(micros)
 end

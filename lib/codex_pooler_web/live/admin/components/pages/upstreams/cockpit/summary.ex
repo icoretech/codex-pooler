@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   attr :datetime_preferences, :map, required: true
   attr :now, :any, default: nil
 
+  @spec relink_card(map()) :: Phoenix.LiveView.Rendered.t()
   def relink_card(assigns) do
     now = assigns.now || DateTime.utc_now()
 
@@ -38,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
       :if={@flow}
       id="upstream-cockpit-relink"
       data-flow-kind={@flow.flow_kind}
-      aria-label="OAuth relink in progress"
+      aria-label={gettext("OAuth relink in progress")}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class={[
@@ -56,7 +57,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
               relink_dot_class(@flow.flow_kind)
             ]}></span>
           </span>
-          <span>Relink in progress</span>
+          <span>{gettext("Relink in progress")}</span>
         </h2>
         <span
           id="upstream-cockpit-relink-kind"
@@ -65,7 +66,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
             "!px-2 !py-0.5 !text-[10px] uppercase"
           ]}
         >
-          {@flow.flow_kind} flow
+          {flow_kind_label(@flow.flow_kind)}
         </span>
       </header>
 
@@ -93,7 +94,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
                 phx-hook="ClipboardCopy"
                 phx-update="ignore"
                 data-copy-text={@flow.device.user_code}
-                aria-label="Copy device code"
+                aria-label={gettext("Copy device code")}
               >
                 <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
               </button>
@@ -109,13 +110,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
                 rel="noopener noreferrer"
                 class="inline-flex min-w-0 items-center gap-1 text-xs font-semibold text-info hover:underline"
               >
-                <span>Open verification page</span>
+                <span>{gettext("Open verification page")}</span>
                 <.icon name="hero-arrow-top-right-on-square" class="size-3 shrink-0" />
               </a>
               <AdminComponents.clipboard_button
                 id="upstream-cockpit-relink-copy-verification-url"
                 copy_text={@flow.device.verification_uri}
-                aria_label="Copy device verification URL"
+                aria_label={gettext("Copy device verification URL")}
                 class="btn btn-ghost btn-xs btn-square text-base-content/45 hover:text-base-content"
                 icon_class="size-3.5"
               />
@@ -138,7 +139,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           class="inline-flex items-baseline gap-1.5 text-[11px] tabular-nums text-base-content/55"
         >
           <.icon name="hero-clock" class="size-3 shrink-0 translate-y-0.5" />
-          <span>expires {ResetFormatting.relative_time_label(@flow.expires_at, @now)}</span>
+          <span>{gettext("expires %{time}", time: ResetFormatting.relative_time_label(@flow.expires_at, @now))}</span>
         </span>
         <button
           id="upstream-cockpit-relink-cancel"
@@ -147,7 +148,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           phx-value-id={@flow.id}
           class="btn btn-ghost btn-xs text-base-content/55 hover:text-error"
         >
-          Cancel flow
+          {gettext("Cancel flow")}
         </button>
       </footer>
     </section>
@@ -210,29 +211,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp relink_dot_class("browser"), do: "bg-primary"
   defp relink_dot_class(_kind), do: "bg-info"
 
+  defp flow_kind_label("browser"), do: gettext("browser flow")
+  defp flow_kind_label("device"), do: gettext("device flow")
+  defp flow_kind_label(kind), do: gettext("%{kind} flow", kind: kind)
+
   defp relink_chip_tone("browser"), do: :primary
   defp relink_chip_tone(_kind), do: :info
 
-  defp relink_issued_title("device"), do: "Device code issued"
-  defp relink_issued_title(_kind), do: "Authorization link issued"
+  defp relink_issued_title("device"), do: gettext("Device code issued")
+  defp relink_issued_title(_kind), do: gettext("Authorization link issued")
 
   defp relink_issued_hint("device"),
-    do: "Enter this code on the provider's verification page to finish linking this account."
+    do: gettext("Enter this code on the provider's verification page to finish linking this account.")
 
   defp relink_issued_hint(_kind),
-    do: "The link only lives in the browser tab where it was opened — it can't be reissued here."
+    do: gettext("The link only lives in the browser tab where it was opened — it can't be reissued here.")
 
-  defp relink_waiting_title("device"), do: "Waiting for confirmation"
-  defp relink_waiting_title(_kind), do: "Waiting for authorization"
+  defp relink_waiting_title("device"), do: gettext("Waiting for confirmation")
+  defp relink_waiting_title(_kind), do: gettext("Waiting for authorization")
 
   defp relink_waiting_hint("device"),
-    do: "The pooler polls the provider until the code is confirmed."
+    do: gettext("The pooler polls the provider until the code is confirmed.")
 
   defp relink_waiting_hint(_kind),
-    do: "Completion arrives via callback once the sign-in finishes."
+    do: gettext("Completion arrives via callback once the sign-in finishes.")
 
   defp relink_checked_label(%{last_polled_at: %DateTime{} = polled_at}, now),
-    do: "checked #{ResetFormatting.relative_time_label(polled_at, now)}"
+    do: gettext("checked %{time}", time: ResetFormatting.relative_time_label(polled_at, now))
 
   defp relink_checked_label(_flow, _now), do: nil
 
@@ -243,12 +248,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   """
   attr :cockpit, :map, required: true
 
+  @spec credential_card(map()) :: Phoenix.LiveView.Rendered.t()
   def credential_card(assigns) do
     ~H"""
     <section
       id="upstream-cockpit-header"
       data-deletion-state={Map.get(@cockpit, :deletion_state, :none)}
-      aria-label="Account identity"
+      aria-label={gettext("Account identity")}
       class="relative min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <.icon
@@ -286,22 +292,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
         <.fingerprint_row
           id="upstream-cockpit-safe-account-id"
           icon="hero-finger-print"
-          label="account"
-          value={fingerprint_value(@cockpit.header.safe_account_id_label)}
+          label={gettext("account")}
+          value={@cockpit.header.safe_account_id_value}
           title={@cockpit.header.safe_account_id_label}
         />
         <.fingerprint_row
           id="upstream-cockpit-safe-subject-ref"
           data-role="upstream-subject-ref"
           icon="hero-user"
-          label="user"
+          label={gettext("user")}
           value={@cockpit.header.subject_ref}
-          title="Sanitized reference to the ChatGPT user behind this credential; it separates credentials that share the same account"
+          title={gettext("Sanitized reference to the ChatGPT user behind this credential; it separates credentials that share the same account")}
         />
         <.fingerprint_row
           id="upstream-cockpit-workspace"
           icon="hero-briefcase"
-          label="workspace"
+          label={gettext("workspace")}
           value={workspace_value(@cockpit.identity)}
           title={workspace_title(@cockpit.identity)}
         />
@@ -387,18 +393,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   """
   attr :cockpit, :map, required: true
 
+  @spec vitals_card(map()) :: Phoenix.LiveView.Rendered.t()
   def vitals_card(assigns) do
     assigns = assign(assigns, :rows, vitals_rows(assigns.cockpit))
 
     ~H"""
     <section
       id="upstream-status-summary"
-      aria-label="Credential and evidence vitals"
+      aria-label={gettext("Credential and evidence vitals")}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="border-b border-base-300 bg-base-200/35 px-4 py-3">
-        <h2 class="text-base font-semibold leading-5 text-base-content">Vitals</h2>
-        <p class="text-xs leading-5 text-base-content/60">Credential &amp; evidence freshness</p>
+        <h2 class="text-base font-semibold leading-5 text-base-content">{gettext("Vitals")}</h2>
+        <p class="text-xs leading-5 text-base-content/60">{gettext("Credential & evidence freshness")}</p>
       </header>
       <dl>
         <div
@@ -426,25 +433,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
     [
       %{
         id: "upstream-vitals-access-token",
-        label: "Access token",
+        label: gettext("Access token"),
         value: credential_expiry_label(header.credential_expiry),
         class: credential_expiry_class(header.credential_expiry)
       },
       %{
         id: "upstream-vitals-token-refresh",
-        label: "Token refresh",
-        value: Formatting.strip_label_prefix(header.token_refresh_label, "token refresh "),
+        label: gettext("Token refresh"),
+        value: header.token_refresh_value_label,
         class: refresh_status_class(header.refresh_status)
       },
       %{
         id: "upstream-vitals-auth-verified",
-        label: "Auth verified",
-        value: Formatting.strip_label_prefix(header.auth_verified_label, "auth verified "),
+        label: gettext("Auth verified"),
+        value: header.auth_verified_value_label,
         class: "text-base-content/80"
       },
       %{
         id: "upstream-vitals-quota-refresh",
-        label: "Quota refresh",
+        label: gettext("Quota refresh"),
         value: Formatting.status_text(header.quota_refresh_status),
         class: refresh_status_class(header.quota_refresh_status)
       },
@@ -457,7 +464,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp quota_evidence_row(%{quota_evidence_age: age}) when is_binary(age) and age != "" do
     %{
       id: "upstream-vitals-quota-evidence",
-      label: "Quota evidence",
+      label: gettext("Quota evidence"),
       value: age,
       class: "text-base-content/80"
     }
@@ -466,8 +473,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp quota_evidence_row(_observability) do
     %{
       id: "upstream-vitals-quota-evidence",
-      label: "Quota evidence",
-      value: "not reported",
+      label: gettext("Quota evidence"),
+      value: gettext("not reported"),
       class: "text-base-content/45"
     }
   end
@@ -481,7 +488,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
 
     %{
       id: "upstream-vitals-reconciliation",
-      label: "Reconciliation",
+      label: gettext("Reconciliation"),
       value: value,
       class: reconciliation_class(status)
     }
@@ -497,12 +504,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp reconciliation_class(_status), do: "text-warning"
 
   defp credential_expiry_label(%{state: "known_future", age: age}) when is_binary(age),
-    do: "expires #{age}"
+    do: gettext("expires %{age}", age: age)
 
   defp credential_expiry_label(%{state: "known_past", age: age}) when is_binary(age),
-    do: "expired #{age}"
+    do: gettext("expired %{age}", age: age)
 
-  defp credential_expiry_label(_expiry), do: "expiry unavailable"
+  defp credential_expiry_label(_expiry), do: gettext("expiry unavailable")
 
   defp credential_expiry_class(%{state: "known_past"}), do: "text-error"
 
@@ -537,18 +544,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp monogram(_label), do: "?"
 
   defp onboarding_meta(identity) do
-    ["linked via #{onboarding_method_label(identity.onboarding_method)}"]
-    |> Enum.join(" · ")
+    gettext("linked via %{method}", method: onboarding_method_label(identity.onboarding_method))
   end
 
-  defp onboarding_method_label("browser"), do: "OAuth (browser)"
-  defp onboarding_method_label("device"), do: "OAuth (device code)"
-  defp onboarding_method_label("import"), do: "auth.json import"
-  defp onboarding_method_label("invite"), do: "invite"
-  defp onboarding_method_label(_method), do: "unreported onboarding"
-
-  defp fingerprint_value("stored account id " <> rest), do: rest
-  defp fingerprint_value(_label), do: nil
+  defp onboarding_method_label("browser"), do: gettext("OAuth (browser)")
+  defp onboarding_method_label("device"), do: gettext("OAuth (device code)")
+  defp onboarding_method_label("import"), do: gettext("auth.json import")
+  defp onboarding_method_label("invite"), do: gettext("invite")
+  defp onboarding_method_label(_method), do: gettext("unreported onboarding")
 
   defp workspace_value(%{workspace_label: label}) when is_binary(label) and label != "", do: label
 
@@ -558,7 +561,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp workspace_value(_identity), do: nil
 
   defp workspace_title(%{workspace_ref: ref}) when is_binary(ref) and ref not in ["", "legacy"],
-    do: "Workspace reference #{ref}"
+    do: gettext("Workspace reference %{ref}", ref: ref)
 
-  defp workspace_title(_identity), do: "Workspace reference, when the account reports one"
+  defp workspace_title(_identity), do: gettext("Workspace reference, when the account reports one")
 end

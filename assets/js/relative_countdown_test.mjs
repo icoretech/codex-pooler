@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
 	createRelativeCountdownController,
+	createRelativeCountdownHook,
 	formatRelativeCountdown,
 } from "./relative_countdown.mjs";
 
@@ -129,4 +130,54 @@ test("start is idempotent and destroy prevents later repaints", () => {
 	const count = labels.length;
 	clock.advanceBy(HOUR);
 	assert.equal(labels.length, count);
+});
+
+test("countdown labels interpolate translated sentences without translating compact units", () => {
+	const now = Date.parse("2026-07-23T12:00:00Z");
+	const labels = { countdownLabel: "将在 %{duration} 后到期。", countdownDueLabel: "已到期" };
+	assert.equal(formatRelativeCountdown(new Date(now + HOUR + 30 * MINUTE).toISOString(), now, labels), "将在 1h 30m 后到期。");
+	assert.equal(formatRelativeCountdown(new Date(now).toISOString(), now, labels), "将在 已到期 后到期。");
+	assert.equal(formatRelativeCountdown(new Date(now).toISOString(), now, { countdownDueLabel: "已到期" }), "已到期");
+});
+
+test("translated due labels still stop scheduling and updated labels are used after patching", () => {
+	const now = Date.parse("2026-07-23T12:00:00Z");
+	const clock = new FakeClock(now);
+	const labels = [];
+	const controller = createRelativeCountdownController({
+		clock,
+		onLabel: (label) => labels.push(label),
+		resetAt: new Date(now + 1_000).toISOString(),
+		labels: { countdownDueLabel: "已到期" },
+	});
+	controller.start();
+	clock.advanceBy(1_000);
+	assert.deepEqual(labels, ["<1m", "已到期"]);
+	assert.equal(clock.timers.size, 0);
+	controller.sync(new Date(clock.now() + HOUR).toISOString(), { countdownLabel: "剩余 %{duration}", countdownDueLabel: "已到期" });
+	assert.equal(labels.at(-1), "剩余 1h");
+	controller.destroy();
+});
+
+test("countdown hook reads translated data labels on mount and on LiveView updates", () => {
+	const now = Date.parse("2026-07-23T12:00:00Z");
+	const clock = new FakeClock(now);
+	const value = { textContent: "" };
+	const context = {
+		el: {
+			dataset: { countdownAt: new Date(now + HOUR).toISOString() },
+			querySelector: () => value,
+		},
+	};
+	const hook = createRelativeCountdownHook({ clock });
+	hook.mounted.call(context);
+	assert.equal(value.textContent, "1h");
+	context.el.dataset = {
+		countdownAt: new Date(now + HOUR).toISOString(),
+		countdownLabel: "剩余 %{duration}", countdownDueLabel: "已到期",
+	};
+	hook.updated.call(context);
+	assert.equal(value.textContent, "剩余 1h");
+	hook.destroyed.call(context);
+	assert.equal(clock.timers.size, 0);
 });

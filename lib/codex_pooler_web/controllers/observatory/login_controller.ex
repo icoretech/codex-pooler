@@ -8,12 +8,13 @@ defmodule CodexPoolerWeb.Observatory.LoginController do
   @cookie_name "_codex_pooler_observatory_token"
   @cookie_max_age 14 * 24 * 60 * 60
   @login_path "/observatory/login"
-  @invalid_copy "The API key is invalid or unavailable."
 
+  @spec new(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def new(conn, _params) do
     render_login(conn)
   end
 
+  @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def create(%Plug.Conn{body_params: body_params, query_string: query_string} = conn, _params) do
     raw_api_key = exchange_candidate(body_params, query_string)
 
@@ -83,9 +84,9 @@ defmodule CodexPoolerWeb.Observatory.LoginController do
     conn
     |> put_status(status)
     |> render(:new,
-      page_title: "Observatory",
+      page_title: gettext("Observatory"),
       form: to_form(%{}, as: :observatory),
-      error: if(status == :ok, do: nil, else: @invalid_copy)
+      error: if(status == :ok, do: nil, else: gettext("The API key is invalid or unavailable."))
     )
   end
 

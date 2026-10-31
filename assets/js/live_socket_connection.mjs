@@ -1,11 +1,13 @@
-export const classifyLiveSocketConnection = (liveSocket, socket) => {
+import {hookLabel} from "./hook_labels.mjs"
+
+export const classifyLiveSocketConnection = (liveSocket, socket, labels = {}) => {
   if (!liveSocket || !socket) {
-    return {transportKey: "pending", transportLabel: "Pending", visualState: "connecting"}
+    return {transportKey: "pending", transportLabel: hookLabel(labels, "transportPending", "Pending"), visualState: "connecting"}
   }
 
   const state = socket?.connectionState?.() || readyStateLabel(socket?.conn?.readyState)
   const connected = liveSocket?.isConnected?.() || socket?.isConnected?.() || state === "open"
-  const transport = normalizeLiveSocketTransport(socket)
+  const transport = normalizeLiveSocketTransport(socket, labels)
 
   if (connected && transport.transportKey === "longpoll") {
     return {...transport, visualState: "longPollFallback"}
@@ -22,24 +24,24 @@ export const classifyLiveSocketConnection = (liveSocket, socket) => {
   return {...transport, visualState: "disconnected"}
 }
 
-export const normalizeLiveSocketTransport = (socket) => {
+export const normalizeLiveSocketTransport = (socket, labels = {}) => {
   const transportName = phoenixTransportName(socket) || connectionTransportName(socket)
 
   if (!transportName) {
-    return {transportKey: "unknown", transportLabel: "Unknown"}
+    return {transportKey: "unknown", transportLabel: hookLabel(labels, "transportUnknown", "Unknown")}
   }
 
   const normalized = transportName.toString().replace(/[_\s-]+/g, "").toLowerCase()
 
   if (normalized.includes("longpoll")) {
-    return {transportKey: "longpoll", transportLabel: "Long polling"}
+    return {transportKey: "longpoll", transportLabel: hookLabel(labels, "transportLongPolling", "Long polling")}
   }
 
   if (normalized.includes("websocket")) {
-    return {transportKey: "websocket", transportLabel: "WebSocket"}
+    return {transportKey: "websocket", transportLabel: hookLabel(labels, "transportWebsocket", "WebSocket")}
   }
 
-  return {transportKey: "unknown", transportLabel: "Unknown"}
+  return {transportKey: "unknown", transportLabel: hookLabel(labels, "transportUnknown", "Unknown")}
 }
 
 const phoenixTransportName = (socket) => {

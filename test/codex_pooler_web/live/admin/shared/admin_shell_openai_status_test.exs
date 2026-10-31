@@ -7,6 +7,20 @@ defmodule CodexPoolerWeb.Admin.AdminShellOpenAIStatusTest do
 
   setup :register_and_log_in_user
 
+  test "Chinese incident banner binds the automatic plural count even for the singular source", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    assert {:ok, _incident} =
+             OpenAIStatus.upsert_incident(%{guid: "zh-banner", title: "Provider incident", status: "Investigating", summary: "bounded", component: nil, link: "https://status.openai.com/incidents/zh-banner", published_at: now, content_hash: "zh-banner-hash"}, now)
+
+    assert {:ok, _feed} = OpenAIStatus.upsert_feed_state(%{last_success_at: now, active_count: 1, aggregate_revision: 1})
+
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/settings")
+
+    assert has_element?(view, "#admin-openai-status-banner", "OpenAI 正在报告 1 起事件")
+    assert has_element?(view, "#admin-openai-status-link[aria-label='查看 OpenAI 事件']", "查看")
+  end
+
   test "dismissal conflict reloads current revisions and explains why the banner remains", %{
     conn: conn
   } do
@@ -29,6 +43,8 @@ defmodule CodexPoolerWeb.Admin.AdminShellOpenAIStatusTest do
              OpenAIStatus.upsert_feed_state(%{last_success_at: now, aggregate_revision: 1})
 
     {:ok, view, _} = live(conn, ~p"/admin/pools")
+
+    assert has_element?(view, "#admin-openai-status-banner", "OpenAI is reporting an incident")
 
     assert {:ok, _} =
              OpenAIStatus.upsert_incident(

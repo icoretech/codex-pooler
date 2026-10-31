@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
 
   attr :page, :map, required: true
 
+  @spec feed_chip(map()) :: Phoenix.LiveView.Rendered.t()
   def feed_chip(assigns) do
     ~H"""
     <span
@@ -26,6 +27,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
   attr :page, :map, required: true
   attr :datetime_preferences, :map, required: true
 
+  @spec incidents_content(map()) :: Phoenix.LiveView.Rendered.t()
   def incidents_content(assigns) do
     ~H"""
     <.notice
@@ -40,19 +42,19 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       id="admin-incidents-feed-error"
       tone={:error}
     >
-      The latest OpenAI status fetch failed. Showing the last known incident data.
+      {gettext("The latest OpenAI status fetch failed. Showing the last known incident data.")}
     </.notice>
     <.notice :if={@page.polling_enabled? && !@page.available?} id="admin-incidents-feed-unavailable" tone={:warning}>
-      The status feed is not available yet. The first successful refresh is still pending. The feed is checked automatically every five minutes.
+      {gettext("The status feed is not available yet. The first successful refresh is still pending. The feed is checked automatically every five minutes.")}
     </.notice>
     <.notice :if={!@page.polling_enabled?} id="admin-incidents-feed-disabled" tone={:neutral}>
-      Status polling is disabled in System settings. Retained incidents show the last known state.
+      {gettext("Status polling is disabled in System settings. Retained incidents show the last known state.")}
     </.notice>
 
     <.incident_section
       id="admin-incidents-active-section"
-      title="Active incidents"
-      subtitle="Reported on the OpenAI status page and not yet resolved"
+      title={gettext("Active incidents")}
+      subtitle={gettext("Reported on the OpenAI status page and not yet resolved")}
       count_id="admin-incidents-active-count"
       count={length(@page.active)}
       table_id="admin-incidents-active-table"
@@ -65,11 +67,11 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
           id="admin-incidents-active-empty"
           icon={if @page.available?, do: "hero-check-circle", else: "hero-question-mark-circle"}
           tone={if @page.available?, do: :success, else: :neutral}
-          title={if @page.available?, do: "No active incidents", else: "No incident data yet"}
+          title={if @page.available?, do: gettext("No active incidents"), else: gettext("No incident data yet")}
           description={
             if @page.available?,
-              do: "No active incidents in the last successful status refresh.",
-              else: "A successful status refresh is needed before incident availability is known."
+              do: gettext("No active incidents in the last successful status refresh."),
+              else: gettext("A successful status refresh is needed before incident availability is known.")
           }
         />
       </:empty>
@@ -77,8 +79,8 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
 
     <.incident_section
       id="admin-incidents-history-section"
-      title="Incident history"
-      subtitle="Resolved and retired incidents, newest first"
+      title={gettext("Incident history")}
+      subtitle={gettext("Resolved and retired incidents, newest first")}
       count_id="admin-incidents-history-count"
       count={@page.history_total}
       table_id="admin-incidents-history-table"
@@ -91,13 +93,13 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
           id="admin-incidents-history-empty"
           icon="hero-clock"
           tone={:neutral}
-          title="No incident history"
-          description="Resolved and retired incidents will appear here."
+          title={gettext("No incident history")}
+          description={gettext("Resolved and retired incidents will appear here.")}
         />
       </:empty>
       <:footer :if={@page.history_overflow > 0}>
         <p id="admin-incidents-history-overflow" class="border-t border-base-300/60 px-4 py-2.5 text-xs text-base-content/60">
-          +{@page.history_overflow} more historical incidents are retained.
+          {ngettext("+%{count} more historical incident is retained.", "+%{count} more historical incidents are retained.", @page.history_overflow)}
         </p>
       </:footer>
     </.incident_section>
@@ -159,10 +161,10 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
           </colgroup>
           <thead>
             <tr>
-              <th class="whitespace-nowrap">Incident</th>
-              <th class="whitespace-nowrap">Status</th>
-              <th class="whitespace-nowrap">Last update</th>
-              <th class="whitespace-nowrap">Source</th>
+              <th class="whitespace-nowrap">{gettext("Incident")}</th>
+              <th class="whitespace-nowrap">{gettext("Status")}</th>
+              <th class="whitespace-nowrap">{gettext("Last update")}</th>
+              <th class="whitespace-nowrap">{gettext("Source")}</th>
             </tr>
           </thead>
           <tbody>
@@ -225,14 +227,14 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       </td>
       <td class="align-middle text-xs leading-5 text-base-content/70 max-lg:col-start-1 max-lg:row-start-2 max-lg:mt-1">
         <div class="grid">
-          <span data-role="incident-published-at" class="whitespace-nowrap" title={"First seen #{format_datetime(@row.first_seen_at, @datetime_preferences)}"}>
+          <span data-role="incident-published-at" class="whitespace-nowrap" title={gettext("First seen %{time}", time: format_datetime(@row.first_seen_at, @datetime_preferences))}>
             {format_datetime(@row.published_at, @datetime_preferences)}
           </span>
           <span :if={@row.resolved_at} data-role="incident-resolved-at" class="whitespace-nowrap text-base-content/50">
-            Resolved {format_datetime(@row.resolved_at, @datetime_preferences)}
+            {gettext("Resolved %{time}", time: format_datetime(@row.resolved_at, @datetime_preferences))}
           </span>
           <span :if={@row.retired_at} data-role="incident-retired-at" class="whitespace-nowrap text-base-content/50">
-            Retired {format_datetime(@row.retired_at, @datetime_preferences)}
+            {gettext("Retired %{time}", time: format_datetime(@row.retired_at, @datetime_preferences))}
           </span>
         </div>
       </td>
@@ -244,12 +246,12 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
           href={@row.link}
           target="_blank"
           rel="noopener noreferrer"
+          aria-label={gettext("View source for %{title}", title: @row.title)}
           class="inline-flex items-center gap-1 whitespace-nowrap font-medium text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
-          View <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
-          <span class="sr-only"> source for {@row.title}</span>
+          {gettext("View")} <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
         </a>
-        <span :if={!@row.link} class="text-base-content/50">Unavailable</span>
+        <span :if={!@row.link} class="text-base-content/50">{gettext("Unavailable")}</span>
       </td>
     </tr>
     """
@@ -321,14 +323,14 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
   defp feed_state(%{stale?: true}), do: "stale"
   defp feed_state(_), do: "current"
 
-  defp feed_state_label(%{polling_enabled?: false}), do: "Polling disabled"
-  defp feed_state_label(%{available?: false}), do: "Feed unavailable"
-  defp feed_state_label(%{last_error_code: code}) when is_binary(code), do: "Last fetch failed"
-  defp feed_state_label(%{stale?: true}), do: "Feed stale"
-  defp feed_state_label(_), do: "Feed current"
+  defp feed_state_label(%{polling_enabled?: false}), do: gettext("Polling disabled")
+  defp feed_state_label(%{available?: false}), do: gettext("Feed unavailable")
+  defp feed_state_label(%{last_error_code: code}) when is_binary(code), do: gettext("Last fetch failed")
+  defp feed_state_label(%{stale?: true}), do: gettext("Feed stale")
+  defp feed_state_label(_), do: gettext("Feed current")
 
-  defp feed_title(%{last_success_at: %DateTime{} = timestamp}), do: "Last successful fetch: #{DateTime.to_iso8601(timestamp)}"
-  defp feed_title(_page), do: "No successful fetch recorded yet"
+  defp feed_title(%{last_success_at: %DateTime{} = timestamp}), do: gettext("Last successful fetch: %{time}", time: DateTime.to_iso8601(timestamp))
+  defp feed_title(_page), do: gettext("No successful fetch recorded yet")
 
   defp feed_chip_class("current"), do: "border-success/25 bg-success/5 text-base-content"
   defp feed_chip_class("stale"), do: "border-warning/30 bg-warning/5 text-base-content"
@@ -340,11 +342,11 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
   defp feed_dot_class("error"), do: "bg-error"
   defp feed_dot_class(_state), do: "bg-base-content/35"
 
-  defp format_datetime(nil, _preferences), do: "not recorded"
+  defp format_datetime(nil, _preferences), do: gettext("not recorded")
 
   defp format_datetime(datetime, preferences), do: DateTimeDisplay.format_datetime(datetime, preferences)
 
-  defp stale_copy(nil, _preferences), do: "Status data may be out of date. No successful refresh has been recorded yet."
+  defp stale_copy(nil, _preferences), do: gettext("Status data may be out of date. No successful refresh has been recorded yet.")
 
-  defp stale_copy(timestamp, preferences), do: "Status data may be out of date. The last successful fetch was #{format_datetime(timestamp, preferences)}."
+  defp stale_copy(timestamp, preferences), do: gettext("Status data may be out of date. The last successful fetch was %{time}.", time: format_datetime(timestamp, preferences))
 end
