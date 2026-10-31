@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError do
   def message(%{code: :upstream_deletion_busy}), do: gettext("upstream deletion is waiting for database work to finish")
   def message(%{code: :upstream_account_assigned}), do: gettext("remove this account from all Pools before deleting it")
   def message(%{code: :saved_reset_redemption_in_progress}), do: gettext("saved reset redemption is already in progress")
+  def message(%{code: :saved_reset_confirmation_unavailable}), do: gettext("Quota details are unavailable. No reset was spent. Wait for the next quota check and try again.")
 
   def message(%{code: :stale_import}), do: gettext("credentials changed after import preparation; submit the current auth data again")
   def message(%{code: :transaction_not_allowed}), do: gettext("auto-publishing token linking is not allowed inside a caller-owned transaction")

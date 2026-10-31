@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Gateway.Routing.CircuitHealth
   alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -868,7 +869,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     with %PoolUpstreamAssignment{id: assignment_id} = assignment <- canonical,
          true <- assignment_id == recovery.assignment.id,
          true <- identity.status == @identity_active,
-         true <- exact_recovery_attempt?(redemption, recovery),
+         true <- bound_recovery_attempt?(redemption, recovery),
          true <- replay["provider_dispatches"] == recovery.provider_dispatches,
          true <- replay["provider_dispatches"] < @maximum_provider_dispatches,
          true <- before_replay_cutoff?(redemption, reservation_now),
@@ -939,6 +940,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       redemption["generation"] == recovery.generation
   end
 
+  defp bound_recovery_attempt?(redemption, recovery) do
+    exact_recovery_attempt?(redemption, recovery) and captured_confirmation_resources_match?(redemption, recovery)
+  end
+
   defp before_replay_cutoff?(redemption, now) do
     case parse_datetime(redemption["started_at"]) do
       %DateTime{} = started_at ->
@@ -971,7 +976,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       not match?(%PoolUpstreamAssignment{id: id} when id == recovery.assignment.id, canonical) ->
         {:noop, "recovery_superseded", identity, canonical || recovery.assignment}
 
-      not exact_recovery_attempt?(redemption, recovery) ->
+      not bound_recovery_attempt?(redemption, recovery) ->
         {:noop, "recovery_target_invalid", identity, canonical}
 
       is_integer(replay["provider_dispatches"]) and
@@ -1293,7 +1298,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id),
          :ok <- ensure_identity_usable(identity),
          :ok <- ensure_credentials_usable(identity),
-         :ok <- ensure_saved_reset_available(identity, timestamp, receive_timeout) do
+         :ok <- ensure_saved_reset_available(identity, timestamp, receive_timeout),
+         :ok <- ensure_confirmation_descriptors(reset_confirmation_descriptors(identity, timestamp)) do
       {:ok, assignment, identity}
     end
   end
@@ -2146,6 +2152,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
           |> put_claim_confirmation_resources(metadata["saved_reset_redemption"] || %{}, locked_identity, started_at)
 
+        case ensure_confirmation_descriptors(claim["included_window_descriptors"]) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
         {metadata, claim} =
           put_provider_replay_contract(metadata, claim, locked_identity, assignment, started_at)
 
@@ -2177,15 +2188,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp reset_confirmation_descriptors(identity, timestamp) do
     identity
     |> Windows.list_evidence()
-    |> Windows.effective_quota_windows(timestamp)
+    # Capture the Usage API contract before a runtime row can win the logical
+    # fold. Filtering its winner afterward can discard the whole descriptor.
     |> Enum.filter(fn window ->
-      window.quota_key == "account" and window.quota_scope == "account" and window.window_minutes in [10_080, 43_200] and
+      window.quota_key == "account" and window.quota_scope == "account" and window.quota_family == "account" and
         window.source == "codex_usage_api" and window.source_precision in ["authoritative", "observed"]
     end)
+    |> Windows.effective_quota_windows(timestamp)
+    |> Enum.filter(&WindowClassifier.saved_reset_window?/1)
     |> Enum.map(&%{"window_kind" => &1.window_kind, "window_minutes" => &1.window_minutes})
     |> Enum.uniq()
     |> Enum.take(2)
   end
+
+  defp ensure_confirmation_descriptors(descriptors) do
+    if valid_confirmation_descriptors?(descriptors) do
+      :ok
+    else
+      {:error,
+       lifecycle_error(
+         :saved_reset_confirmation_unavailable,
+         "saved reset redemption requires a verified quota window"
+       )}
+    end
+  end
+
+  defp valid_confirmation_descriptors?([_ | _] = descriptors) when length(descriptors) <= 2 do
+    Enum.uniq(descriptors) == descriptors and Enum.all?(descriptors, &valid_confirmation_descriptor?/1)
+  end
+
+  defp valid_confirmation_descriptors?(_descriptors), do: false
+
+  defp valid_confirmation_descriptor?(%{"window_kind" => kind, "window_minutes" => minutes} = descriptor) do
+    map_size(descriptor) == 2 and {kind, minutes} in [{"secondary", 10_080}, {"primary", 43_200}]
+  end
+
+  defp valid_confirmation_descriptor?(_descriptor), do: false
 
   defp put_claim_confirmation_resources(claim, redemption, identity, timestamp) do
     if claim["attempt_id"] == redemption["attempt_id"] and claim["generation"] == redemption["generation"] do
@@ -2704,6 +2742,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
       with :ok <- validate_reservation_identity(redemption, claim),
            :ok <- validate_reservation_dispatch(redemption, claim),
+           :ok <- validate_reservation_confirmation_resources(redemption, claim),
            :ok <- cohort_result,
            :ok <- lock_confirmation_windows(claim[:gateway_auto_context]),
            {:ok, locked_assignment} <-
@@ -2816,7 +2855,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  # A zero-dispatch automatic claim that lost its authorization before the
+  # A zero-dispatch claim that lost its authorization before the
   # provider POST is settled through the existing guarded transition; the
   # bounded fence code is returned to the caller while the record carries the
   # lifecycle phase.
@@ -2851,6 +2890,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     if is_integer(persisted_dispatches) and persisted_dispatches == loaded_dispatches,
       do: :ok,
       else: :error
+  end
+
+  defp validate_reservation_confirmation_resources(redemption, claim) do
+    if captured_confirmation_resources_match?(redemption, claim),
+      do: :ok,
+      else: {:noop, "saved_reset_confirmation_unavailable"}
+  end
+
+  defp captured_confirmation_resources_match?(redemption, claim) do
+    descriptors = redemption["included_window_descriptors"]
+    captured = get_in(claim.identity.metadata || %{}, ["saved_reset_redemption", "included_window_descriptors"])
+
+    valid_confirmation_descriptors?(descriptors) and descriptors == captured
   end
 
   defp lock_reservation_assignment(assignment_id, identity_id) do

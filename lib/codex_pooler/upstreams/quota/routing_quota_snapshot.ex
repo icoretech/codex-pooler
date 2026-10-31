@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
     WindowSelector
   }
 
+  alias CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection
   alias CodexPooler.Upstreams.Quota.Windows.Retention
   alias CodexPooler.Upstreams.Quota.Windows.Routing
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -110,6 +111,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
   def effective_windows(%__MODULE__{as_of: as_of} = snapshot) do
     snapshot
     |> time_visible_raw_windows()
+    |> ResetRecoverySelection.reject_recovered_prior_cycles(snapshot)
     |> Routing.reject_superseded_primary_windows(as_of)
     |> WindowSelector.logical_windows(as_of)
   end

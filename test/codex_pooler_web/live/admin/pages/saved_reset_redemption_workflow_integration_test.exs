@@ -126,6 +126,8 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
 
     fixture = manual_fixture(context, fake)
     %{identity: identity, assignment: assignment} = fixture
+    [before_reset] = QuotaWindows.list_evidence(identity)
+    assert {:ok, _} = QuotaWindows.record_evidence(identity, %{weekly("100", before_reset.observed_at, before_reset.reset_at) | source: "codex_rate_limit_event"}, before_reset.observed_at)
     {list, cockpit} = open_views(context, identity)
     render_click(list, "open_saved_reset_policy", %{"id" => identity.id})
     render_click(list, "open_quota_observations", %{})
@@ -189,12 +191,14 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
     consumed_at = DateTime.add(candidate_at, -60, :second)
     canonical_at = DateTime.add(candidate_at, -300, :second)
     advance_fixture(applied, real_claim, consumed_at, canonical_at, candidate_at)
+    exhausted_at = DateTime.add(consumed_at, -30, :second)
+    assert {:ok, old_event} = QuotaWindows.record_evidence(identity, %{weekly("100", exhausted_at, DateTime.add(canonical_at, 5, :day)) | source: "codex_rate_limit_event"}, exhausted_at)
     below = DateTime.add(candidate_at, 179, :second)
     fetch_usage(context, fixture, below, usage(0, below))
     assert {:ok, :unchanged} = Convergence.converge(identity.id, below, "reconciliation")
     assert Repo.reload!(identity).metadata["saved_reset_redemption"]["phase"] == "consumed_pending_probe"
     refresh_views([list, cockpit], identity)
-    [window] = QuotaWindows.list_evidence(identity)
+    window = Enum.find(QuotaWindows.list_evidence(identity), &(&1.source == "codex_usage_api"))
     assert {:ok, candidate} = EvidenceStore.parse_candidate(window.metadata)
     assert EvidenceStore.candidate_provider_status_safe?(window.metadata)
     assert candidate.observed_at == candidate_at
@@ -219,6 +223,13 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
     assert :sys.get_state(cockpit.pid).socket.assigns.quota_observations_open?
     assert :sys.get_state(list.pid).socket.assigns.saved_reset_policy_form === form
     assert :sys.get_state(list.pid).socket.assigns.editing_saved_reset_policy.saved_reset_operation.serving_readiness.routing_ready_now?
+    assert has_element?(list, "#upstream-account-#{identity.id}-limit-weekly-progress", "100%")
+    assert Repo.get!(AccountQuotaWindow, old_event.id).used_percent == Decimal.new("100.000")
+    assert DateTime.diff(now, old_event.observed_at, :second) < 900
+    %{api_key: api_key} = active_api_key_fixture(fixture.pool)
+    input = filter_input(fixture.pool, api_key, [fixture])
+    assert {:ok, [{routable_assignment, _routable_identity}], _options, _state} = route(input)
+    assert routable_assignment.id == assignment.id
 
     counts = FakeUpstream.physical_counts(fake)
     render_hook(list, "set_live_updates", %{"paused" => true})

@@ -2445,7 +2445,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations())
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations(), quota_as_of: ~U[2026-07-24 03:00:00Z])
 
       ledger = %{
         "version" => 1,
@@ -2507,7 +2507,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         |> Map.put("observed_at", "2026-07-24T04:00:00Z")
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: newer_saved_resets)
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: newer_saved_resets, quota_as_of: ~U[2026-07-24 03:00:00Z])
 
       opaque_ledger = %{"version" => 99, "payload" => %{"future" => true}}
 
@@ -2539,6 +2539,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       %{identity: identity, assignment: assignment} =
         assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          quota_as_of: ~U[2026-07-24 03:00:00Z],
           saved_resets:
             saved_resets_with_expirations()
             |> Map.put("observed_at", "2026-07-24T02:00:00Z")
@@ -2584,7 +2585,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations())
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations(), quota_as_of: ~U[2026-07-24 03:00:00Z])
 
       task =
         Task.async(fn ->
@@ -2640,6 +2641,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       %{identity: identity, assignment: assignment} =
         assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          quota_as_of: ~U[2026-07-24 03:00:00Z],
           saved_resets:
             saved_resets_with_expirations()
             |> Map.put("observed_at", "2026-07-24T02:00:00Z")
@@ -4032,8 +4034,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       identity = update_saved_resets!(identity, %{"source" => nil})
 
-      assert {:ok, [_lower, _earlier, _selected]} =
+      assert {:ok, [_usage, _lower, _earlier, _selected]} =
                QuotaWindows.upsert_quota_windows(identity, [
+                 scheduled_weekly_quota_attrs(as_of, Decimal.new("10"), []),
                  scheduled_weekly_quota_attrs(as_of, Decimal.new("70"), quota_key: "lower"),
                  scheduled_weekly_quota_attrs(as_of, Decimal.new("80"),
                    source: "codex_response_headers",
@@ -7226,7 +7229,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     %{identity: identity, assignment: assignment} =
       assignment_with_fake(fake, "/api/codex/usage", "codex_api",
         saved_resets: saved_resets,
-        redemption: Keyword.get(opts, :redemption)
+        redemption: Keyword.get(opts, :redemption),
+        quota?: false
       )
 
     identity =
@@ -7358,11 +7362,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         redemption -> Map.put(metadata, "saved_reset_redemption", redemption)
       end
 
-    active_upstream_assignment_fixture(pool_fixture(), %{
-      chatgpt_account_id: "acct_#{unique}",
-      account_label: "Gateway upstream #{unique}",
-      metadata: metadata
-    })
+    fixture =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: "acct_#{unique}",
+        account_label: "Gateway upstream #{unique}",
+        metadata: metadata
+      })
+
+    if Keyword.get(opts, :quota?, true) do
+      observed_at = Keyword.get_lazy(opts, :quota_as_of, fn -> DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:microsecond) end)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(fixture.identity, [
+                 weekly_quota_attrs(Decimal.new("0"), observed_at: observed_at, last_sync_at: observed_at, reset_at: DateTime.add(observed_at, 2, :hour))
+               ])
+    end
+
+    fixture
   end
 
   defp ambiguous_chatgpt_recovery_fixture! do
@@ -8374,6 +8390,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           account_label: "Saved reset reassignment target #{unique}",
           chatgpt_account_id: "acct_probe_reassignment_target_#{unique}"
         })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(Decimal.new("100"), [])])
 
       %{
         assignment_id: assignment.id,
@@ -9639,6 +9658,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             "saved_resets" => saved_resets
           }
         })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(Decimal.new("0"), [])])
 
       %{assignment_id: assignment.id, identity_id: identity.id, pool_id: pool.id}
     end)

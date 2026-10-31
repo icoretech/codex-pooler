@@ -136,6 +136,7 @@ defmodule CodexPooler.Gateway.Runtime.ProviderCreditsDispatchTest do
       assert_late_workspace_header_denies_every_basis!(unquote(transport), unquote(mode))
     end
 
+    @tag reset_recovery_dispatch: true
     test "authorized consume and matching included confirmation precede #{transport} #{mode} generation" do
       assert_consume_and_included_confirmation_precede_generation!(unquote(transport), unquote(mode))
     end
@@ -229,8 +230,35 @@ defmodule CodexPooler.Gateway.Runtime.ProviderCreditsDispatchTest do
   defp assert_consume_and_included_confirmation_precede_generation!(transport, mode) do
     fixture = open!()
     setup = ProviderCreditsFixtures.runtime_setup!(fixture, :a, :weekly_credit_only)
-    recovered = recover_included!(fixture, setup)
-    assert recovered.metadata["saved_reset_redemption"]["phase"] == "confirmed_by_quota"
+
+    old_event =
+      UnboxedFixture.run_unboxed(fn ->
+        old = Enum.find(Windows.list_evidence(setup.identity), &(&1.source == "codex_usage_api" and &1.window_minutes == 10_080))
+        observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        attrs = old |> Map.from_struct() |> Map.take([:quota_key, :quota_scope, :quota_family, :window_kind, :window_minutes, :used_percent, :reset_at, :source_precision, :freshness_state, :metadata]) |> Map.merge(%{source: "codex_rate_limit_event", observed_at: observed_at, last_sync_at: observed_at})
+        assert {:ok, [event]} = Windows.upsert_quota_windows(setup.identity, [attrs], delete_missing?: false)
+        assert Decimal.equal?(event.used_percent, 100)
+        event
+      end)
+
+    recovered = recover_included!(fixture, setup, reset_after: 10_800)
+    redemption = recovered.metadata["saved_reset_redemption"]
+    assert redemption["phase"] == "confirmed_by_quota"
+    {:ok, consumed_at, _offset} = DateTime.from_iso8601(redemption["consumed_at"])
+    assert DateTime.compare(old_event.observed_at, consumed_at) == :lt
+
+    UnboxedFixture.run_unboxed(fn ->
+      as_of = DateTime.utc_now()
+      windows = Windows.list_evidence(recovered)
+      assert Enum.find(windows, &(&1.id == old_event.id)) == old_event
+      assert DateTime.diff(as_of, old_event.observed_at, :second) < Evidence.freshness_ttl_seconds()
+      assert Evidence.current_freshness_state(old_event, as_of) == "fresh"
+      usage = Enum.find(windows, &(&1.source == "codex_usage_api" and &1.window_minutes == 10_080))
+      assert Decimal.compare(usage.used_percent, Decimal.new(100)) == :lt
+      assert DateTime.compare(usage.observed_at, consumed_at) != :lt
+      assert DateTime.diff(usage.reset_at, old_event.reset_at, :second) > 5
+    end)
+
     request = request(fixture, %{setup | identity: recovered}, transport, mode)
     assert {:ok, result} = execute(request, nil)
     assert admission(result).capacity_basis == :recovered_included
@@ -1476,11 +1504,11 @@ defmodule CodexPooler.Gateway.Runtime.ProviderCreditsDispatchTest do
     FakeUpstream.set_mode(fixture.upstream, {:json, 200, %{"id" => "resp_synthetic_probe", "object" => "response", "status" => "completed"}})
   end
 
-  defp recover_included!(fixture, setup) do
+  defp recover_included!(fixture, setup, opts \\ []) do
     now = DateTime.utc_now()
 
     payload =
-      ProviderCreditsFixtures.usage_payload(:included, now: now, credits: :none)
+      ProviderCreditsFixtures.usage_payload(:included, Keyword.merge([now: now, credits: :none], opts))
       |> Map.put("rate_limit_reset_credits", %{"available_count" => 1})
 
     inventory = ProviderCreditsFixtures.reset_inventory_payload(1, now: now)

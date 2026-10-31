@@ -136,6 +136,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
       {:error, %{code: :saved_reset_redemption_in_progress}} ->
         socket |> reload_fun.() |> resume_status()
 
+      {:error, %{code: :saved_reset_confirmation_unavailable} = reason} ->
+        socket
+        |> put_flash(:error, WorkflowError.message(reason))
+        |> reload_fun.()
+
       {:error, _reason} ->
         socket
         |> put_flash(:error, gettext("Saved reset request was not accepted. Use Refresh to see the current account state."))

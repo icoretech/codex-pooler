@@ -3909,17 +3909,17 @@ msgstr ""
 msgid "Codex auth.json matched an existing account; tokens updated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:64
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:65
 #, elixir-autogen, elixir-format
 msgid "Codex authorization response was incomplete"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:70
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:71
 #, elixir-autogen, elixir-format
 msgid "Codex authorization service returned a temporary error"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:71
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:72
 #, elixir-autogen, elixir-format
 msgid "Codex authorization service returned an unexpected device status"
 msgstr ""
@@ -3929,32 +3929,32 @@ msgstr ""
 msgid "Codex config.toml"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:68
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:69
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization expired"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:66
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:67
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization is still pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:62
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:63
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization is unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:67
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:68
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization polling should slow down"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:69
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:70
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization was denied"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:63
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:64
 #, elixir-autogen, elixir-format
 msgid "Codex device response was incomplete"
 msgstr ""
@@ -3964,7 +3964,7 @@ msgstr ""
 msgid "Codex saved resets · %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:65
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:66
 #, elixir-autogen, elixir-format
 msgid "Codex token exchange failed"
 msgstr ""
@@ -8470,71 +8470,71 @@ msgid "OAuth (device code)"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:28
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:58
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:59
 #, elixir-autogen, elixir-format
 msgid "OAuth account conflicts with an existing upstream account"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:27
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:57
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:58
 #, elixir-autogen, elixir-format
 msgid "OAuth account does not match the selected upstream account"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:16
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:46
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:47
 #, elixir-autogen, elixir-format
 msgid "OAuth callback URL is invalid"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:17
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:47
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:48
 #, elixir-autogen, elixir-format
 msgid "OAuth callback URL must use http://localhost:1455/auth/callback"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:19
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:49
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:50
 #, elixir-autogen, elixir-format
 msgid "OAuth callback contains duplicate parameters"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:18
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:48
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:49
 #, elixir-autogen, elixir-format
 msgid "OAuth callback is missing state"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:20
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:50
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:51
 #, elixir-autogen, elixir-format
 msgid "OAuth callback must include either an authorization code or provider error"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:22
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:52
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:53
 #, elixir-autogen, elixir-format
 msgid "OAuth callback state does not match a pending flow"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:23
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:53
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:54
 #, elixir-autogen, elixir-format
 msgid "OAuth flow has expired"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:24
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:54
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:55
 #, elixir-autogen, elixir-format
 msgid "OAuth flow is not pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:60
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:61
 #, elixir-autogen, elixir-format
 msgid "OAuth flow request is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:61
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:62
 #, elixir-autogen, elixir-format
 msgid "OAuth flow transient secret was not found"
 msgstr ""
@@ -8545,7 +8545,7 @@ msgid "OAuth flow was not found"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:25
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:55
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:56
 #, elixir-autogen, elixir-format
 msgid "OAuth flow was superseded"
 msgstr ""
@@ -8577,7 +8577,7 @@ msgid "OAuth relink is not available: deleted accounts cannot be relinked"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:26
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:56
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:57
 #, elixir-autogen, elixir-format
 msgid "OAuth token exchange failed"
 msgstr ""
@@ -8812,7 +8812,7 @@ msgid "OpenAI authorization URL"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:21
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:51
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:52
 #, elixir-autogen, elixir-format
 msgid "OpenAI denied the OAuth request"
 msgstr ""
@@ -8864,7 +8864,7 @@ msgid "Operation"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:51
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:44
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:45
 #, elixir-autogen, elixir-format
 msgid "Operation failed"
 msgstr ""
@@ -9463,7 +9463,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:300
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:283
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:125
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:126
 #, elixir-autogen, elixir-format
 msgid "Pool"
 msgstr ""
@@ -9483,7 +9483,7 @@ msgid "Pool action failed"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:29
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:59
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:60
 #, elixir-autogen, elixir-format
 msgid "Pool authorization is required for this OAuth flow"
 msgstr ""
@@ -10370,7 +10370,7 @@ msgstr ""
 msgid "Redeem saved reset"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:172
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:177
 #, elixir-autogen, elixir-format
 msgid "Redeem saved reset is not available: %{reason}"
 msgstr ""
@@ -10950,9 +10950,9 @@ msgstr ""
 msgid "Review errors before saving this card."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:152
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:157
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:95
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:158
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:164
 #, elixir-autogen, elixir-format
 msgid "Review the recorded saved reset status before taking another action"
 msgstr ""
@@ -11535,7 +11535,7 @@ msgstr ""
 msgid "Saved reset redemption queued"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:184
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:190
 #, elixir-autogen, elixir-format
 msgid "Saved reset redemption requires a Pool assignment"
 msgstr ""
@@ -11545,8 +11545,8 @@ msgstr ""
 msgid "Saved reset redemption unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:141
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:146
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:146
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:152
 #, elixir-autogen, elixir-format
 msgid "Saved reset request was not accepted. Use Refresh to see the current account state."
 msgstr ""
@@ -14313,8 +14313,8 @@ msgstr ""
 msgid "accepted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:41
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:86
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:42
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:87
 #, elixir-autogen, elixir-format
 msgid "access token is expired"
 msgstr ""
@@ -14325,14 +14325,14 @@ msgstr ""
 msgid "account"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:117
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:118
 #, elixir-autogen, elixir-format
 msgid "account label"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:831
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:171
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
 msgid "action is unavailable"
 msgstr ""
@@ -14393,7 +14393,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:625
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:144
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
 #, elixir-autogen, elixir-format
 msgid "assigned-pool admin capabilities require a Pool scope"
 msgstr ""
@@ -14411,7 +14411,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:30
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:76
 #, elixir-autogen, elixir-format
 msgid "at least one preserved assignment is required before reactivation"
 msgstr ""
@@ -14441,7 +14441,7 @@ msgstr ""
 msgid "auth.json selected"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:119
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:120
 #, elixir-autogen, elixir-format
 msgid "automatic redemption"
 msgstr ""
@@ -14550,13 +14550,13 @@ msgstr ""
 msgid "configured"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:118
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:119
 #, elixir-autogen, elixir-format
 msgid "confirmation label"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1597
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
 #, elixir-autogen, elixir-format
 msgid "confirmation slug did not match pool slug"
 msgstr ""
@@ -14566,7 +14566,7 @@ msgstr ""
 msgid "connecting…"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:124
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:125
 #, elixir-autogen, elixir-format
 msgid "content"
 msgstr ""
@@ -14626,7 +14626,7 @@ msgstr ""
 msgid "deleted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:79
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:80
 #, elixir-autogen, elixir-format
 msgid "deleted upstream identities cannot be reactivated without reconnecting/importing again"
 msgstr ""
@@ -14926,7 +14926,7 @@ msgstr ""
 msgid "ineligible"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:89
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:90
 #, elixir-autogen, elixir-format
 msgid "instance owner access is required to delete an unassigned account"
 msgstr ""
@@ -15011,7 +15011,7 @@ msgstr ""
 msgid "maximum_reasoning_effort is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:122
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:123
 #, elixir-autogen, elixir-format
 msgid "minimum blocked minutes"
 msgstr ""
@@ -15032,13 +15032,13 @@ msgid "model identifier cannot contain whitespace or control characters"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1599
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
 #, elixir-autogen, elixir-format
 msgid "model identifier is invalid"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1602
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
 #, elixir-autogen, elixir-format
 msgid "model identifier is not available for this Pool"
 msgstr ""
@@ -15049,7 +15049,7 @@ msgid "model identifier must be text"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1601
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
 #, elixir-autogen, elixir-format
 msgid "model identifier was submitted more than once"
 msgstr ""
@@ -15067,31 +15067,31 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1604
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
 #, elixir-autogen, elixir-format
 msgid "model serving mode audit could not be recorded"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1605
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
 #, elixir-autogen, elixir-format
 msgid "model serving mode event could not be emitted"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
 #, elixir-autogen, elixir-format
 msgid "model serving mode is invalid"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
 #, elixir-autogen, elixir-format
 msgid "model serving modes changed since they were loaded"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1606
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
 #, elixir-autogen, elixir-format
 msgid "model serving modes could not be saved because of a database conflict"
 msgstr ""
@@ -15132,7 +15132,7 @@ msgid "name"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
 #, elixir-autogen, elixir-format
 msgid "name can't be blank"
 msgstr ""
@@ -15268,7 +15268,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:621
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:140
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:93
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
 #, elixir-autogen, elixir-format
 msgid "only node admins can perform this capability"
 msgstr ""
@@ -15277,7 +15277,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:624
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:143
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
 #, elixir-autogen, elixir-format
 msgid "only the instance owner can perform this global capability"
 msgstr ""
@@ -15339,7 +15339,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:31
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:76
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
 #, elixir-autogen, elixir-format
 msgid "pool assignment was not found"
 msgstr ""
@@ -15350,7 +15350,7 @@ msgid "pool filter is not available"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1595
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
 #, elixir-autogen, elixir-format
 msgid "pool must be archived before deletion"
 msgstr ""
@@ -15359,7 +15359,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:616
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1594
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:138
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
 #, elixir-autogen, elixir-format
 msgid "pool was not found"
 msgstr ""
@@ -15429,7 +15429,7 @@ msgstr ""
 msgid "quota refresh %{status}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:121
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:122
 #, elixir-autogen, elixir-format
 msgid "quota threshold percent"
 msgstr ""
@@ -15446,7 +15446,7 @@ msgstr ""
 msgid "reauth_required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:78
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:79
 #, elixir-autogen, elixir-format
 msgid "reauth_required upstream identities cannot be reactivated without reconnecting/importing again"
 msgstr ""
@@ -15496,13 +15496,13 @@ msgid "refreshing"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:32
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:78
 #, elixir-autogen, elixir-format
 msgid "refreshing upstream identities must finish before reactivation"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:35
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:90
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:91
 #, elixir-autogen, elixir-format
 msgid "remove this account from all Pools before deleting it"
 msgstr ""
@@ -15552,7 +15552,7 @@ msgstr ""
 msgid "reservation pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:123
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:124
 #, elixir-autogen, elixir-format
 msgid "reserved credits"
 msgstr ""
@@ -15613,7 +15613,7 @@ msgid "running"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:36
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:92
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:93
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:182
 #, elixir-autogen, elixir-format
 msgid "saved reset redemption is already in progress"
@@ -15708,7 +15708,7 @@ msgid "status"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1598
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
 #, elixir-autogen, elixir-format
 msgid "status must be active, disabled, or archived"
 msgstr ""
@@ -15739,7 +15739,7 @@ msgid "terminal %{class}"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1596
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
 #, elixir-autogen, elixir-format
 msgid "the Pool is being deleted"
 msgstr ""
@@ -15748,7 +15748,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:622
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:141
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
 #, elixir-autogen, elixir-format
 msgid "the actor role cannot perform this capability in the requested scope"
 msgstr ""
@@ -15757,7 +15757,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:626
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:145
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
 #, elixir-autogen, elixir-format
 msgid "the assigned-pool admin cannot access the requested Pool"
 msgstr ""
@@ -15772,7 +15772,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:623
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:142
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
 #, elixir-autogen, elixir-format
 msgid "this capability requires a Pool scope"
 msgstr ""
@@ -15839,12 +15839,12 @@ msgstr ""
 msgid "transport: %{transport}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:120
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:121
 #, elixir-autogen, elixir-format
 msgid "trigger mode"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:91
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:92
 #, elixir-autogen, elixir-format
 msgid "type the current account label exactly"
 msgstr ""
@@ -15924,17 +15924,17 @@ msgstr ""
 msgid "unsupported pool option"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:82
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:83
 #, elixir-autogen, elixir-format
 msgid "upstream access token is expired"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:81
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:82
 #, elixir-autogen, elixir-format
 msgid "upstream access token is missing"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:83
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:84
 #, elixir-autogen, elixir-format
 msgid "upstream access token is present"
 msgstr ""
@@ -15949,30 +15949,30 @@ msgstr ""
 msgid "upstream account is being deleted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:74
 #, elixir-autogen, elixir-format
 msgid "upstream account was not found"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:33
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:87
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:88
 #, elixir-autogen, elixir-format
 msgid "upstream deletion could not be queued; retry Delete"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:34
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:88
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:89
 #, elixir-autogen, elixir-format
 msgid "upstream deletion is waiting for database work to finish"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:80
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:81
 #, elixir-autogen, elixir-format
 msgid "upstream identity is not in a locally reactivatable state"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:72
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
 #, elixir-autogen, elixir-format
 msgid "upstream identity was not found"
 msgstr ""
@@ -16001,7 +16001,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:619
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:139
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:74
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
 #, elixir-autogen, elixir-format
 msgid "user scope is required"
 msgstr ""
@@ -17356,7 +17356,7 @@ msgstr ""
 msgid "authoritative"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:39
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:40
 #, elixir-autogen, elixir-format
 msgid "auto-publishing token linking is not allowed inside a caller-owned transaction"
 msgstr ""
@@ -17401,7 +17401,7 @@ msgstr ""
 msgid "catalog sync timed out before completion"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:38
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:39
 #, elixir-autogen, elixir-format
 msgid "credentials changed after import preparation; submit the current auth data again"
 msgstr ""
@@ -17565,7 +17565,7 @@ msgstr ""
 msgid "observed time not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:40
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:41
 #, elixir-autogen, elixir-format
 msgid "prepared imports must be submitted as one complete batch"
 msgstr ""
@@ -17738,7 +17738,7 @@ msgstr ""
 msgid "the last saved reset was not confirmed in time; another redemption waits until a usage report shows quota recovered"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:114
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:115
 #, elixir-autogen, elixir-format
 msgid "token linking request is invalid"
 msgstr ""
@@ -17798,7 +17798,7 @@ msgstr ""
 msgid "token refresh succeeded not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:114
 #, elixir-autogen, elixir-format
 msgid "trusted upstream account is invalid"
 msgstr ""
@@ -17808,12 +17808,12 @@ msgstr ""
 msgid "upstream OAuth refresh failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:85
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:86
 #, elixir-autogen, elixir-format
 msgid "upstream access token is reauth_required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:84
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:85
 #, elixir-autogen, elixir-format
 msgid "upstream access token is refresh_due"
 msgstr ""
@@ -18731,4 +18731,9 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/token_burn_projection.ex:117
 #, elixir-autogen, elixir-format
 msgid "unknown model"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:37
+#, elixir-autogen, elixir-format
+msgid "Quota details are unavailable. No reset was spent. Wait for the next quota check and try again."
 msgstr ""

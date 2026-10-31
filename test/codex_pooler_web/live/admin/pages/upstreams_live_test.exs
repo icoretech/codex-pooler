@@ -2469,6 +2469,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         }
       })
 
+    assert {:ok, _} = QuotaWindows.record_evidence(identity, %{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, used_percent: Decimal.new("100"), reset_at: DateTime.add(now, 5, :day), observed_at: now, last_sync_at: now, source: "codex_usage_api", source_precision: "observed", freshness_state: "fresh"}, now)
+
     [account] =
       scope
       |> UpstreamAccountsReadModel.list_visible_accounts([pool])

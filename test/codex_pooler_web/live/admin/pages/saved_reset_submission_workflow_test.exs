@@ -7,6 +7,8 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @worker "CodexPooler.Jobs.SavedResetRedemptionWorker"
@@ -39,11 +41,36 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
         }
       )
 
+    assert {:ok, _} = QuotaWindows.record_evidence(fixture.identity, %{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, used_percent: Decimal.new("100"), reset_at: DateTime.add(now, 5, :day), observed_at: now, last_sync_at: now, source: "codex_usage_api", source_precision: "observed", freshness_state: "fresh"}, now)
+
     Map.merge(fixture, %{pool: pool, fake: fake})
   end
 
   for surface <- [:bank, :cockpit] do
     @surface surface
+
+    for {locale, message} <- [
+          {"en", "Quota details are unavailable. No reset was spent. Wait for the next quota check and try again."},
+          {"zh-CN", "配额详情暂不可用。未消耗任何已保存的重置。请等待下次配额检查后重试。"}
+        ] do
+      @locale locale
+      @message message
+
+      test "#{surface} #{@locale} missing quota details refuses redemption with a clear next step", context do
+        %{conn: conn, identity: identity, assignment: assignment, pool: pool} = context
+        Repo.delete_all(from window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id)
+        view = mount_surface(put_locale(conn, @locale), identity.id, @surface)
+        render_click(view, "open_saved_reset_redemption_confirmation", %{"id" => identity.id, "pool-id" => pool.id})
+        view |> element(confirm(@surface)) |> render_click()
+
+        assert has_element?(view, "#flash-error", @message)
+        assert jobs(assignment.id) == []
+        current = Repo.get!(UpstreamIdentity, identity.id)
+        assert current.metadata["saved_resets"]["available_count"] == 1
+        refute current.metadata["saved_reset_redemption"]
+        finish_scenario(context.fake, @surface, "missing-quota-#{@locale}", %{jobs: 0, available_count: 1, redemption_absent?: true, localized_error?: true})
+      end
+    end
 
     test "#{surface} confirmation enqueues one request and duplicate/remount resumes persisted status", context do
       %{conn: conn, identity: identity, assignment: assignment, pool: pool} = context

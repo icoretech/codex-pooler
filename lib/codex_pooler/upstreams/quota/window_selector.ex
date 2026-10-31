@@ -203,10 +203,12 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # so fold them read-side: selection, routing, and operator projections then
   # see a single weekly window regardless of whether the one-shot purge
   # migration has run or been raced by an old writer.
-  defp normalize_legacy_weekly_primary(%Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
+  @doc false
+  @spec normalize_legacy_weekly_primary(Quota.AccountQuotaWindow.t()) :: Quota.AccountQuotaWindow.t()
+  def normalize_legacy_weekly_primary(%Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
     do: %{window | window_kind: "secondary"}
 
-  defp normalize_legacy_weekly_primary(window), do: window
+  def normalize_legacy_weekly_primary(window), do: window
 
   @spec logical_key(Quota.AccountQuotaWindow.t()) :: tuple()
   def logical_key(%Quota.AccountQuotaWindow{} = window) do

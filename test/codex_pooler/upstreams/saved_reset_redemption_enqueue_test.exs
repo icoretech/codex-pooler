@@ -10,6 +10,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -19,6 +20,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
   end
 
   describe "enqueue_for_scope/4" do
+    test "rejects missing confirmation window and creates no Oban job" do
+      scope = owner_scope()
+      pool = pool_fixture()
+      %{identity: identity} = assignment_with_saved_resets(pool, 1, %{}, confirmation_window?: false)
+
+      assert {:error, %{code: :saved_reset_confirmation_unavailable}} =
+               Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
+
+      assert saved_reset_job_count() == 0
+    end
+
     test "rejects persisted available_count zero and creates no Oban job" do
       scope = owner_scope()
       pool = pool_fixture()
@@ -377,13 +389,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
   end
 
   defp assignment_with_saved_resets(pool, available_count, attrs \\ %{}, opts \\ []) do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
     saved_resets =
       %{
         "status" => "reported",
         "available_count" => available_count,
         "source" => "codex_usage_api",
         "path_style" => "codex_api",
-        "observed_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.to_iso8601(observed_at),
         "usage_path" => "/api/codex/usage",
         "reason" => nil
       }
@@ -397,7 +411,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
         redemption -> Map.put(metadata, "saved_reset_redemption", redemption)
       end
 
-    active_upstream_assignment_fixture(pool, %{metadata: metadata})
+    %{identity: identity} = fixture = active_upstream_assignment_fixture(pool, %{metadata: metadata})
+
+    if Keyword.get(opts, :confirmation_window?, true) do
+      assert {:ok, _window} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("25"),
+                   reset_at: DateTime.add(observed_at, 2, :hour),
+                   observed_at: observed_at,
+                   last_sync_at: observed_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh"
+                 },
+                 observed_at
+               )
+    end
+
+    fixture
   end
 
   defp redemption_metadata(started_at) do

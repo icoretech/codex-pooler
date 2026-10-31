@@ -3815,17 +3815,17 @@ msgstr "Codex auth.json 已导入"
 msgid "Codex auth.json matched an existing account; tokens updated"
 msgstr "Codex auth.json 匹配到现有账号；Token 已更新"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:64
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:65
 #, elixir-autogen, elixir-format
 msgid "Codex authorization response was incomplete"
 msgstr "Codex 授权响应不完整"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:70
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:71
 #, elixir-autogen, elixir-format
 msgid "Codex authorization service returned a temporary error"
 msgstr "Codex 授权服务返回了临时错误"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:71
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:72
 #, elixir-autogen, elixir-format
 msgid "Codex authorization service returned an unexpected device status"
 msgstr "Codex 授权服务返回了意外的设备状态"
@@ -3835,32 +3835,32 @@ msgstr "Codex 授权服务返回了意外的设备状态"
 msgid "Codex config.toml"
 msgstr "Codex config.toml"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:68
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:69
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization expired"
 msgstr "Codex 设备授权已过期"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:66
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:67
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization is still pending"
 msgstr "Codex 设备授权仍在等待中"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:62
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:63
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization is unavailable"
 msgstr "Codex 设备授权不可用"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:67
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:68
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization polling should slow down"
 msgstr "Codex 设备授权轮询应降低频率"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:69
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:70
 #, elixir-autogen, elixir-format
 msgid "Codex device authorization was denied"
 msgstr "Codex 设备授权被拒绝"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:63
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:64
 #, elixir-autogen, elixir-format
 msgid "Codex device response was incomplete"
 msgstr "Codex 设备响应不完整"
@@ -3870,7 +3870,7 @@ msgstr "Codex 设备响应不完整"
 msgid "Codex saved resets · %{label}"
 msgstr "Codex 已保存的重置 · %{label}"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:65
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:66
 #, elixir-autogen, elixir-format
 msgid "Codex token exchange failed"
 msgstr "Codex Token 交换失败"
@@ -8364,71 +8364,71 @@ msgid "OAuth (device code)"
 msgstr "OAuth（设备代码）"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:28
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:58
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:59
 #, elixir-autogen, elixir-format
 msgid "OAuth account conflicts with an existing upstream account"
 msgstr "OAuth 账号与现有上游账号冲突"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:27
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:57
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:58
 #, elixir-autogen, elixir-format
 msgid "OAuth account does not match the selected upstream account"
 msgstr "OAuth 账号与选中的上游账号不匹配"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:16
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:46
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:47
 #, elixir-autogen, elixir-format
 msgid "OAuth callback URL is invalid"
 msgstr "OAuth 回调 URL 无效"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:17
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:47
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:48
 #, elixir-autogen, elixir-format
 msgid "OAuth callback URL must use http://localhost:1455/auth/callback"
 msgstr "OAuth 回调 URL 必须使用 http://localhost:1455/auth/callback"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:19
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:49
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:50
 #, elixir-autogen, elixir-format
 msgid "OAuth callback contains duplicate parameters"
 msgstr "OAuth 回调包含重复参数"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:18
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:48
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:49
 #, elixir-autogen, elixir-format
 msgid "OAuth callback is missing state"
 msgstr "OAuth 回调缺少 state"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:20
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:50
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:51
 #, elixir-autogen, elixir-format
 msgid "OAuth callback must include either an authorization code or provider error"
 msgstr "OAuth 回调必须包含授权码或服务商错误"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:22
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:52
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:53
 #, elixir-autogen, elixir-format
 msgid "OAuth callback state does not match a pending flow"
 msgstr "OAuth 回调 state 与待处理流程不匹配"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:23
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:53
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:54
 #, elixir-autogen, elixir-format
 msgid "OAuth flow has expired"
 msgstr "OAuth 流程已过期"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:24
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:54
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:55
 #, elixir-autogen, elixir-format
 msgid "OAuth flow is not pending"
 msgstr "OAuth 流程并非待处理状态"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:60
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:61
 #, elixir-autogen, elixir-format
 msgid "OAuth flow request is invalid"
 msgstr "OAuth 流程请求无效"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:61
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:62
 #, elixir-autogen, elixir-format
 msgid "OAuth flow transient secret was not found"
 msgstr "未找到 OAuth 流程临时密钥"
@@ -8439,7 +8439,7 @@ msgid "OAuth flow was not found"
 msgstr "未找到 OAuth 流程"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:25
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:55
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:56
 #, elixir-autogen, elixir-format
 msgid "OAuth flow was superseded"
 msgstr "OAuth 流程已被替代"
@@ -8471,7 +8471,7 @@ msgid "OAuth relink is not available: deleted accounts cannot be relinked"
 msgstr "无法重新进行 OAuth 关联：已删除的账号无法重新关联"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:26
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:56
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:57
 #, elixir-autogen, elixir-format
 msgid "OAuth token exchange failed"
 msgstr "OAuth Token 交换失败"
@@ -8706,7 +8706,7 @@ msgid "OpenAI authorization URL"
 msgstr "OpenAI 授权 URL"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:21
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:51
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:52
 #, elixir-autogen, elixir-format
 msgid "OpenAI denied the OAuth request"
 msgstr "OpenAI 拒绝了 OAuth 请求"
@@ -8757,7 +8757,7 @@ msgid "Operation"
 msgstr "操作"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:51
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:44
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:45
 #, elixir-autogen, elixir-format
 msgid "Operation failed"
 msgstr "操作失败"
@@ -9355,7 +9355,7 @@ msgstr "轮询已禁用"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:300
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:283
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:125
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:126
 #, elixir-autogen, elixir-format
 msgid "Pool"
 msgstr "Pool"
@@ -9375,7 +9375,7 @@ msgid "Pool action failed"
 msgstr "Pool 操作失败"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:29
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:59
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:60
 #, elixir-autogen, elixir-format
 msgid "Pool authorization is required for this OAuth flow"
 msgstr "此 OAuth 流程需要 Pool 授权"
@@ -10260,7 +10260,7 @@ msgstr "为此账号兑换一次已保存的重置？服务商可能会在配额
 msgid "Redeem saved reset"
 msgstr "兑换已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:172
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:177
 #, elixir-autogen, elixir-format
 msgid "Redeem saved reset is not available: %{reason}"
 msgstr "无法兑换已保存的重置：%{reason}"
@@ -10838,9 +10838,9 @@ msgstr "检查有效策略"
 msgid "Review errors before saving this card."
 msgstr "保存此卡片前请检查错误。"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:152
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:157
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:95
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:158
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:164
 #, elixir-autogen, elixir-format
 msgid "Review the recorded saved reset status before taking another action"
 msgstr "执行其他操作前，请先查看记录的已保存的重置状态"
@@ -11422,7 +11422,7 @@ msgstr "无法兑换已保存的重置"
 msgid "Saved reset redemption queued"
 msgstr "已保存的重置兑换已加入队列"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:184
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:190
 #, elixir-autogen, elixir-format
 msgid "Saved reset redemption requires a Pool assignment"
 msgstr "兑换已保存的重置需要先分配到 Pool"
@@ -11432,8 +11432,8 @@ msgstr "兑换已保存的重置需要先分配到 Pool"
 msgid "Saved reset redemption unavailable"
 msgstr "已保存的重置兑换不可用"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:141
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:146
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:146
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/saved_reset_workflow.ex:152
 #, elixir-autogen, elixir-format
 msgid "Saved reset request was not accepted. Use Refresh to see the current account state."
 msgstr "已保存的重置请求未被接受。请使用刷新查看当前账号状态。"
@@ -14198,8 +14198,8 @@ msgstr "已不在列表中的 Pool"
 msgid "accepted"
 msgstr "已接受"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:41
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:86
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:42
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:87
 #, elixir-autogen, elixir-format
 msgid "access token is expired"
 msgstr "访问 Token 已过期"
@@ -14210,14 +14210,14 @@ msgstr "访问 Token 已过期"
 msgid "account"
 msgstr "账号"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:117
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:118
 #, elixir-autogen, elixir-format
 msgid "account label"
 msgstr "账号标签"
 
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:831
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:171
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
 msgid "action is unavailable"
 msgstr "操作不可用"
@@ -14278,7 +14278,7 @@ msgstr "已归档"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:625
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:144
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
 #, elixir-autogen, elixir-format
 msgid "assigned-pool admin capabilities require a Pool scope"
 msgstr "分配到 Pool 的管理员操作需要 Pool 作用域"
@@ -14295,7 +14295,7 @@ msgid_plural "at least %{tokens} tokens"
 msgstr[0] "至少 %{tokens} 个 Token"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:30
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:76
 #, elixir-autogen, elixir-format
 msgid "at least one preserved assignment is required before reactivation"
 msgstr "重新激活前至少需要保留一项分配"
@@ -14325,7 +14325,7 @@ msgstr "导入 auth.json"
 msgid "auth.json selected"
 msgstr "已选择 auth.json"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:119
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:120
 #, elixir-autogen, elixir-format
 msgid "automatic redemption"
 msgstr "自动兑换"
@@ -14434,13 +14434,13 @@ msgstr "并发定价快照与候选语义冲突"
 msgid "configured"
 msgstr "已配置"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:118
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:119
 #, elixir-autogen, elixir-format
 msgid "confirmation label"
 msgstr "确认标签"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1597
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
 #, elixir-autogen, elixir-format
 msgid "confirmation slug did not match pool slug"
 msgstr "确认标识与 Pool 标识不匹配"
@@ -14450,7 +14450,7 @@ msgstr "确认标识与 Pool 标识不匹配"
 msgid "connecting…"
 msgstr "正在连接…"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:124
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:125
 #, elixir-autogen, elixir-format
 msgid "content"
 msgstr "内容"
@@ -14510,7 +14510,7 @@ msgstr "已降级"
 msgid "deleted"
 msgstr "已删除"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:79
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:80
 #, elixir-autogen, elixir-format
 msgid "deleted upstream identities cannot be reactivated without reconnecting/importing again"
 msgstr "已删除的上游身份必须重新连接或导入后才能重新激活"
@@ -14807,7 +14807,7 @@ msgstr "不到 1 分钟后"
 msgid "ineligible"
 msgstr "不符合条件"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:89
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:90
 #, elixir-autogen, elixir-format
 msgid "instance owner access is required to delete an unassigned account"
 msgstr "删除未分配的账号需要实例所有者权限"
@@ -14892,7 +14892,7 @@ msgstr "关联方式：%{method}"
 msgid "maximum_reasoning_effort is invalid"
 msgstr "最大推理强度无效"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:122
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:123
 #, elixir-autogen, elixir-format
 msgid "minimum blocked minutes"
 msgstr "最短阻塞分钟数"
@@ -14913,13 +14913,13 @@ msgid "model identifier cannot contain whitespace or control characters"
 msgstr "模型标识符不能包含空白或控制字符"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1599
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
 #, elixir-autogen, elixir-format
 msgid "model identifier is invalid"
 msgstr "模型标识符无效"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1602
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
 #, elixir-autogen, elixir-format
 msgid "model identifier is not available for this Pool"
 msgstr "此 Pool 无法使用该模型标识符"
@@ -14930,7 +14930,7 @@ msgid "model identifier must be text"
 msgstr "模型标识符必须为文本"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1601
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
 #, elixir-autogen, elixir-format
 msgid "model identifier was submitted more than once"
 msgstr "模型标识符提交了多次"
@@ -14947,31 +14947,31 @@ msgid_plural "model name changed · attempts %{attempts}"
 msgstr[0] "模型名称已变化 · 尝试 %{attempts}"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1604
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
 #, elixir-autogen, elixir-format
 msgid "model serving mode audit could not be recorded"
 msgstr "无法记录模型服务模式审计"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1605
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
 #, elixir-autogen, elixir-format
 msgid "model serving mode event could not be emitted"
 msgstr "无法发出模型服务模式事件"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
 #, elixir-autogen, elixir-format
 msgid "model serving mode is invalid"
 msgstr "模型服务模式无效"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
 #, elixir-autogen, elixir-format
 msgid "model serving modes changed since they were loaded"
 msgstr "模型服务模式自加载后已变化"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1606
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
 #, elixir-autogen, elixir-format
 msgid "model serving modes could not be saved because of a database conflict"
 msgstr "数据库冲突导致模型服务模式无法保存"
@@ -15012,7 +15012,7 @@ msgid "name"
 msgstr "名称"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
 #, elixir-autogen, elixir-format
 msgid "name can't be blank"
 msgstr "名称不能为空"
@@ -15148,7 +15148,7 @@ msgstr "开 · 接近上限"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:621
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:140
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:93
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
 #, elixir-autogen, elixir-format
 msgid "only node admins can perform this capability"
 msgstr "只有节点管理员可执行此操作"
@@ -15157,7 +15157,7 @@ msgstr "只有节点管理员可执行此操作"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:624
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:143
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
 #, elixir-autogen, elixir-format
 msgid "only the instance owner can perform this global capability"
 msgstr "只有实例所有者可执行此全局操作"
@@ -15219,7 +15219,7 @@ msgstr "待处理"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:31
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:76
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
 #, elixir-autogen, elixir-format
 msgid "pool assignment was not found"
 msgstr "未找到 Pool 分配"
@@ -15230,7 +15230,7 @@ msgid "pool filter is not available"
 msgstr "Pool 筛选条件不可用"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1595
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
 #, elixir-autogen, elixir-format
 msgid "pool must be archived before deletion"
 msgstr "删除前必须先归档 Pool"
@@ -15239,7 +15239,7 @@ msgstr "删除前必须先归档 Pool"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:616
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1594
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:138
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
 #, elixir-autogen, elixir-format
 msgid "pool was not found"
 msgstr "未找到 Pool"
@@ -15309,7 +15309,7 @@ msgstr "配额就绪状态"
 msgid "quota refresh %{status}"
 msgstr "配额刷新 %{status}"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:121
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:122
 #, elixir-autogen, elixir-format
 msgid "quota threshold percent"
 msgstr "配额阈值百分比"
@@ -15326,7 +15326,7 @@ msgstr "需要重新认证"
 msgid "reauth_required"
 msgstr "需要重新认证"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:78
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:79
 #, elixir-autogen, elixir-format
 msgid "reauth_required upstream identities cannot be reactivated without reconnecting/importing again"
 msgstr "需要重新授权的上游身份必须重新连接或导入后才能重新激活"
@@ -15376,13 +15376,13 @@ msgid "refreshing"
 msgstr "刷新中"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:32
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:78
 #, elixir-autogen, elixir-format
 msgid "refreshing upstream identities must finish before reactivation"
 msgstr "正在刷新的上游身份必须完成刷新后才能重新激活"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:35
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:90
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:91
 #, elixir-autogen, elixir-format
 msgid "remove this account from all Pools before deleting it"
 msgstr "删除前请先从所有 Pool 中移除此账号"
@@ -15431,7 +15431,7 @@ msgstr "请求"
 msgid "reservation pending"
 msgstr "等待预留"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:123
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:124
 #, elixir-autogen, elixir-format
 msgid "reserved credits"
 msgstr "保留额度"
@@ -15492,7 +15492,7 @@ msgid "running"
 msgstr "运行中"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:36
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:92
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:93
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:182
 #, elixir-autogen, elixir-format
 msgid "saved reset redemption is already in progress"
@@ -15587,7 +15587,7 @@ msgid "status"
 msgstr "状态"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1598
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
 #, elixir-autogen, elixir-format
 msgid "status must be active, disabled, or archived"
 msgstr "状态必须为活跃、已禁用或已归档"
@@ -15618,7 +15618,7 @@ msgid "terminal %{class}"
 msgstr "终止类别 %{class}"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1596
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
 #, elixir-autogen, elixir-format
 msgid "the Pool is being deleted"
 msgstr "Pool 正在删除"
@@ -15627,7 +15627,7 @@ msgstr "Pool 正在删除"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:622
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:141
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
 #, elixir-autogen, elixir-format
 msgid "the actor role cannot perform this capability in the requested scope"
 msgstr "当前角色无法在请求的作用域执行此操作"
@@ -15636,7 +15636,7 @@ msgstr "当前角色无法在请求的作用域执行此操作"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:626
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:145
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
 #, elixir-autogen, elixir-format
 msgid "the assigned-pool admin cannot access the requested Pool"
 msgstr "分配到 Pool 的管理员无法访问请求的 Pool"
@@ -15651,7 +15651,7 @@ msgstr "已登录的运营者"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:623
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:142
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
 #, elixir-autogen, elixir-format
 msgid "this capability requires a Pool scope"
 msgstr "此操作需要 Pool 作用域"
@@ -15717,12 +15717,12 @@ msgstr "未记录传输方式"
 msgid "transport: %{transport}"
 msgstr "传输方式：%{transport}"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:120
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:121
 #, elixir-autogen, elixir-format
 msgid "trigger mode"
 msgstr "触发模式"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:91
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:92
 #, elixir-autogen, elixir-format
 msgid "type the current account label exactly"
 msgstr "请准确输入当前账号标签"
@@ -15802,17 +15802,17 @@ msgstr "不支持的 Pool 分配选择模式"
 msgid "unsupported pool option"
 msgstr "不支持的 Pool 选项"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:82
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:83
 #, elixir-autogen, elixir-format
 msgid "upstream access token is expired"
 msgstr "上游访问 Token 已过期"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:81
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:82
 #, elixir-autogen, elixir-format
 msgid "upstream access token is missing"
 msgstr "缺少上游访问 Token"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:83
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:84
 #, elixir-autogen, elixir-format
 msgid "upstream access token is present"
 msgstr "上游访问 Token 已存在"
@@ -15827,30 +15827,30 @@ msgstr "上游账号"
 msgid "upstream account is being deleted"
 msgstr "上游账号正在删除"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:74
 #, elixir-autogen, elixir-format
 msgid "upstream account was not found"
 msgstr "未找到上游账号"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:33
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:87
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:88
 #, elixir-autogen, elixir-format
 msgid "upstream deletion could not be queued; retry Delete"
 msgstr "无法将上游删除加入队列；请重试删除"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:34
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:88
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:89
 #, elixir-autogen, elixir-format
 msgid "upstream deletion is waiting for database work to finish"
 msgstr "上游删除正在等待数据库操作完成"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:80
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:81
 #, elixir-autogen, elixir-format
 msgid "upstream identity is not in a locally reactivatable state"
 msgstr "上游身份并非可在本地重新激活的状态"
 
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:72
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
 #, elixir-autogen, elixir-format
 msgid "upstream identity was not found"
 msgstr "未找到上游身份"
@@ -15879,7 +15879,7 @@ msgstr "用户或 ID"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:619
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:139
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:74
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
 #, elixir-autogen, elixir-format
 msgid "user scope is required"
 msgstr "需要用户作用域"
@@ -17226,7 +17226,7 @@ msgstr "未报告凭据验证时间"
 msgid "authoritative"
 msgstr "权威"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:39
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:40
 #, elixir-autogen, elixir-format
 msgid "auto-publishing token linking is not allowed inside a caller-owned transaction"
 msgstr "调用方拥有的事务中不允许自动发布 Token 关联"
@@ -17271,7 +17271,7 @@ msgstr "已跳过目录同步"
 msgid "catalog sync timed out before completion"
 msgstr "目录同步在完成前超时"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:38
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:39
 #, elixir-autogen, elixir-format
 msgid "credentials changed after import preparation; submit the current auth data again"
 msgstr "导入准备后凭据已更改；请重新提交当前授权数据"
@@ -17435,7 +17435,7 @@ msgstr "观测时间 %{timestamp}"
 msgid "observed time not reported"
 msgstr "未报告观测时间"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:40
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:41
 #, elixir-autogen, elixir-format
 msgid "prepared imports must be submitted as one complete batch"
 msgstr "准备好的导入必须作为一个完整批次提交"
@@ -17608,7 +17608,7 @@ msgstr "上次已保存的重置已生效，但配额仍被阻止；再次兑换
 msgid "the last saved reset was not confirmed in time; another redemption waits until a usage report shows quota recovered"
 msgstr "上次已保存的重置未及时确认；再次兑换需等待用量报告显示配额已恢复"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:114
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:115
 #, elixir-autogen, elixir-format
 msgid "token linking request is invalid"
 msgstr "Token 关联请求无效"
@@ -17668,7 +17668,7 @@ msgstr "令牌刷新已成功 %{timestamp} · %{relative_time}"
 msgid "token refresh succeeded not reported"
 msgstr "未报告令牌刷新成功时间"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:114
 #, elixir-autogen, elixir-format
 msgid "trusted upstream account is invalid"
 msgstr "受信任的上游账号无效"
@@ -17678,12 +17678,12 @@ msgstr "受信任的上游账号无效"
 msgid "upstream OAuth refresh failed"
 msgstr "上游 OAuth 刷新失败"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:85
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:86
 #, elixir-autogen, elixir-format
 msgid "upstream access token is reauth_required"
 msgstr "上游访问令牌需要重新认证"
 
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:84
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:85
 #, elixir-autogen, elixir-format
 msgid "upstream access token is refresh_due"
 msgstr "上游访问令牌需要刷新"
@@ -18601,3 +18601,8 @@ msgstr "<1m 后"
 #, elixir-autogen, elixir-format
 msgid "unknown model"
 msgstr "未知模型"
+
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:37
+#, elixir-autogen, elixir-format
+msgid "Quota details are unavailable. No reset was spent. Wait for the next quota check and try again."
+msgstr "配额详情暂不可用。未消耗任何已保存的重置。请等待下次配额检查后重试。"

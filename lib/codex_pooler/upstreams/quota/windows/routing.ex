@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection
 
   alias CodexPooler.Upstreams.Quota.{
     AccountAvailabilityStore,
@@ -50,7 +51,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
       when is_list(opts) do
     opts = Keyword.put(opts, :at, snapshot.as_of)
     raw_windows = RoutingQuotaSnapshot.time_visible_raw_windows(snapshot)
-    ordinary = eligibility_from_windows(raw_windows, opts)
+    ordinary = raw_windows |> ResetRecoverySelection.reject_recovered_prior_cycles(snapshot) |> eligibility_from_windows(opts)
 
     cond do
       applicable_model_denial?(ordinary.selection, snapshot.as_of) ->
