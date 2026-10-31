@@ -1,302 +1,222 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ],
-  "ignorePresets": [
-    ":semanticPrefixFixDepsChoreOthers"
-  ],
-  "dependencyDashboard": true,
-  "enabledManagers": [
-    "custom.regex",
-    "docker-compose",
-    "dockerfile",
-    "github-actions",
-    "helm-values",
-    "helmv3",
-    "mise",
-    "mix",
-    "npm"
-  ],
-  "constraints": {
-    "elixir": "1.20.4",
-    "erlang": "29.1.2.0",
-    "node": ">=26 <27"
-  },
-  "labels": [
-    "dependencies"
-  ],
-  "platformAutomerge": false,
-  "semanticCommits": "enabled",
-  "semanticCommitType": "deps",
-  "semanticCommitScope": "",
-  "prConcurrentLimit": 10,
-  "prHourlyLimit": 0,
-  "rangeStrategy": "bump",
-  "rebaseWhen": "conflicted",
-  "timezone": "Europe/Rome",
-  "lockFileMaintenance": {
-    "enabled": true
-  },
-  "packageRules": [
-    {
-      "description": "Automerge non-major dependency updates after one day",
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "pin",
-        "digest"
-      ],
-      "automerge": true,
-      "minimumReleaseAge": "1 day"
-    },
-    {
-      "description": "Require explicit review for major updates",
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "dependencyDashboardApproval": true
-    },
-    {
-      "description": "Automerge stable Codex client updates immediately",
-      "matchPackageNames": [
-        "openai/codex",
-        "ghcr.io/icoretech/codex-docker"
-      ],
-      "automerge": true,
-      "automergeType": "pr",
-      "dependencyDashboardApproval": false,
-      "ignoreUnstable": true,
-      "minimumReleaseAge": "0 days"
-    },
-    {
-      "description": "Pin Mix dependency ranges for Elixir application updates",
-      "matchManagers": [
-        "mix"
-      ],
-      "rangeStrategy": "pin"
-    },
-    {
-      "description": "Create Elixir toolchain PRs only when Dockerfile, Drone, mise, and Mix lockfile runtimes can update together",
-      "matchManagers": [
-        "custom.regex",
-        "dockerfile",
-        "mise"
-      ],
-      "matchPackageNames": [
-        "elixir",
-        "elixir-lang/elixir",
-        "containerbase/erlang-prebuild",
-        "erlang",
-        "erlang/otp"
-      ],
-      "groupName": "Elixir/Erlang toolchain",
-      "groupSlug": "elixir-erlang-toolchain",
-      "minimumGroupSize": 4
-    },
-    {
-      "description": "Use Docker-tag-compatible custom updates for mise Elixir OTP 29 pins",
-      "matchManagers": [
-        "mise"
-      ],
-      "matchPackageNames": [
-        "elixir"
-      ],
-      "enabled": false
-    },
-    {
-      "description": "Keep the project on Erlang/OTP 29",
-      "matchPackageNames": [
-        "containerbase/erlang-prebuild",
-        "erlang",
-        "erlang/otp"
-      ],
-      "allowedVersions": "<30"
-    },
-    {
-      "description": "Keep Node runtime updates together across Docker and GitHub Actions",
-      "matchManagers": [
-        "custom.regex",
-        "dockerfile",
-        "github-actions"
-      ],
-      "matchPackageNames": [
-        "node",
-        "actions/node-versions"
-      ],
-      "groupName": "Node runtime",
-      "groupSlug": "node-runtime-image",
-      "allowedVersions": ">=26 <27"
-    },
-    {
-      "description": "Keep Helm CLI pins together",
-      "matchDatasources": [
-        "github-releases"
-      ],
-      "matchPackageNames": [
-        "helm/helm"
-      ],
-      "groupName": "Helm CLI",
-      "groupSlug": "helm-cli"
-    },
-    {
-      "description": "Track Phoenix Tailwind binary version",
-      "matchDatasources": [
-        "github-releases"
-      ],
-      "matchPackageNames": [
-        "tailwindlabs/tailwindcss"
-      ],
-      "groupName": "Tailwind CSS CLI",
-      "groupSlug": "tailwind-css-cli"
-    },
-    {
-      "description": "Keep Astro check on the TypeScript JavaScript API until native compiler support is available",
-      "matchManagers": [
-        "npm"
-      ],
-      "matchFileNames": [
-        "docs-site/package.json"
-      ],
-      "matchPackageNames": [
-        "typescript"
-      ],
-      "allowedVersions": "<7"
-    },
-    {
-      "description": "Keep social-card font shaping on opentype.js 1 until its GSUB type 6 format 2 lookup is supported",
-      "matchManagers": [
-        "npm"
-      ],
-      "matchFileNames": [
-        "docs-site/package.json"
-      ],
-      "matchPackageNames": [
-        "opentype.js"
-      ],
-      "allowedVersions": "<2"
-    },
-    {
-      "description": "Use the dependency changelog section for dependency updates",
-      "matchPackageNames": ["*"],
-      "semanticCommitType": "deps",
-      "semanticCommitScope": ""
-    }
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Update Codex client version used for upstream identity and model discovery",
-      "managerFilePatterns": [
-        "/(^|/)config/config\\.exs$/"
-      ],
-      "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+default_client_version: \"(?<currentValue>[^\"]+)\""
-      ],
-      "versioningTemplate": "semver"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Codex Pooler Helm chart versions in deployment docs",
-      "managerFilePatterns": [
-        "/(^|/)docs-site/src/content/docs/deployment/helm\\.mdx$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>--version\\s+)(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\\s+\\\\)"
-      ],
-      "depNameTemplate": "codex-pooler",
-      "datasourceTemplate": "helm",
-      "registryUrlTemplate": "https://icoretech.github.io/helm"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Helm CLI version used by Drone",
-      "managerFilePatterns": [
-        "/(^|/)\\.drone\\.jsonnet$/"
-      ],
-      "matchStrings": [
-        "local helmVersion = 'v(?<currentValue>[^']+)';"
-      ],
-      "depNameTemplate": "helm/helm",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>.*)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Docker images pinned in Drone Jsonnet",
-      "managerFilePatterns": [
-        "/(^|/)\\.drone\\.jsonnet$/"
-      ],
-      "matchStrings": [
-        "local nodeImage = '(?<depName>[^:']+):(?<currentValue>[^']+)';",
-        "image: '(?<depName>elixir):(?<currentValue>[^']+)'",
-        "image: '(?<depName>postgres):(?<currentValue>[^']+)'"
-      ],
-      "datasourceTemplate": "docker"
-    },
-    {
-      "customType": "regex",
-      "description": "Update mise Elixir OTP 29 version from Docker tag compatibility",
-      "managerFilePatterns": [
-        "/(^|/)mise\\.toml$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-29)(?<suffix>\")"
-      ],
-      "depNameTemplate": "elixir",
-      "datasourceTemplate": "docker"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Renovate Elixir artifact constraint",
-      "managerFilePatterns": [
-        "/(^|/)renovate\\.json$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>\"elixir\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
-      ],
-      "depNameTemplate": "elixir-lang/elixir",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Renovate Erlang artifact prebuild constraint",
-      "managerFilePatterns": [
-        "/(^|/)renovate\\.json$/"
-      ],
-      "matchStrings": [
-        "(?<prefix>\"erlang\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
-      ],
-      "depNameTemplate": "containerbase/erlang-prebuild",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced"
-    },
-    {
-      "customType": "regex",
-      "description": "Update esbuild binary version used by the Phoenix Mix task",
-      "managerFilePatterns": [
-        "/(^|/)config/config\\.exs$/"
-      ],
-      "matchStrings": [
-        "config :esbuild,[\\s\\S]*?version: \"(?<currentValue>[^\"]+)\""
-      ],
-      "depNameTemplate": "evanw/esbuild",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>.*)$"
-    },
-    {
-      "customType": "regex",
-      "description": "Update Tailwind CSS binary version used by the Phoenix Mix task",
-      "managerFilePatterns": [
-        "/(^|/)config/config\\.exs$/"
-      ],
-      "matchStrings": [
-        "config :tailwind,[\\s\\S]*?version: \"(?<currentValue>[^\"]+)\""
-      ],
-      "depNameTemplate": "tailwindlabs/tailwindcss",
-      "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>.*)$"
-    }
-  ]
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:recommended"],
+	"ignorePresets": [":semanticPrefixFixDepsChoreOthers"],
+	"dependencyDashboard": true,
+	"enabledManagers": [
+		"custom.regex",
+		"docker-compose",
+		"dockerfile",
+		"github-actions",
+		"helm-values",
+		"helmv3",
+		"mise",
+		"mix",
+		"npm"
+	],
+	"constraints": {
+		"elixir": "1.20.5",
+		"erlang": "29.1.2.0",
+		"node": ">=26 <27"
+	},
+	"labels": ["dependencies"],
+	"platformAutomerge": false,
+	"semanticCommits": "enabled",
+	"semanticCommitType": "deps",
+	"semanticCommitScope": "",
+	"prConcurrentLimit": 10,
+	"prHourlyLimit": 0,
+	"rangeStrategy": "bump",
+	"rebaseWhen": "conflicted",
+	"timezone": "Europe/Rome",
+	"lockFileMaintenance": {
+		"enabled": true
+	},
+	"packageRules": [
+		{
+			"description": "Automerge non-major dependency updates after one day",
+			"matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+			"automerge": true,
+			"minimumReleaseAge": "1 day"
+		},
+		{
+			"description": "Require explicit review for major updates",
+			"matchUpdateTypes": ["major"],
+			"dependencyDashboardApproval": true
+		},
+		{
+			"description": "Automerge stable Codex client updates immediately",
+			"matchPackageNames": ["openai/codex", "ghcr.io/icoretech/codex-docker"],
+			"automerge": true,
+			"automergeType": "pr",
+			"dependencyDashboardApproval": false,
+			"ignoreUnstable": true,
+			"minimumReleaseAge": "0 days"
+		},
+		{
+			"description": "Pin Mix dependency ranges for Elixir application updates",
+			"matchManagers": ["mix"],
+			"rangeStrategy": "pin"
+		},
+		{
+			"description": "Create Elixir toolchain PRs only when Dockerfiles, mise, and artifact constraints can update together",
+			"matchManagers": ["custom.regex", "dockerfile", "mise"],
+			"matchPackageNames": [
+				"elixir",
+				"elixir-lang/elixir",
+				"containerbase/erlang-prebuild",
+				"erlang",
+				"erlang/otp"
+			],
+			"groupName": "Elixir/Erlang toolchain",
+			"groupSlug": "elixir-erlang-toolchain",
+			"minimumGroupSize": 4
+		},
+		{
+			"description": "Use Docker-tag-compatible custom updates for mise Elixir OTP 29 pins",
+			"matchManagers": ["mise"],
+			"matchPackageNames": ["elixir"],
+			"enabled": false
+		},
+		{
+			"description": "Keep the project on Erlang/OTP 29",
+			"matchPackageNames": [
+				"containerbase/erlang-prebuild",
+				"erlang",
+				"erlang/otp"
+			],
+			"allowedVersions": "<30"
+		},
+		{
+			"description": "Keep Node runtime updates together across Docker and GitHub Actions",
+			"matchManagers": ["custom.regex", "dockerfile", "github-actions"],
+			"matchPackageNames": ["node", "actions/node-versions"],
+			"groupName": "Node runtime",
+			"groupSlug": "node-runtime-image",
+			"allowedVersions": ">=26 <27"
+		},
+		{
+			"description": "Keep Helm CLI pins together",
+			"matchDatasources": ["github-releases"],
+			"matchPackageNames": ["helm/helm"],
+			"groupName": "Helm CLI",
+			"groupSlug": "helm-cli"
+		},
+		{
+			"description": "Track Phoenix Tailwind binary version",
+			"matchDatasources": ["github-releases"],
+			"matchPackageNames": ["tailwindlabs/tailwindcss"],
+			"groupName": "Tailwind CSS CLI",
+			"groupSlug": "tailwind-css-cli"
+		},
+		{
+			"description": "Keep Astro check on the TypeScript JavaScript API until native compiler support is available",
+			"matchManagers": ["npm"],
+			"matchFileNames": ["docs-site/package.json"],
+			"matchPackageNames": ["typescript"],
+			"allowedVersions": "<7"
+		},
+		{
+			"description": "Keep social-card font shaping on opentype.js 1 until its GSUB type 6 format 2 lookup is supported",
+			"matchManagers": ["npm"],
+			"matchFileNames": ["docs-site/package.json"],
+			"matchPackageNames": ["opentype.js"],
+			"allowedVersions": "<2"
+		},
+		{
+			"description": "Use the dependency changelog section for dependency updates",
+			"matchPackageNames": ["*"],
+			"semanticCommitType": "deps",
+			"semanticCommitScope": ""
+		}
+	],
+	"customManagers": [
+		{
+			"customType": "regex",
+			"description": "Update Codex client version used for upstream identity and model discovery",
+			"managerFilePatterns": ["/(^|/)config/config\\.exs$/"],
+			"matchStrings": [
+				"# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+default_client_version: \"(?<currentValue>[^\"]+)\""
+			],
+			"versioningTemplate": "semver"
+		},
+		{
+			"customType": "regex",
+			"description": "Update Codex Pooler Helm chart versions in deployment docs",
+			"managerFilePatterns": [
+				"/(^|/)docs-site/src/content/docs/deployment/helm\\.mdx$/"
+			],
+			"matchStrings": [
+				"(?<prefix>--version\\s+)(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\\s+\\\\)"
+			],
+			"depNameTemplate": "codex-pooler",
+			"datasourceTemplate": "helm",
+			"registryUrlTemplate": "https://icoretech.github.io/helm"
+		},
+		{
+			"customType": "regex",
+			"description": "Update Helm CLI version used by hosted CI",
+			"managerFilePatterns": ["/(^|/)scripts/ci/Dockerfile$/"],
+			"matchStrings": [
+				"(?:^|\\n)ARG HELM_VERSION=v(?<currentValue>\\d+\\.\\d+\\.\\d+)(?:\\r?\\n|$)"
+			],
+			"depNameTemplate": "helm/helm",
+			"datasourceTemplate": "github-releases",
+			"extractVersionTemplate": "^v(?<version>.*)$"
+		},
+		{
+			"customType": "regex",
+			"description": "Update mise Elixir OTP 29 version from Docker tag compatibility",
+			"managerFilePatterns": ["/(^|/)mise\\.toml$/"],
+			"matchStrings": [
+				"(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-29)(?<suffix>\")"
+			],
+			"depNameTemplate": "elixir",
+			"datasourceTemplate": "docker"
+		},
+		{
+			"customType": "regex",
+			"description": "Update Renovate Elixir artifact constraint",
+			"managerFilePatterns": ["/(^|/)renovate\\.json$/"],
+			"matchStrings": [
+				"(?<prefix>\"elixir\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
+			],
+			"depNameTemplate": "elixir-lang/elixir",
+			"datasourceTemplate": "github-releases",
+			"extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+		},
+		{
+			"customType": "regex",
+			"description": "Update Renovate Erlang artifact prebuild constraint",
+			"managerFilePatterns": ["/(^|/)renovate\\.json$/"],
+			"matchStrings": [
+				"(?<prefix>\"erlang\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
+			],
+			"depNameTemplate": "containerbase/erlang-prebuild",
+			"datasourceTemplate": "github-releases",
+			"versioningTemplate": "semver-coerced"
+		},
+		{
+			"customType": "regex",
+			"description": "Update esbuild binary version used by the Phoenix Mix task",
+			"managerFilePatterns": ["/(^|/)config/config\\.exs$/"],
+			"matchStrings": [
+				"config :esbuild,[\\s\\S]*?version: \"(?<currentValue>[^\"]+)\""
+			],
+			"depNameTemplate": "evanw/esbuild",
+			"datasourceTemplate": "github-releases",
+			"extractVersionTemplate": "^v(?<version>.*)$"
+		},
+		{
+			"customType": "regex",
+			"description": "Update Tailwind CSS binary version used by the Phoenix Mix task",
+			"managerFilePatterns": ["/(^|/)config/config\\.exs$/"],
+			"matchStrings": [
+				"config :tailwind,[\\s\\S]*?version: \"(?<currentValue>[^\"]+)\""
+			],
+			"depNameTemplate": "tailwindlabs/tailwindcss",
+			"datasourceTemplate": "github-releases",
+			"extractVersionTemplate": "^v(?<version>.*)$"
+		}
+	]
 }

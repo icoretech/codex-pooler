@@ -1,5 +1,5 @@
 FROM node:26.13.0-bookworm-slim AS node
-FROM elixir:1.20.4-otp-29-slim
+FROM elixir:1.20.5-otp-29-slim
 
 ARG HELM_VERSION=v4.3.1
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
