@@ -137,6 +137,7 @@ test("static checks preserve the quality sequence without running test profiles"
 			["format", "--check-formatted"],
 			["quality.security"],
 			["quality.credo"],
+			["quality.i18n"],
 		],
 	);
 });
