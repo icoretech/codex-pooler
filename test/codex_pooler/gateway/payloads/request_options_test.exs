@@ -232,6 +232,96 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     end
   end
 
+  for name <- ["send_message", "spawn_agent", "followup_task"] do
+    @tag collaboration_name: name
+    test "completed encrypted collaboration #{name} history keeps a live websocket as a preference", %{collaboration_name: name} do
+      item = encrypted_collaboration_call(name)
+      payload = %{"input" => [item, %{"type" => "function_call_output", "call_id" => item["call_id"], "output" => "synthetic result"}]}
+      assert_history_portability(payload, true)
+
+      options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+        |> RequestOptions.put_continuity(codex_session: %CodexSession{pool_upstream_assignment_id: @assignment_id})
+        |> RequestOptions.put_transport(upstream_websocket_session: self())
+
+      assert is_nil(SessionContinuity.hard_pin_metadata(options, %Model{}))
+    end
+  end
+
+  test "encrypted collaboration portability requires the complete recognized outer call" do
+    item = encrypted_collaboration_call("send_message")
+
+    for {field, invalid_values} <- [
+          {"type", [nil, "custom_tool_call", "unknown"]},
+          {"namespace", [nil, "other", "collaboration.extra"]},
+          {"name", [nil, "", " ", "unknown", "collaboration.send_message"]},
+          {"status", [nil, "in_progress", "incomplete", 1]},
+          {"encrypted_content", [nil, "", " ", 1, %{}]},
+          {"call_id", [nil, "", " ", 1]},
+          {"arguments", [nil, 1, %{}, []]}
+        ],
+        invalid <- Enum.map(invalid_values, &Map.put(item, field, &1)) ++ if(field == "encrypted_content", do: [], else: [Map.delete(item, field)]) do
+      assert_history_portability(%{"input" => [invalid]}, false)
+    end
+
+    assert_history_portability(%{"input" => [Map.delete(item, "encrypted_content")]}, true)
+    assert_history_portability(%{"input" => item}, false)
+    assert_history_portability(%{"input" => [[item]]}, false)
+  end
+
+  test "encrypted collaboration portability retains outer and nested ownership constraints" do
+    item = encrypted_collaboration_call("send_message")
+
+    constraints = [
+      %{"type" => "item_reference", "id" => "msg_synthetic"},
+      %{"type" => "input_file", "file_id" => nil},
+      %{"file_id" => ""},
+      %{"type" => "compaction_trigger"},
+      %{"type" => "unknown", "encrypted_content" => nil},
+      %{"type" => "unknown", "encrypted_content" => ""},
+      item
+    ]
+
+    for constraint <- constraints do
+      assert_history_portability(%{"input" => [Map.put(item, "extra", constraint)]}, false)
+      assert_history_portability(%{"input" => [Map.put(item, "content", [constraint])]}, false)
+      assert_history_portability(%{"input" => [Map.put(%{"type" => "compaction", "encrypted_content" => "synthetic-checkpoint"}, "extra", constraint)]}, false)
+    end
+
+    for file_id <- [nil, "", "file_synthetic"] do
+      assert_history_portability(%{"input" => [Map.put(item, "file_id", file_id)]}, false)
+    end
+
+    assert_history_portability(%{"input" => [item], "previous_response_id" => " resp_synthetic_anchor "}, false)
+  end
+
+  test "collaboration portability is recomputed when an existing payload changes" do
+    endpoint = "/backend-api/codex/responses"
+    portable = %{"input" => [encrypted_collaboration_call("followup_task")]}
+    bound = %{"input" => [%{"type" => "unknown", "encrypted_content" => "synthetic-bound"}]}
+
+    for update <- [&RequestOptions.for_payload/3, &RequestOptions.retarget/3] do
+      options = RequestOptions.build(%{}, endpoint, portable)
+      assert options.payload_context.portable_full_history?
+      options = update.(options, endpoint, bound)
+      refute options.payload_context.portable_full_history?
+      assert update.(options, endpoint, portable).payload_context.portable_full_history?
+    end
+  end
+
+  defp encrypted_collaboration_call(name) do
+    %{"type" => "function_call", "namespace" => "collaboration", "name" => name, "status" => "completed", "call_id" => "call_synthetic_collaboration", "arguments" => "{}", "encrypted_content" => "synthetic-collaboration-cipher"}
+  end
+
+  defp assert_history_portability(payload, expected) do
+    endpoint = "/backend-api/codex/responses"
+    base = RequestOptions.build(%{}, endpoint, %{})
+
+    for options <- [RequestOptions.build(%{}, endpoint, payload), RequestOptions.for_payload(base, endpoint, payload), RequestOptions.retarget(base, endpoint, payload)] do
+      assert options.payload_context.portable_full_history? == expected
+    end
+  end
+
   @identity_id "00000000-0000-0000-0000-000000000002"
   @effective_model "gpt-6.1-sol"
   @reset_probe_route_class "proxy_http"

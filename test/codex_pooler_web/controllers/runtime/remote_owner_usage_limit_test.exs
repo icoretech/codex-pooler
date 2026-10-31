@@ -17,13 +17,14 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_shared_bridge_peer!: 0, start_shared_peer_session_owner!: 3]
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, RoutingCircuitState}
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Runtime.EncryptedCollaborationHistory
 
   @moduletag capture_log: true
 
@@ -51,54 +52,15 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
   for mode <- ["full", "lite"] do
     @mode mode
 
-    test "native websocket #{mode}: encrypted handoff history leaves an exhausted remote owner account", %{peer_node: peer_node} do
-      upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
-      sibling_upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
-      setup = gateway_setup(upstream, quota?: false)
-      sibling = gateway_upstream(setup.pool, sibling_upstream, "upstream-token-handoff-sibling", compact?: false)
-      use_routing_strategy!(setup.pool, "quota_first", 2)
-      prime_routing_quota!(setup.identity, %{used_percent: Decimal.new("10")})
-      prime_routing_quota!(sibling.identity, %{used_percent: Decimal.new("90")})
-      pool = pool_with_sibling!(setup, @mode, upstream, sibling, sibling_upstream)
-      turn_state = "remote-handoff-#{System.unique_integer([:positive])}"
-      peer = start_shared_peer_session_owner!(pool, %{accepted_turn_state: turn_state}, peer_node)
-      port = start_public_endpoint!()
-      {conn, websocket, ref} = public_websocket_connect!(port, pool, turn_state)
-
-      try do
-        opening = %{"type" => "response.create", "model" => pool.model.exposed_model_id, "input" => native_text_input("synthetic opening"), "stream" => true}
-        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(opening))
-        {conn, websocket, terminal} = native_terminal_state!(conn, websocket, ref)
-        assert %{"type" => "response.completed"} = terminal
-        assert [%Request{status: "succeeded"}] = settled_rows!(pool)
-        await_session_assignment!(peer.session.id, setup.assignment.id)
-        prime_exhausted_routing_quota!(setup.identity)
-
-        handoff = %{
-          "type" => "agent_message",
-          "author" => "/root/sample",
-          "recipient" => "/root",
-          "content" => [
-            %{"type" => "input_text", "text" => "Message Type: MESSAGE\nTask name: /root\nSender: /root/sample\nPayload:\n"},
-            %{"type" => "encrypted_content", "encrypted_content" => "synthetic-peer-handoff"}
-          ]
-        }
-
-        history = Map.put(opening, "input", opening["input"] ++ [handoff])
-        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(history))
-        {_conn, _websocket, terminal} = native_terminal_state!(conn, websocket, ref)
-        assert %{"type" => "response.completed"} = terminal
-        rows = settled_rows!(pool)
-        assert length(rows) == 2
-        assert Enum.all?(rows, &(&1.status == "succeeded" and &1.transport == "websocket"))
-        await_session_assignment!(peer.session.id, sibling.assignment.id)
-        assert {FakeUpstream.count(upstream), FakeUpstream.count(sibling_upstream)} == {1, 1}
-        assert [%{json: moved}] = FakeUpstream.requests(sibling_upstream)
-        assert handoff in moved["input"]
-        assert_peer_owner_served!(peer)
-      after
-        Mint.HTTP.close(conn)
+    for kind <- [:agent_handoff, :send_message, :spawn_agent, :followup_task] do
+      @tag history_kind: kind
+      test "native websocket #{mode}: #{kind} history leaves an exhausted remote owner account", context do
+        exhausted_history!(context, @mode)
       end
+    end
+
+    test "native websocket #{mode}: encrypted collaboration history survives a pre-output provider quota refusal", %{peer_node: peer_node} do
+      pre_output_collaboration_failover!(peer_node, @mode)
     end
 
     # Rows 206-598 and 206-599 over a remote owner.
@@ -224,6 +186,105 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
       assert FakeUpstream.websocket_connection_count(pool.exhausted_upstream) == 0
       assert_peer_owner_served!(peer)
     end
+  end
+
+  defp pre_output_collaboration_failover!(peer_node, mode) do
+    pool = failover_pool!(mode, served_frames())
+    turn_state = "remote-quota-collaboration-#{System.unique_integer([:positive])}"
+    peer = start_shared_peer_session_owner!(pool, %{accepted_turn_state: turn_state}, peer_node)
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, pool, turn_state)
+    history = native_text_input("synthetic completed collaboration") ++ EncryptedCollaborationHistory.items(:send_message)
+    payload = %{"type" => "response.create", "model" => pool.model.exposed_model_id, "input" => history, "stream" => true}
+
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(payload))
+      {_conn, _websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+      assert %{"type" => "response.completed"} = terminal
+      assert [%Request{status: "succeeded", transport: "websocket"} = row] = settled_rows!(pool)
+
+      assert Repo.all(from(a in Attempt, where: a.request_id == ^row.id, order_by: [asc: a.attempt_number], select: {a.status, a.pool_upstream_assignment_id})) ==
+               [{"retryable_failed", pool.assignment.id}, {"succeeded", pool.sibling.assignment.id}]
+
+      assert [refused, _served] = Repo.all(from(a in Attempt, where: a.request_id == ^row.id, order_by: [asc: a.attempt_number]))
+      assert refused.upstream_status_code == 200
+      assert refused.response_metadata["stream_error_code"] == "usage_limit_reached"
+      assert refused.response_metadata["stream_terminal_type"] == "error"
+      assert refused.response_metadata["quota_rejection_before_output"] == true
+      assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^row.id and l.entry_kind == "settlement"), :count) == 1
+      assert {FakeUpstream.count(pool.upstream), FakeUpstream.count(pool.sibling_upstream)} == {1, 1}
+      assert FakeUpstream.http_request_count(pool.upstream) == 0
+      assert FakeUpstream.http_request_count(pool.sibling_upstream) == 0
+      assert [%{json: moved}] = FakeUpstream.requests(pool.sibling_upstream)
+      assert_preserved_collaboration!(moved, :send_message)
+      assert_peer_owner_served!(peer)
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  defp exhausted_history!(%{peer_node: peer_node, history_kind: kind}, mode) do
+    upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
+    sibling_upstream = start_upstream(FakeUpstream.websocket_text_frames(served_frames()))
+    setup = gateway_setup(upstream, quota?: false)
+    sibling = gateway_upstream(setup.pool, sibling_upstream, "upstream-token-handoff-sibling", compact?: false)
+    use_routing_strategy!(setup.pool, "quota_first", 2)
+    prime_routing_quota!(setup.identity, %{used_percent: Decimal.new("10")})
+    prime_routing_quota!(sibling.identity, %{used_percent: Decimal.new("90")})
+    pool = pool_with_sibling!(setup, mode, upstream, sibling, sibling_upstream)
+    turn_state = "remote-handoff-#{System.unique_integer([:positive])}"
+    peer = start_shared_peer_session_owner!(pool, %{accepted_turn_state: turn_state}, peer_node)
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, pool, turn_state)
+
+    try do
+      opening = %{"type" => "response.create", "model" => pool.model.exposed_model_id, "input" => native_text_input("synthetic opening"), "stream" => true}
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(opening))
+      {conn, websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+      assert %{"type" => "response.completed"} = terminal
+      assert [%Request{status: "succeeded"} = first] = settled_rows!(pool)
+      await_session_assignment!(peer.session.id, setup.assignment.id)
+      prime_exhausted_routing_quota!(setup.identity)
+
+      anchored = opening |> Map.put("previous_response_id", "resp_remote_owner_served") |> Map.put("input", [%{"type" => "function_call_output", "call_id" => "call_synthetic_anchor", "output" => "synthetic result"}])
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(anchored))
+      {conn, websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+      assert %{"type" => "error", "status" => 503, "error" => %{"code" => "pinned_continuation_unavailable"}} = terminal
+      assert [_, %Request{status: "rejected"} = denied] = settled_rows!(pool)
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^denied.id), :count) == 0
+      assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^denied.id), :count) == 0
+      assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^denied.id), :count) == 0
+
+      history = Map.put(opening, "input", opening["input"] ++ portable_history(kind))
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(history))
+      {_conn, _websocket, terminal} = native_terminal_state!(conn, websocket, ref)
+      assert %{"type" => "response.completed"} = terminal
+      assert [_, _, %Request{status: "succeeded", transport: "websocket"} = moved_row] = settled_rows!(pool)
+      assert moved_row.request_metadata["codex_session_id"] == first.request_metadata["codex_session_id"]
+      assert get_in(moved_row.request_metadata, ["routing", "model_serving_mode"]) == mode
+      assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^moved_row.id and l.entry_kind == "settlement"), :count) == 1
+      await_session_assignment!(peer.session.id, sibling.assignment.id)
+      assert {FakeUpstream.count(upstream), FakeUpstream.count(sibling_upstream)} == {1, 1}
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert FakeUpstream.http_request_count(sibling_upstream) == 0
+      assert [%{json: moved}] = FakeUpstream.requests(sibling_upstream)
+      refute Map.has_key?(moved, "previous_response_id")
+      for item <- portable_history(kind), do: assert(Enum.count(moved["input"], &(&1 == item)) == 1)
+      assert_peer_owner_served!(peer)
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  defp portable_history(:agent_handoff) do
+    [%{"type" => "agent_message", "author" => "/root/sample", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "Message Type: MESSAGE\nTask name: /root\nSender: /root/sample\nPayload:\n"}, %{"type" => "encrypted_content", "encrypted_content" => "synthetic-peer-handoff"}]}]
+  end
+
+  defp portable_history(kind), do: EncryptedCollaborationHistory.items(kind)
+
+  defp assert_preserved_collaboration!(payload, kind) do
+    refute Map.has_key?(payload, "previous_response_id")
+    for item <- EncryptedCollaborationHistory.items(kind), do: assert(Enum.count(payload["input"], &(&1 == item)) == 1)
   end
 
   defp await_session_assignment!(session_id, assignment_id, deadline \\ nil) do
@@ -460,7 +521,7 @@ defmodule CodexPoolerWeb.Runtime.RemoteOwnerUsageLimitTest do
   defp settled_rows!(pool) do
     deadline = System.monotonic_time(:millisecond) + 5_000
 
-    Stream.repeatedly(fn -> Repo.all(from(r in Request, where: r.pool_id == ^pool.pool.id)) end)
+    Stream.repeatedly(fn -> Repo.all(from(r in Request, where: r.pool_id == ^pool.pool.id, order_by: [asc: r.admitted_at])) end)
     |> Enum.reduce_while(nil, fn rows, _acc ->
       cond do
         rows != [] and Enum.all?(rows, &(&1.status not in ["accepted", "in_progress"])) -> {:halt, rows}

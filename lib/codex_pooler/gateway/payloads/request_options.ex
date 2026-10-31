@@ -1113,10 +1113,25 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   # (`Runtime.Dispatch.ContentFilterRetryPin`).
   defp portable_full_history?(%{"input" => input} = payload) do
     CompactionTrigger.compaction_input_mode(payload) == :full_history and
-      (is_binary(input) or is_list(input)) and not upstream_bound_input?(input)
+      (is_binary(input) or is_list(input)) and portable_history_input?(input)
   end
 
   defp portable_full_history?(_payload), do: false
+
+  defp portable_history_input?(input) when is_binary(input), do: true
+  defp portable_history_input?(input) when is_list(input), do: Enum.all?(input, &portable_history_item?/1)
+
+  # Completed native collaboration calls replay on either account with their
+  # client-authored result. Only the outer ciphertext is exempt: the recursive
+  # ownership scan still refuses constraints in any additional field.
+  defp portable_history_item?(%{"type" => "function_call", "namespace" => "collaboration", "name" => name, "status" => "completed", "encrypted_content" => cipher} = item)
+       when name in ["send_message", "spawn_agent", "followup_task"] and is_binary(cipher) do
+    if nonblank_tool_field?(cipher) and completed_tool_replay?(item),
+      do: not upstream_bound_input?(Map.delete(item, "encrypted_content")),
+      else: not upstream_bound_input?(item)
+  end
+
+  defp portable_history_item?(item), do: not upstream_bound_input?(item)
 
   # The provider's `compaction` checkpoint is portable: another account reads it.
   # A direct probe counted the same input tokens for a checkpoint on the
