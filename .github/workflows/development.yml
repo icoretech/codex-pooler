@@ -1,6 +1,12 @@
 name: Development
 
 on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact translation commit to validate
+        required: true
+        type: string
   push:
     branches:
       - '**'
@@ -9,6 +15,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  DEVELOPMENT_EXPECTED_SHA: ${{ inputs.expected_sha }}
 
 concurrency:
   group: "development-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore(main): release codex-pooler ') && github.sha || 'latest' }}"

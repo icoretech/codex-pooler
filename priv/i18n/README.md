@@ -17,6 +17,50 @@ Extraction merges source messages and validates the resulting catalogs. New untr
 
 The `quality.i18n` gate checks extraction drift, catalog integrity and scanner non-regression. It runs locally through `mix quality` and in the hosted static lane. It requires no translation-service credentials or network access.
 
+## Contribute translations
+
+Open the [translation community](https://translate.icorete.ch/public-projects), select Codex Pooler and sign in with GitHub or a Tolgee account. Community contributors can suggest translations and comment without becoming project members. Reviewers accept suitable suggestions and mark approved translations as reviewed. Read the [glossary](glossary.md) and preserve every named placeholder when proposing a change.
+
+The existing English and Chinese catalogs are loaded into the project under the three application namespaces. Chinese translations are drafts until a reviewer approves them in context. Importing a catalog does not mark its entries reviewed. Only reviewed Tolgee changes are pulled back into a repository change; that change still needs normal code review, catalog checks and a release. The running application uses its committed catalogs and does not contact Tolgee.
+
+## Maintainer synchronization
+
+The development-only Mix task synchronizes the `default`, `errors` and `emails` namespaces. It maps the local `zh_CN` catalog directory to Tolgee's `zh-CN` language. Network operations require `TOLGEE_URL` (an HTTPS origin), `TOLGEE_PROJECT_ID` and a project-scoped `TOLGEE_API_KEY` supplied securely through the environment. Never put the key in a command argument, tracked file or log.
+
+```sh
+# Local preview: no credentials or network required.
+mise x -- mix codex_pooler.i18n.tolgee push
+
+# Upload source messages and existing Chinese drafts, preserving Tolgee edits.
+mise x -- mix codex_pooler.i18n.tolgee push --apply
+
+# Verify all source keys and Chinese translations survive the remote PO round trip.
+mise x -- mix codex_pooler.i18n.tolgee check
+
+# Preview reviewed Chinese updates without writing files.
+mise x -- mix codex_pooler.i18n.tolgee pull
+
+# Write a candidate under a new directory, leaving working catalogs unchanged.
+mise x -- mix codex_pooler.i18n.tolgee pull --output-dir /tmp/translation-candidate
+
+# Or apply reviewed updates to the working catalogs, then validate the diff.
+mise x -- mix codex_pooler.i18n.tolgee pull --apply
+mise x -- mix quality.i18n
+git diff -- priv/gettext/zh_CN/LC_MESSAGES
+```
+
+The task uses the test tool environment but never starts the application or database. Push creates a separate English upload representation from the source text; committed English fallback catalogs stay unchanged. Its `KEEP` import preserves existing nonempty translations and review states, does not delete remote keys and does not overwrite translator descriptions. Source-message renames and removal require deliberate reconciliation rather than destructive synchronization.
+
+Pull reads only `REVIEWED` Chinese translations and merges them into the local catalogs. Unreviewed local baselines remain intact; obsolete or unknown remote keys cannot introduce new application messages. The merge preserves local headers, contexts, comments, source references and plural structure because a raw Tolgee PO export can omit that metadata. All three candidate catalogs are validated before any working-file write. A pull with no reviewed changes leaves the catalog bytes unchanged. Prefer a clean checkout and review the resulting diff; multiple file replacements are not one crash-atomic transaction.
+
+Use `--root DIR` only when intentionally selecting another Gettext catalog directory. The output directory for `--output-dir` must not already exist. Production targets require HTTPS; `--allow-loopback` permits HTTP only for a deliberate local test target.
+
+## Automated synchronization
+
+The [Translations workflow](../../.github/workflows/translations.yml) runs only from the canonical repository's `main` branch. Relevant source/catalog changes push messages with `KEEP`. A daily run at 03:17 UTC, or a manual `pull` run, first synchronizes sources and then imports reviewed Chinese updates. Manual `push` runs upload only. Repository variables `TOLGEE_URL` and `TOLGEE_PROJECT_ID` select the target; the `TOLGEE_API_KEY` secret supplies its project credential.
+
+Reviewed updates must pass `quality.i18n` before the workflow opens a normal pull request. It skips an empty diff and does not create another translation PR while one is already open. Each new PR uses a run-specific branch and explicitly dispatches the full Development checks, because a push made with the workflow token does not trigger another push workflow. Translation PRs require review and passing checks; the workflow does not merge them or publish a release.
+
 ## Message conventions
 
 - Use exact natural English literals with `gettext`, named `%{name}` bindings, and `ngettext` for counts. Do not concatenate sentences or pass dynamic msgids.

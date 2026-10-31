@@ -149,6 +149,7 @@ else if (args[0] === 'buildx' && args[1] === 'build') {
 		GITHUB_RUN_ID: "123",
 		GITHUB_RUN_ATTEMPT: "2",
 		GITHUB_SHA: sha,
+		DEVELOPMENT_EXPECTED_SHA: sha,
 		RUNNER_OS: "Linux",
 		RUNNER_ARCH: "X64",
 		RUNNER_TEMP: temporary,
@@ -278,6 +279,25 @@ test("Renovate branch pushes build automatically without registry credentials or
 		false,
 	);
 	assert.equal(existsSync(f.state), false);
+});
+
+test("translation branch dispatch builds its revision without publishing", (t) => {
+	// Given a translation branch dispatched with the normal image workflow.
+	const f = fixture(t, {
+		GITHUB_EVENT_NAME: "workflow_dispatch",
+		GITHUB_REF: "refs/heads/feat/tolgee-translations-12345-1",
+	});
+	// When the real image entrypoint runs.
+	const result = f.run();
+	// Then it builds the event revision, never logging into or pushing a registry.
+	assert.equal(result.status, 0, result.stderr);
+	const receipt = JSON.parse(readFileSync(join(f.evidence, "image.json")));
+	assert.equal(receipt.revision, f.sha);
+	assert.equal(receipt.published, false);
+	assert.equal(
+		f.calls().some(({ args }) => ["login", "push"].includes(args[0])),
+		false,
+	);
 });
 
 test("only main publishes and verifies the registry digest and source labels", (t) => {
@@ -557,6 +577,28 @@ for (const [name, mutate, message] of [
 }
 
 for (const [name, overrides, pattern] of [
+	[
+		"changed translation revision",
+		{
+			GITHUB_EVENT_NAME: "workflow_dispatch",
+			GITHUB_REF: "refs/heads/feat/tolgee-translations-12345-1",
+			DEVELOPMENT_EXPECTED_SHA: "f".repeat(40),
+		},
+		/dispatched translation revision changed/,
+	],
+	[
+		"manual main",
+		{ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/main" },
+		/only branch push/,
+	],
+	[
+		"manual unrelated branch",
+		{
+			GITHUB_EVENT_NAME: "workflow_dispatch",
+			GITHUB_REF: "refs/heads/feat/unrelated",
+		},
+		/only branch push/,
+	],
 	["pull requests", { GITHUB_EVENT_NAME: "pull_request" }, /only branch push/],
 	["tag pushes", { GITHUB_REF: "refs/tags/v1.0.0" }, /only branch push/],
 	[

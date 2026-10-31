@@ -9,7 +9,13 @@ case "${1:-}" in
 esac
 [[ $# == 1 ]] || fail 'unexpected arguments'
 [[ ${GITHUB_ACTIONS:-} == true && ${GITHUB_REPOSITORY:-} == icoretech/codex-pooler ]] || fail 'canonical GitHub repository required'
-[[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == refs/heads/* ]] || fail 'only branch pushes are allowed'
+case "${GITHUB_EVENT_NAME:-}:${GITHUB_REF:-}" in
+  push:refs/heads/*|workflow_dispatch:refs/heads/feat/tolgee-translations-*) ;;
+  *) fail 'only branch pushes or translation branch dispatches are allowed' ;;
+esac
+if [[ ${GITHUB_EVENT_NAME:-} == workflow_dispatch ]]; then
+  [[ ${DEVELOPMENT_EXPECTED_SHA:-} == "${GITHUB_SHA:-}" ]] || fail 'dispatched translation revision changed'
+fi
 [[ ${RUNNER_OS:-} == Linux && ${RUNNER_ARCH:-} == X64 ]] || fail 'Linux x64 runner required'
 [[ ${GITHUB_RUN_ID:-} =~ ^[1-9][0-9]*$ && ${GITHUB_RUN_ATTEMPT:-} =~ ^[1-9][0-9]*$ && ${GITHUB_SHA:-} =~ ^[0-9a-f]{40}$ ]] || fail 'invalid GitHub source/run identity'
 [[ ${RUNNER_TEMP:-} == /* && -d $RUNNER_TEMP && ! -L $RUNNER_TEMP ]] || fail 'absolute runner temporary directory required'

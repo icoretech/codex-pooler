@@ -48,7 +48,13 @@ if [[ $mode == rehearse || ( $mode == cleanup && ${CI_REHEARSAL:-} == true ) ]];
 else
   [[ ${CI_REHEARSAL:-false} != true ]] || fail 'use rehearse for snapshot builds'
   [[ ${GITHUB_REPOSITORY:-} == icoretech/codex-pooler ]] || fail 'unexpected repository'
-  [[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == refs/heads/* ]] || fail 'only branch push events are allowed'
+  case "${GITHUB_EVENT_NAME:-}:${GITHUB_REF:-}" in
+    push:refs/heads/*|workflow_dispatch:refs/heads/feat/tolgee-translations-*) ;;
+    *) fail 'only branch pushes or translation branch dispatches are allowed' ;;
+  esac
+  if [[ ${GITHUB_EVENT_NAME:-} == workflow_dispatch ]]; then
+    [[ ${DEVELOPMENT_EXPECTED_SHA:-} == "${GITHUB_SHA:-}" ]] || fail 'dispatched translation revision changed'
+  fi
   case "$GITHUB_REF" in
     refs/heads/release-please--branches--main--components--codex-pooler|refs/heads/release-please--branches--main--components--codex-pooler--release-notes)
       fail 'release automation branch is excluded' ;;

@@ -112,6 +112,7 @@ else if(!['start','exec'].includes(a[0])) { console.error('unsupported Docker ca
 		GITHUB_EVENT_NAME: "push",
 		GITHUB_REF: "refs/heads/main",
 		GITHUB_SHA: sha,
+		DEVELOPMENT_EXPECTED_SHA: sha,
 		GITHUB_RUN_ID: "12345",
 		GITHUB_RUN_ATTEMPT: "1",
 		RUNNER_OS: "Linux",
@@ -316,9 +317,34 @@ test("cache symlink restoration is refused before resource acquisition or recurs
 	assert.equal(existsSync(f.state), false);
 });
 
+test("translation branch dispatch runs the hosted lane for its checked out revision", (t) => {
+	// Given an automation branch whose push cannot trigger another workflow.
+	const f = fixture(t);
+	const identity = {
+		GITHUB_EVENT_NAME: "workflow_dispatch",
+		GITHUB_REF: "refs/heads/feat/tolgee-translations-12345-1",
+	};
+	assert.equal(f.run("tools", identity).status, 0);
+	// When Development is explicitly dispatched on that branch.
+	const result = f.run("run", identity);
+	// Then the normal lane succeeds with its ordinary receipt.
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(f.receipt().exit, 0);
+});
+
 for (const environment of [
 	{ GITHUB_REPOSITORY: "example-org/fork" },
 	{ GITHUB_EVENT_NAME: "pull_request" },
+	{
+		GITHUB_EVENT_NAME: "workflow_dispatch",
+		GITHUB_REF: "refs/heads/feat/tolgee-translations-12345-1",
+		DEVELOPMENT_EXPECTED_SHA: "f".repeat(40),
+	},
+	{ GITHUB_EVENT_NAME: "workflow_dispatch", GITHUB_REF: "refs/heads/main" },
+	{
+		GITHUB_EVENT_NAME: "workflow_dispatch",
+		GITHUB_REF: "refs/heads/feat/unrelated",
+	},
 	{ GITHUB_SHA: "a".repeat(40) },
 	{ CI_LANE: "partition-5" },
 	{ DOCKER_HOST: "tcp://example.invalid:2375" },

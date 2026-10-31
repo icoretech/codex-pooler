@@ -16,7 +16,7 @@ function job(id) {
 	return end < 0 ? rest : rest.slice(0, end + 3);
 }
 
-test("development only receives branch pushes and excludes both release automation branches", () => {
+test("development receives branch pushes and explicit translation validation dispatches", () => {
 	const triggers = workflow.split("\npermissions:")[0];
 	assert.match(triggers, /^name: Development\n/);
 	assert.match(triggers, /\n {2}push:\n {4}branches:\n {6}- '\*\*'/);
@@ -39,8 +39,9 @@ test("development only receives branch pushes and excludes both release automati
 	assert.doesNotMatch(workflow, /github\.(actor|triggering_actor)/);
 	assert.doesNotMatch(
 		triggers,
-		/pull_request|workflow_dispatch|workflow_run|repository_dispatch|tags:/,
+		/pull_request|workflow_run|repository_dispatch|tags:/,
 	);
+	assert.match(triggers, /\n {2}workflow_dispatch:\n/);
 	assert.doesNotMatch(workflow, /continue-on-error:\s*true/);
 	assert.ok(
 		workflow.includes(

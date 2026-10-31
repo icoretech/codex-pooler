@@ -46,6 +46,7 @@ defmodule CodexPooler.MixProject do
         "quality.i18n": :test,
         "codex_pooler.i18n.extract": :test,
         "codex_pooler.i18n.check": :test,
+        "codex_pooler.i18n.tolgee": :test,
         "codex_pooler.i18n.scan": :test,
         six: :test,
         "six.detail": :test,
@@ -153,7 +154,7 @@ defmodule CodexPooler.MixProject do
         "quality.credo",
         "quality.dialyzer",
         "quality.security",
-        "quality.i18n"
+        "cmd mix quality.i18n"
       ],
       coverage: ["test --cover"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]

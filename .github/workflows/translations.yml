@@ -1,0 +1,76 @@
+name: Translations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'priv/gettext/**'
+      - 'dev_support/codex_pooler/dev/i18n/**'
+      - 'dev_support/mix/tasks/codex_pooler.i18n.tolgee.ex'
+      - 'scripts/i18n/**'
+      - '.github/workflows/translations.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Synchronize sources or propose reviewed translations
+        type: choice
+        options: [pull, push]
+        default: pull
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translations
+  cancel-in-progress: false
+
+jobs:
+  synchronize:
+    if: github.repository == 'icoretech/codex-pooler' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      OPERATION: ${{ github.event_name == 'push' && 'push' || inputs.operation || 'pull' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Build the pinned translation toolchain
+        run: docker build --tag pooler-translation-tools - < scripts/ci/Dockerfile
+      - name: Compile catalog tooling without application startup
+        run: |
+          docker run --rm --volume "$PWD:/workspace" --env MIX_ENV=test \
+            pooler-translation-tools sh -ec 'mix deps.get && mix compile --warnings-as-errors'
+      - name: Synchronize catalogs
+        env:
+          TOLGEE_URL: ${{ vars.TOLGEE_URL }}
+          TOLGEE_PROJECT_ID: ${{ vars.TOLGEE_PROJECT_ID }}
+          TOLGEE_API_KEY: ${{ secrets.TOLGEE_API_KEY }}
+        run: |
+          set -euo pipefail
+          docker run --rm --volume "$PWD:/workspace" --env MIX_ENV=test \
+            --env TOLGEE_URL --env TOLGEE_PROJECT_ID --env TOLGEE_API_KEY \
+            pooler-translation-tools mix codex_pooler.i18n.tolgee push --apply
+          if [[ "$OPERATION" == pull ]]; then
+            docker run --rm --volume "$PWD:/workspace" --env MIX_ENV=test \
+              --env TOLGEE_URL --env TOLGEE_PROJECT_ID --env TOLGEE_API_KEY \
+              pooler-translation-tools mix codex_pooler.i18n.tolgee pull --apply
+          fi
+      - name: Validate the complete catalogs offline
+        if: env.OPERATION == 'pull'
+        run: |
+          docker run --rm --volume "$PWD:/workspace" --env MIX_ENV=test \
+            pooler-translation-tools mix quality.i18n
+      - name: Propose reviewed translations and run Development checks
+        if: env.OPERATION == 'pull'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/i18n/open-reviewed-pr.sh
