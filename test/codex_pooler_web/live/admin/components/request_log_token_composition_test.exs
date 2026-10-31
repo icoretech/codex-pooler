@@ -6,6 +6,21 @@ defmodule CodexPoolerWeb.Admin.RequestLogTokenCompositionTest do
   alias CodexPooler.Accounting.RequestLogs.SettlementPresentation
   alias CodexPoolerWeb.Admin.RequestLogsPresentation.Usage
 
+  for {locale, spoken_rate} <- [{"en", "99.9% of input"}, {"zh_CN", "占输入的 99.9%"}] do
+    test "#{locale} keeps the compact cache percentage and its accessible input denominator" do
+      document =
+        Gettext.with_locale(unquote(locale), fn ->
+          render_tokens(%{input_tokens: 285_000, cached_input_tokens: 284_700, output_tokens: 600, total_tokens: 285_600})
+        end)
+
+      assert text(document, "[data-role='token-totals']") == "285.6k"
+      assert text(document, "[data-role='cached-tokens']") =~ "284.7k"
+      assert text(document, "[data-role='cache-rate'] > [aria-hidden='true']") == "· 99.9%"
+      assert text(document, "[data-role='cache-rate'] > .sr-only") == unquote(spoken_rate)
+      assert_segment(document, "cached-token-bar", 284_700)
+    end
+  end
+
   test "segments partition the recorded total and reasoning stays within output" do
     document = render_tokens(%{input_tokens: 80, cached_input_tokens: 40, output_tokens: 20, reasoning_tokens: 15, total_tokens: 100})
 

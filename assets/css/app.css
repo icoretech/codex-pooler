@@ -1566,7 +1566,7 @@ body {
 @media (width < 64rem) {
   .admin-request-explorer.admin-ledger-table > tbody > tr {
     height: auto;
-    grid-template-columns: minmax(0, 1fr) 4.5rem;
+    grid-template-columns: minmax(0, 1fr) 7.5rem;
     row-gap: 0.5rem;
     padding: 0.75rem;
   }
@@ -1578,7 +1578,7 @@ body {
 
 @media (40rem <= width < 64rem) {
   .admin-request-explorer.admin-ledger-table[data-ledger-dense] > tbody > tr {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 5.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 7.5rem;
   }
 }
 

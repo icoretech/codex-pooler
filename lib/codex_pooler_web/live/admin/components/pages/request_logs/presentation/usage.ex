@@ -55,12 +55,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
         <span
           id={"#{@prefix}-#{@request_log.id}-cached-tokens"}
           data-role="cached-tokens"
-          class="flex min-w-0 flex-wrap items-center gap-x-1 text-[11px] tabular-nums text-base-content/55 max-lg:justify-end"
+          class="flex min-w-0 items-center gap-x-1 whitespace-nowrap text-[11px] tabular-nums text-base-content/55 max-lg:justify-end"
           title={usage_cached_line_title(@request_log)}
         >
           <span class="whitespace-nowrap">{@cached_label}</span>
-          <span :if={@cache_rate} data-role="cache-rate" class="whitespace-nowrap max-lg:w-full max-lg:text-right" title={gettext("Cached input tokens divided by all input tokens")}>
-            <span aria-hidden="true" class="hidden lg:inline">· </span>{gettext("%{rate} of input", rate: @cache_rate)}
+          <span :if={@cache_rate} data-role="cache-rate" class="whitespace-nowrap" title={gettext("Cached input tokens divided by all input tokens")}>
+            <span aria-hidden="true">· {@cache_rate}</span><span class="sr-only">{gettext("%{rate} of input", rate: @cache_rate)}</span>
           </span>
         </span>
       <% else %>
