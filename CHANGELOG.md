@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.14.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.24...codex-pooler-v0.14.0) (2026-10-31)
+
+
+### Features
+
+* **i18n:** add English and Simplified Chinese localization ([8acbfc3](https://github.com/icoretech/codex-pooler/commit/8acbfc386b0e25b5fee2c607b1b8c4faa1895232))
+* **i18n:** sync Tolgee catalogs through reviewed pull requests ([df84678](https://github.com/icoretech/codex-pooler/commit/df8467800e6d822cac2aa629a4774bd8437152bc))
+
+
+### Bug Fixes
+
+* **i18n:** keep request cache summaries on one line ([9d86370](https://github.com/icoretech/codex-pooler/commit/9d8637057f9117ef8670e40a277548ec5cefc657))
+* **i18n:** resolve browser locale through runtime router plugs ([86deaec](https://github.com/icoretech/codex-pooler/commit/86deaec64dc5013cca6ac4cb418c79c78f28c8fb))
+* preserve provider retry advice on native websocket 429s ([8482ee6](https://github.com/icoretech/codex-pooler/commit/8482ee6fbad633f04843df33a9c80a85e4c31283))
+
+
+### Dependencies
+
+* update dependency apexcharts to v8.6.0 ([#592](https://github.com/icoretech/codex-pooler/issues/592)) ([5fa13cd](https://github.com/icoretech/codex-pooler/commit/5fa13cd37b947d1e8e82d95034d93ae0e349f80d))
+
+
+### Tests
+
+* **i18n:** require catalog validation in the static CI sequence ([32166fa](https://github.com/icoretech/codex-pooler/commit/32166faeb2cda71cf4892c82491de2326a851ecb))
+
+
+### Miscellaneous Chores
+
+* **pricing:** refresh bundled openai pricing catalog ([45e820b](https://github.com/icoretech/codex-pooler/commit/45e820b8ba0d83e49faf9ed9b0012010f8405853))
+* release 0.14.0 ([b710314](https://github.com/icoretech/codex-pooler/commit/b7103146c79f393ce305747dfa8f20b4cf72ebfa))
+
 ## [0.13.24](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.13.23...codex-pooler-v0.13.24) (2026-10-30)
 
 
