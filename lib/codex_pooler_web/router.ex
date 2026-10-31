@@ -18,7 +18,7 @@ defmodule CodexPoolerWeb.Router do
     }
 
     plug :fetch_current_scope_for_user
-    plug CodexPoolerWeb.Plugs.Locale
+    plug :resolve_browser_locale
     plug :admin_browser_admission
   end
 
@@ -26,7 +26,7 @@ defmodule CodexPoolerWeb.Router do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
-    plug CodexPoolerWeb.Plugs.Locale
+    plug :resolve_browser_locale
     plug :put_browser_root_layout
     plug :protect_from_forgery
 
@@ -215,6 +215,10 @@ defmodule CodexPoolerWeb.Router do
 
   defp put_browser_root_layout(conn, _opts) do
     Phoenix.Controller.put_root_layout(conn, html: {Layouts, :root})
+  end
+
+  defp resolve_browser_locale(conn, opts) do
+    CodexPoolerWeb.Plugs.Locale.call(conn, opts)
   end
 
   defp admin_browser_admission(conn, opts) do

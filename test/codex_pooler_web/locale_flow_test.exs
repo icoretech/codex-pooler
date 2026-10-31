@@ -58,6 +58,19 @@ defmodule CodexPoolerWeb.LocaleFlowTest do
     assert get_session(response, :locale) == nil
   end
 
+  test "the separate Observatory browser pipeline resolves locale before rendering", %{conn: conn} do
+    response = conn |> put_locale("zh-CN") |> put_req_header("accept-language", "en") |> get(~p"/observatory/login")
+    document = response |> html_response(200) |> LazyHTML.from_document()
+
+    assert document |> LazyHTML.query("html") |> LazyHTML.attribute("lang") == ["zh-CN"]
+    assert response.assigns.locale.tag == "zh-CN"
+    assert response.assigns.locale_preference == "zh-CN"
+    assert get_resp_header(response, "content-language") == ["zh-CN"]
+    assert get_resp_header(response, "vary") == ["accept-language"]
+    assert document |> LazyHTML.query("button[value='zh-CN'][aria-current='true']") |> LazyHTML.text() |> String.trim() == "简体中文"
+    assert get_session(response, :locale) == nil
+  end
+
   test "an account chooser persists across requests and the database beats a conflicting browser cookie", %{conn: conn} do
     fixture = bootstrap_owner_fixture()
     conn = log_in_user(conn, fixture.user, fixture.token)
