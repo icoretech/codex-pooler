@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
           required(:expires_reported?) => boolean(),
           required(:in_progress?) => boolean(),
           required(:redemption_stale?) => boolean(),
+          required(:redemption_blocked?) => boolean(),
           required(:last_auto_redemption_cause) => auto_redemption_cause() | nil,
           required(:reset_lifecycle) => reset_lifecycle() | nil
         }
@@ -235,4 +236,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   defp snapshot_label(%{reported?: true}), do: gettext("No saved resets")
   defp snapshot_label(%{status: "unavailable"}), do: gettext("Saved resets unavailable")
   defp snapshot_label(_snapshot), do: gettext("Saved resets not reported")
+
+  @spec snapshot(UpstreamIdentity.t(), DateTimeDisplay.preferences(), [CodexPooler.Upstreams.Quota.AccountQuotaWindow.t()], DateTime.t()) :: snapshot()
+  def snapshot(identity, datetime_preferences, raw_windows, now) do
+    identity
+    |> snapshot(datetime_preferences)
+    |> Map.put(:redemption_blocked?, SavedResets.manual_redemption_blocked?(identity, raw_windows, now))
+  end
 end

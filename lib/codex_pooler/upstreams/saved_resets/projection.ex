@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
   """
 
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+  alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -100,6 +101,10 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   @spec redemption_stale_grace_ms() :: pos_integer()
   def redemption_stale_grace_ms, do: @redemption_stale_grace_ms
+
+  @spec manual_redemption_blocked?(UpstreamIdentity.t(), [CodexPooler.Upstreams.Quota.AccountQuotaWindow.t()], DateTime.t()) :: boolean()
+  def manual_redemption_blocked?(identity, windows, timestamp \\ DateTime.utc_now()),
+    do: ManualRedemptionGate.blocked?(identity, windows, timestamp)
 
   @spec count_from_usage_payload(term()) :: count_parse_result()
   def count_from_usage_payload(%{"rate_limit_reset_credits" => %{} = reset_credits}) do

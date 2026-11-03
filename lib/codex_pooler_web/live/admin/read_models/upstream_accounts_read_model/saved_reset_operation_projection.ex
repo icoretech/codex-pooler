@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Upstreams.SavedResets
+  alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.{Formatting, SavedResetConfirmationProjection}
   alias CodexPoolerWeb.DateTimeDisplay
@@ -195,7 +196,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
     cond do
       map_size(record) == 0 -> :not_recorded
       not valid_result_clocks?(record, now) -> :unknown
-      not valid_replay?(Map.get(record, "provider_replay"), now) -> :unknown
+      not valid_record_replay?(record, now) -> :unknown
       true -> application_result(record["result"], record)
     end
   end
@@ -207,18 +208,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   end
 
   defp application_result(%{"applied" => false, "code" => code}, record) when code in ["no_credit", "nothing_to_reset"] do
-    if record["phase"] in ["consumed_pending_probe", "confirmed_by_upstream", "confirmed_by_quota"] or record["consumed_at"] != nil, do: :unknown, else: :not_applied
+    if record["phase"] in ["consumed_pending_probe", "confirmed_by_upstream", "confirmed_by_quota"] or record["consumed_at"] != nil or match?(%{"version" => 2, "provider_dispatches" => 0}, record["provider_replay"]), do: :unknown, else: :not_applied
   end
 
   defp application_result(%{"applied" => false, "code" => "consume_not_applied"}, record) do
-    if record["phase"] == "consume_not_applied" and match?(%{"version" => 1, "provider_dispatches" => 0}, record["provider_replay"]) and record["consumed_at"] == nil, do: :not_applied, else: :unknown
+    if undispatched_terminal?(record) and record["consumed_at"] == nil, do: :not_applied, else: :unknown
   end
 
   defp application_result(_invalid, _record), do: :unknown
 
+  defp undispatched_terminal?(%{"phase" => "consume_not_applied", "provider_replay" => %{"version" => 1, "provider_dispatches" => 0}}), do: true
+  defp undispatched_terminal?(%{"phase" => "manual_replacement_not_applied", "provider_replay" => %{"version" => 2, "provider_dispatches" => 0}}), do: true
+  defp undispatched_terminal?(_record), do: false
+
   defp contradictory_applied?(record) do
-    record["phase"] in ["consuming", "consume_not_applied"] or
-      match?(%{"version" => 1, "provider_dispatches" => 0}, record["provider_replay"])
+    record["phase"] in ["consuming", "consume_not_applied", "manual_replacement_not_applied"] or
+      match?(%{"provider_dispatches" => 0}, record["provider_replay"])
   end
 
   defp valid_result_clocks?(record, now) do
@@ -235,6 +240,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   defp ordered_times?(%DateTime{} = earlier, %DateTime{} = later), do: DateTime.compare(earlier, later) != :gt
   defp ordered_times?(_earlier, _later), do: true
+
+  defp valid_record_replay?(%{"provider_replay" => %{"version" => 2} = replay} = record, now) do
+    record["trigger_kind"] == "admin_manual" and ManualRedemptionGate.stored_context_valid?(record["manual_replacement"], now) and valid_replay?(Map.put(replay, "version", 1), now)
+  end
+
+  defp valid_record_replay?(record, now), do: valid_replay?(Map.get(record, "provider_replay"), now)
 
   defp valid_replay?(nil, _now), do: true
 
@@ -260,6 +271,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   defp verification(%{"phase" => "consumed_pending_probe"}, _confirmation), do: :pending
   defp verification(%{"phase" => "consuming"}, _confirmation), do: :not_started
   defp verification(%{"phase" => "consume_not_applied"}, _confirmation), do: :not_started
+  defp verification(%{"phase" => "manual_replacement_not_applied"}, _confirmation), do: :not_started
   defp verification(%{"phase" => _unknown}, _confirmation), do: :unknown
   defp verification(_legacy, _confirmation), do: :not_started
 
@@ -307,7 +319,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   defp fresh_consuming?(record, now) do
     with nil <- Map.get(record, "result"),
-         true <- valid_replay?(Map.get(record, "provider_replay"), now),
+         true <- valid_record_replay?(record, now),
          :clear <- replay_category(Map.get(record, "provider_replay")),
          %DateTime{} = started <- nonfuture_time(record["started_at"], now) do
       DateTime.diff(now, started, :millisecond) < SavedResets.redemption_receive_timeout_ms() + SavedResets.redemption_stale_grace_ms()
@@ -318,9 +330,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   # Replay codes are decoded into closed categories and never copied to output.
   defp replay_category(nil), do: :clear
-  defp replay_category(%{"version" => 1, "last_code" => code}) when code in ["transport_error", "provider_failed", "persistence_failed", "no_credit", "nothing_to_reset", "list_failed", "target_redeeming", "target_available", "quota_unresolved", "scope_changed", "target_invalid", "missing_access_token", "legacy_unresolved", "write_budget_exhausted"], do: :ambiguous
+  defp replay_category(%{"version" => version, "last_code" => code}) when version in [1, 2] and code in ["transport_error", "provider_failed", "persistence_failed", "no_credit", "nothing_to_reset", "list_failed", "target_redeeming", "target_available", "quota_unresolved", "scope_changed", "target_invalid", "missing_access_token", "legacy_unresolved", "write_budget_exhausted"], do: :ambiguous
 
-  defp replay_category(%{"version" => 1, "provider_dispatches" => count} = replay) when is_integer(count) and count >= 0 do
+  defp replay_category(%{"version" => version, "provider_dispatches" => count} = replay) when version in [1, 2] and is_integer(count) and count >= 0 do
     if Map.get(replay, "last_code") in [nil, "dispatch_reserved"], do: :clear, else: :ambiguous
   end
 

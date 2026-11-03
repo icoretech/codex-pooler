@@ -883,7 +883,7 @@ msgstr[0] "%{count} 条规则"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/saved_reset_meter.ex:191
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:736
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:233
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:234
 #, elixir-autogen, elixir-format
 msgid "%{count} saved reset"
 msgid_plural "%{count} saved resets"
@@ -15493,7 +15493,7 @@ msgstr "运行中"
 
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:36
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:93
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:182
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:183
 #, elixir-autogen, elixir-format
 msgid "saved reset redemption is already in progress"
 msgstr "已保存的重置兑换正在进行中"
@@ -16113,7 +16113,7 @@ msgstr "未报告 %{status}"
 msgid "%{timestamp} · %{relative_time}"
 msgstr "%{timestamp} · %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:277
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
 #, elixir-autogen, elixir-format
 msgid "A request succeeded on the new quota; the usage report has not caught up yet."
 msgstr "一个请求已使用新配额成功完成；用量报告尚未更新。"
@@ -16186,7 +16186,7 @@ msgstr "可用性取决于请求模型、传输方式和服务模式。账号摘
 msgid "Banked-reset recovery pending"
 msgstr "储备重置恢复待确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
 #, elixir-autogen, elixir-format
 msgid "Being processed."
 msgstr "正在处理。"
@@ -16208,7 +16208,7 @@ msgstr "环大小"
 msgid "Cancelled"
 msgstr "已取消"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
 #, elixir-autogen, elixir-format
 msgid "Check the latest reset before acting."
 msgstr "操作前请检查最新的重置状态。"
@@ -16239,7 +16239,7 @@ msgstr "服务商有条件可用"
 msgid "Current provider credit permission, identity lifecycle and assignment availability allow routing. Each request still checks its model, transport and serving mode; this does not identify a billing debit."
 msgstr "当前服务商额度权限、账号身份生命周期和分配可用性允许路由。每个请求仍会检查其模型、传输方式和服务模式；这不代表已发生计费扣款。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:285
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "Deadline passed — checking quota"
 msgstr "已过截止时间 — 正在检查配额"
@@ -16341,7 +16341,7 @@ msgstr "传入的配额报告"
 msgid "Inspect the sanitized account error and recover the upstream account."
 msgstr "请检查已脱敏的账号错误并恢复上游账号。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
 #, elixir-autogen, elixir-format
 msgid "It does not block another redemption."
 msgstr "这不会阻止再次兑换。"
@@ -16416,12 +16416,12 @@ msgstr "已达限制"
 msgid "Limited model availability"
 msgstr "仅部分模型可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:357
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected"
 msgstr "实时更新已断开"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:359
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
 #, elixir-autogen, elixir-format
 msgid "Live updates paused"
 msgstr "实时更新已暂停"
@@ -16441,7 +16441,7 @@ msgstr "模型 %{value}"
 msgid "New quota report awaiting verification"
 msgstr "新配额报告等待验证"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:205
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:206
 #, elixir-autogen, elixir-format
 msgid "Next expires %{timestamp}"
 msgstr "下次到期时间 %{timestamp}"
@@ -16461,32 +16461,32 @@ msgstr "此上游账号没有已启用、健康且符合条件的 Pool 分配。
 msgid "No jobs match these filters"
 msgstr "没有符合这些筛选条件的任务"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:180
 #, elixir-autogen, elixir-format
 msgid "No reset result is recorded."
 msgstr "未记录重置结果。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:300
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:312
 #, elixir-autogen, elixir-format
 msgid "No reset result recorded"
 msgstr "未记录重置结果"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:304
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "No saved reset was available"
 msgstr "没有可用的已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:235
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:236
 #, elixir-autogen, elixir-format
 msgid "No saved resets"
 msgstr "没有已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:281
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time."
 msgstr "用量报告未及时确认新配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:280
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time. The spent reset is not refunded."
 msgstr "用量报告未及时确认新配额。已消耗的重置不会退还。"
@@ -16502,7 +16502,7 @@ msgstr "用量报告未及时确认新配额。已消耗的重置不会退还。
 msgid "Not reported"
 msgstr "未报告"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
 #, elixir-autogen, elixir-format
 msgid "Nothing needed resetting"
 msgstr "没有需要重置的配额"
@@ -16624,7 +16624,7 @@ msgstr "服务商额度已禁用"
 msgid "Provider observation"
 msgstr "服务商观测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:169
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
 #, elixir-autogen, elixir-format
 msgid "Queued. Nothing has been sent to the provider yet."
 msgstr "已排队。尚未向服务商发送任何内容。"
@@ -16635,18 +16635,18 @@ msgstr "已排队。尚未向服务商发送任何内容。"
 msgid "Quota blocked"
 msgstr "配额受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:358
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
 #, elixir-autogen, elixir-format
 msgid "Quota checks are delayed"
 msgstr "配额检查已延迟"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:280
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:281
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
 #, elixir-autogen, elixir-format
 msgid "Quota confirmation timed out"
 msgstr "配额确认超时"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:276
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
 #, elixir-autogen, elixir-format
 msgid "Quota confirmed"
 msgstr "配额已确认"
@@ -16661,13 +16661,13 @@ msgstr "配额已过期"
 msgid "Quota failed"
 msgstr "配额失败"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:279
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
 #, elixir-autogen, elixir-format
 msgid "Quota is still blocked."
 msgstr "配额仍被阻止。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:278
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:279
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
 #, elixir-autogen, elixir-format
 msgid "Quota is still unavailable"
 msgstr "配额仍不可用"
@@ -16749,7 +16749,7 @@ msgstr "路由前请恢复上游账号的生命周期。"
 msgid "Recovery verification"
 msgstr "恢复验证"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:277
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
 #, elixir-autogen, elixir-format
 msgid "Recovery verified by a request"
 msgstr "请求已验证恢复"
@@ -16774,33 +16774,33 @@ msgstr "请重新关联凭据或成功完成令牌刷新。"
 msgid "Reported slot"
 msgstr "报告的窗口槽位"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:169
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
 #, elixir-autogen, elixir-format
 msgid "Request accepted"
 msgstr "请求已接受"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:189
 #, elixir-autogen, elixir-format
 msgid "Request accepted — processing"
 msgstr "请求已接受 — 处理中"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:187
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
 #, elixir-autogen, elixir-format
 msgid "Request accepted — queued"
 msgstr "请求已接受 — 已排队"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:173
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:174
 #, elixir-autogen, elixir-format
 msgid "Request cancelled"
 msgstr "请求已取消"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:172
 #, elixir-autogen, elixir-format
 msgid "Request completed"
 msgstr "请求已完成"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:172
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:173
 #, elixir-autogen, elixir-format
 msgid "Request did not complete"
 msgstr "请求未完成"
@@ -16810,43 +16810,43 @@ msgstr "请求未完成"
 msgid "Request retried"
 msgstr "请求已重试"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:176
 #, elixir-autogen, elixir-format
 msgid "Request status unavailable"
 msgstr "请求状态不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:174
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:175
 #, elixir-autogen, elixir-format
 msgid "Request stopped"
 msgstr "请求已停止"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:71
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:72
 #, elixir-autogen, elixir-format
 msgid "Request · long-window quota exhausted"
 msgstr "请求 · 长窗口配额已耗尽"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:77
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:78
 #, elixir-autogen, elixir-format
 msgid "Request · quota threshold"
 msgstr "请求 · 配额阈值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
 #, elixir-autogen, elixir-format
 msgid "Reset applied"
 msgstr "重置已生效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:287
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Reset applied — verifying quota"
 msgstr "重置已生效 — 正在验证配额"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:189
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:190
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:309
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not confirmed"
 msgstr "重置结果未确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not recorded"
 msgstr "重置结果未记录"
@@ -16856,12 +16856,12 @@ msgstr "重置结果未记录"
 msgid "Reset reported"
 msgstr "报告的重置时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:295
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Reset request in progress"
 msgstr "重置请求进行中"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:306
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
 #, elixir-autogen, elixir-format
 msgid "Reset was not applied"
 msgstr "重置未生效"
@@ -16913,12 +16913,12 @@ msgstr "可通过服务商额度路由"
 msgid "Routing while refreshing"
 msgstr "刷新期间可路由"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:237
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:238
 #, elixir-autogen, elixir-format
 msgid "Saved resets not reported"
 msgstr "未报告已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:236
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:237
 #, elixir-autogen, elixir-format
 msgid "Saved resets unavailable"
 msgstr "已保存的重置不可用"
@@ -16928,17 +16928,17 @@ msgstr "已保存的重置不可用"
 msgid "Schedule"
 msgstr "计划"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:95
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:96
 #, elixir-autogen, elixir-format
 msgid "Scheduled · last call"
 msgstr "定时 · 最后机会"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:83
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:84
 #, elixir-autogen, elixir-format
 msgid "Scheduled · long-window quota exhausted"
 msgstr "定时 · 长窗口配额已耗尽"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:89
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:90
 #, elixir-autogen, elixir-format
 msgid "Scheduled · quota threshold"
 msgstr "定时 · 配额阈值"
@@ -16968,53 +16968,53 @@ msgstr "状态：%{state}"
 msgid "Stored invitation email language"
 msgstr "已保存的邀请邮件语言"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:276
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
 #, elixir-autogen, elixir-format
 msgid "The new quota cycle is confirmed."
 msgstr "新的配额周期已确认。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
 #, elixir-autogen, elixir-format
 msgid "The provider applied the reset."
 msgstr "服务商已应用重置。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
 #, elixir-autogen, elixir-format
 msgid "The provider found no exhausted quota to reset."
 msgstr "服务商未发现需要重置的已耗尽配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:304
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "The provider had no saved reset to apply."
 msgstr "服务商没有可应用的已保存的重置。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:337
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:349
 #, elixir-autogen, elixir-format
 msgid "The provider reported that the reset was not applied."
 msgstr "服务商报告重置未生效。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:341
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:353
 #, elixir-autogen, elixir-format
 msgid "The request may have reached the provider. Don't redeem again until this resolves."
 msgstr "请求可能已到达服务商。在结果明确之前，请勿再次兑换。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:306
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:336
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:348
 #, elixir-autogen, elixir-format
 msgid "The request stopped before reaching the provider."
 msgstr "请求在到达服务商之前已停止。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:357
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Reconnect to see the latest status before acting."
 msgstr "重置仍在继续。请重新连接，查看最新状态后再操作。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:359
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Refresh reads the stored status."
 msgstr "重置仍在继续。刷新将读取已存储的状态。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:278
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
 #, elixir-autogen, elixir-format
 msgid "The reset was applied, but quota is still blocked. No further reset is spent automatically."
 msgstr "重置已生效，但配额仍被阻止。不会再自动消耗重置。"
@@ -17059,7 +17059,7 @@ msgstr "上游模型范围"
 msgid "Usage API"
 msgstr "用量 API"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:358
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
 #, elixir-autogen, elixir-format
 msgid "Usage polling is paused or unavailable, so confirmation can take longer."
 msgstr "用量轮询已暂停或不可用，因此确认可能需要更长时间。"
@@ -17094,17 +17094,17 @@ msgstr "请等待熔断恢复完成后再使用受影响的路由。"
 msgid "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."
 msgstr "正在等待使用套餐内配额的请求确认重置。使用服务商额度付费的请求不计入确认。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:287
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Waiting for a usage report to confirm the new quota."
 msgstr "正在等待用量报告确认新配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:285
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "Waiting for the latest quota check."
 msgstr "正在等待最新的配额检查结果。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:295
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Waiting for the provider's answer."
 msgstr "正在等待服务商答复。"
@@ -17281,12 +17281,12 @@ msgstr "导入准备后凭据已更改；请重新提交当前授权数据"
 msgid "current"
 msgstr "当前"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:157
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:158
 #, elixir-autogen, elixir-format
 msgid "deleted accounts cannot redeem saved resets"
 msgstr "已删除的账号无法兑换已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:160
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:161
 #, elixir-autogen, elixir-format
 msgid "disabled accounts cannot redeem saved resets"
 msgstr "已禁用的账号无法兑换已保存的重置"
@@ -17393,7 +17393,7 @@ msgstr "模型目录同步意外失败"
 msgid "model list request failed with %{status}"
 msgstr "模型列表请求失败，状态为 %{status}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:179
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:180
 #, elixir-autogen, elixir-format
 msgid "no saved resets are available"
 msgstr "没有可用的已保存的重置"
@@ -17530,28 +17530,28 @@ msgstr "重置未确认"
 msgid "resets %{timestamp}"
 msgstr "重置时间 %{timestamp}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:177
 #, elixir-autogen, elixir-format
 msgid "saved reset count is not reported"
 msgstr "未报告已保存的重置数量"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:166
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:167
 #, elixir-autogen, elixir-format
 msgid "saved reset redemption requires a Pool assignment"
 msgstr "兑换已保存的重置需要 Pool 分配"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:163
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:164
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:895
 #, elixir-autogen, elixir-format
 msgid "saved reset redemption requires usable credentials"
 msgstr "兑换已保存的重置需要可用的凭据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:148
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:149
 #, elixir-autogen, elixir-format
 msgid "saved reset request is already accepted"
 msgstr "已保存的重置请求已接受"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:149
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:150
 #, elixir-autogen, elixir-format
 msgid "saved reset request status is unavailable"
 msgstr "已保存的重置请求状态不可用"
@@ -17587,23 +17587,23 @@ msgstr "已存储的账号 ID sha256:%{fingerprint}"
 msgid "succeeded %{time}"
 msgstr "已成功 %{time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:151
 #, elixir-autogen, elixir-format
 msgid "the last saved reset is still in progress"
 msgstr "上次已保存的重置仍在进行中"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:151
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:200
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:152
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:201
 #, elixir-autogen, elixir-format
 msgid "the last saved reset is unresolved; another redemption waits until it resolves"
 msgstr "上次已保存的重置尚未解决；再次兑换需等待其解决"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:195
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:196
 #, elixir-autogen, elixir-format
 msgid "the last saved reset was applied and quota is still blocked; another redemption waits until a usage report shows quota recovered"
 msgstr "上次已保存的重置已生效，但配额仍被阻止；再次兑换需等待用量报告显示配额已恢复"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:198
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:199
 #, elixir-autogen, elixir-format
 msgid "the last saved reset was not confirmed in time; another redemption waits until a usage report shows quota recovered"
 msgstr "上次已保存的重置未及时确认；再次兑换需等待用量报告显示配额已恢复"

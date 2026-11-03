@@ -31,6 +31,86 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
   defp project(record, extra \\ %{}), do: Projection.project(context(Map.put(extra, :redemption, record)))
 
+  defp manual_replacement(phase, count) do
+    consumed = DateTime.add(@now, -2, :day)
+
+    receipt = %{
+      "phase" => "expired",
+      "status" => "failed",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 3,
+      "included_window_descriptors" => [],
+      "started_at" => DateTime.to_iso8601(DateTime.add(consumed, -1, :second)),
+      "consumed_at" => DateTime.to_iso8601(consumed),
+      "deadline_at" => DateTime.to_iso8601(DateTime.add(consumed, 15, :minute)),
+      "finished_at" => DateTime.to_iso8601(DateTime.add(consumed, 16, :minute)),
+      "result" => %{"applied" => true, "code" => "reset"},
+      "provider_replay" => %{"version" => 1, "provider_dispatches" => 1, "endpoint_family" => "chatgpt_api", "scope_fingerprint" => String.duplicate("a", 64)}
+    }
+
+    %{
+      "phase" => phase,
+      "status" => if(phase == "consuming", do: "redeeming", else: "failed"),
+      "trigger_kind" => "admin_manual",
+      "started_at" => DateTime.to_iso8601(@started),
+      "manual_replacement" => %{"version" => 1, "credential_epoch" => 15, "window_id" => Ecto.UUID.generate(), "reset_at" => DateTime.to_iso8601(DateTime.add(@now, 6, :day)), "receipt" => receipt},
+      "provider_replay" => %{"version" => 2, "provider_dispatches" => count}
+    }
+  end
+
+  test "version two manual replacement remains in progress while its provider answer is pending" do
+    result = project(manual_replacement("consuming", 1))
+    assert result.active?
+    assert result.headline == "Reset request in progress"
+    assert result.provider_outcome == :unknown
+    refute Map.has_key?(result, :consumed_at)
+  end
+
+  test "version two zero-dispatch terminal receipt truthfully reports no application" do
+    record = manual_replacement("manual_replacement_not_applied", 0) |> Map.put("result", %{"code" => "consume_not_applied", "applied" => false})
+    result = project(record)
+    assert result.provider_outcome == :not_applied
+    assert result.verification == :not_started
+    assert result.headline == "Reset was not applied"
+    refute result.active?
+    refute result.unresolved?
+    refute Map.has_key?(result, :consumed_at)
+    assert Projection.observe(result, paused?: true).headline == result.headline
+    assert Projection.observe(result, connected?: false).headline == result.headline
+  end
+
+  test "version two definitive provider noops retain their specific outcome" do
+    for {code, headline} <- [{"no_credit", "No saved reset was available"}, {"nothing_to_reset", "Nothing needed resetting"}] do
+      record = manual_replacement("manual_replacement_not_applied", 1) |> Map.put("result", %{"code" => code, "applied" => false})
+      result = project(record)
+      assert result.provider_outcome == :not_applied
+      assert result.headline == headline
+      refute result.active?
+      refute Map.has_key?(result, :consumed_at)
+    end
+  end
+
+  test "version two applied result keeps verification and does not expose its historical context" do
+    record = Map.merge(manual_replacement("consumed_pending_probe", 1), redemption("consumed_pending_probe"))
+    result = project(record)
+    assert result.provider_outcome == :applied
+    assert result.verification == :pending
+    refute Map.has_key?(result, :manual_replacement)
+    refute inspect(result) =~ record["manual_replacement"]["receipt"]["attempt_id"]
+  end
+
+  test "version two replay without a valid bounded context stays unknown" do
+    record = manual_replacement("manual_replacement_not_applied", 0) |> Map.put("result", %{"code" => "consume_not_applied", "applied" => false})
+
+    for invalid <- [nil, %{}, Map.put(record["manual_replacement"], "extra", true), put_in(record["manual_replacement"], ["receipt", "result", "applied"], false)] do
+      result = project(Map.put(record, "manual_replacement", invalid))
+      assert result.provider_outcome == :unknown
+      refute result.headline == "Reset was not applied"
+    end
+
+    assert project(Map.delete(manual_replacement("consuming", 1), "manual_replacement")).headline == "Reset outcome not confirmed"
+  end
+
   @tag :operation_truth_matrix
   test "current applied and recovered results independently preserve quota verification and readiness" do
     for code <- ["reset", "already_redeemed", "target_redeemed"] do

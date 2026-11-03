@@ -24,6 +24,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPooler.Upstreams.SavedResets.CreditLocator
+  alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
@@ -321,11 +322,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     started_at = parse_datetime(redemption["started_at"])
 
     with %{
-           "version" => 1,
+           "version" => version,
            "endpoint_family" => endpoint_family,
            "scope_fingerprint" => scope_fingerprint,
            "provider_dispatches" => provider_dispatches
          } <- replay,
+         true <- replay_version_supported?(redemption, version, now),
          true <-
            is_integer(provider_dispatches) and
              provider_dispatches in 0..@maximum_provider_dispatches do
@@ -484,7 +486,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp settle_consume_not_applied!(identity, assignment, redemption, expected, now) do
-    phase = RedemptionLifecycle.consume_not_applied()
+    phase = if Map.has_key?(redemption, "manual_replacement"), do: RedemptionLifecycle.manual_replacement_not_applied(), else: RedemptionLifecycle.consume_not_applied()
 
     if RedemptionLifecycle.can_transition?(
          redemption,
@@ -498,7 +500,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         |> Map.put("phase", phase)
         |> Map.put("finished_at", DateTime.to_iso8601(now))
         |> Map.put("result", %{
-          "code" => phase,
+          "code" => RedemptionLifecycle.consume_not_applied(),
           "applied" => false,
           "available_count_before" => nil,
           "available_count_after" => nil,
@@ -858,6 +860,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     metadata = identity.metadata || %{}
     redemption = metadata["saved_reset_redemption"] || %{}
     replay = redemption["provider_replay"] || %{}
+    {identity, redemption, manual_context_check} = restore_recovery_manual_context(identity, redemption, recovery)
+    metadata = identity.metadata || %{}
 
     # Provider I/O (the credit list) can straddle both the replay cutoff and
     # the dispatch schedule between the entry timestamp and this reservation:
@@ -871,10 +875,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          true <- identity.status == @identity_active,
          true <- bound_recovery_attempt?(redemption, recovery),
          true <- replay["provider_dispatches"] == recovery.provider_dispatches,
+         :ok <- manual_context_check,
          true <- replay["provider_dispatches"] < @maximum_provider_dispatches,
          true <- before_replay_cutoff?(redemption, reservation_now),
          {:ok, due_at} <- recovery_replay_due_at(replay),
          true <- DateTime.compare(reservation_now, due_at) != :lt,
+         :ok <- manual_replacement_fence(identity, assignment, redemption, reservation_now),
          {:ok, endpoint_family, consume_url, scope_fingerprint} <-
            provider_scope(identity, assignment, SavedResets.snapshot(identity, reservation_now)),
          true <- endpoint_family == recovery.endpoint_family,
@@ -923,6 +929,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
       {:ok, updated, credit_id}
     else
+      {:noop, "saved_reset_manual_proof_unavailable" = code} ->
+        if replay["provider_dispatches"] == 0 do
+          {:noop, _phase, settled_identity, _assignment} = settle_consume_not_applied!(identity, canonical, redemption, %{attempt_id: recovery.attempt_id, generation: recovery.generation}, reservation_now)
+          {:noop, code, settled_identity, canonical}
+        else
+          {:noop, code, identity, canonical}
+        end
+
       false ->
         recovery_reservation_conflict(identity, canonical, redemption, recovery, reservation_now)
 
@@ -938,6 +952,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     redemption["status"] == "redeeming" and redemption["phase"] == "consuming" and
       redemption["attempt_id"] == recovery.attempt_id and
       redemption["generation"] == recovery.generation
+  end
+
+  defp restore_recovery_manual_context(identity, redemption, recovery) do
+    captured = get_in(recovery.identity.metadata || %{}, ["saved_reset_redemption", "manual_replacement"])
+
+    if is_map(captured) and redemption["manual_replacement"] != captured and
+         exact_recovery_attempt?(redemption, recovery) and persisted_provider_dispatches(redemption) == recovery.provider_dispatches do
+      restored = Map.put(redemption, "manual_replacement", captured)
+      updated = update_redemption_metadata!(identity, identity.metadata, restored)
+      {updated, restored, {:noop, "saved_reset_manual_proof_unavailable"}}
+    else
+      {identity, redemption, :ok}
+    end
   end
 
   defp bound_recovery_attempt?(redemption, recovery) do
@@ -1298,7 +1325,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id),
          :ok <- ensure_identity_usable(identity),
          :ok <- ensure_credentials_usable(identity),
-         :ok <- ensure_saved_reset_available(identity, timestamp, receive_timeout),
+         :ok <- ensure_saved_reset_available(identity, assignment, timestamp, receive_timeout),
          :ok <- ensure_confirmation_descriptors(reset_confirmation_descriptors(identity, timestamp)) do
       {:ok, assignment, identity}
     end
@@ -1456,12 +1483,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp ensure_saved_reset_available(%UpstreamIdentity{} = identity, timestamp, receive_timeout) do
+  defp ensure_saved_reset_available(%UpstreamIdentity{} = identity, assignment, timestamp, receive_timeout) do
     snapshot = SavedResets.snapshot(identity, timestamp)
     redemption = (identity.metadata || %{})["saved_reset_redemption"]
 
     cond do
-      RedemptionLifecycle.blocks_new_redemption?(redemption, timestamp) ->
+      redemption_blocked_for_trigger?(identity, assignment, "admin_manual", timestamp) ->
         {:error,
          lifecycle_error(
            :saved_reset_redemption_in_progress,
@@ -1485,6 +1512,54 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         :ok
     end
   end
+
+  defp redemption_blocked_for_trigger?(identity, assignment, "admin_manual", timestamp) do
+    redemption = (identity.metadata || %{})["saved_reset_redemption"]
+
+    if RedemptionLifecycle.blocks_new_redemption?(redemption, timestamp) do
+      case ManualRedemptionGate.replacement_context(identity, Windows.list_evidence(identity), timestamp) do
+        {:ok, context} -> not manual_replacement_scope_matches?(identity, assignment, context, timestamp)
+        :error -> true
+      end
+    else
+      false
+    end
+  end
+
+  defp redemption_blocked_for_trigger?(identity, _assignment, _trigger, timestamp),
+    do: RedemptionLifecycle.blocks_new_redemption?((identity.metadata || %{})["saved_reset_redemption"], timestamp)
+
+  defp put_manual_replacement_context(claim, identity, "admin_manual", timestamp) do
+    case ManualRedemptionGate.replacement_context(identity, Windows.list_evidence(identity), timestamp) do
+      {:ok, context} -> Map.put(claim, "manual_replacement", context)
+      :error -> claim
+    end
+  end
+
+  defp put_manual_replacement_context(claim, _identity, _trigger, _timestamp), do: claim
+
+  defp manual_replacement_fence(identity, assignment, redemption, timestamp) do
+    case Map.fetch(redemption, "manual_replacement") do
+      :error ->
+        :ok
+
+      {:ok, context} ->
+        if redemption["trigger_kind"] == "admin_manual" and
+             ManualRedemptionGate.context_valid?(identity, Windows.list_evidence(identity), context, timestamp) and
+             manual_replacement_scope_matches?(identity, assignment, context, timestamp),
+           do: :ok,
+           else: {:noop, "saved_reset_manual_proof_unavailable"}
+    end
+  end
+
+  defp manual_replacement_scope_matches?(identity, assignment, %{"receipt" => %{"provider_replay" => replay}}, timestamp) do
+    case provider_scope(identity, assignment, SavedResets.snapshot(identity, timestamp)) do
+      {:ok, family, _url, fingerprint} -> replay["endpoint_family"] == family and replay["scope_fingerprint"] == fingerprint
+      :unsupported -> false
+    end
+  end
+
+  defp manual_replacement_scope_matches?(_identity, _assignment, _context, _timestamp), do: false
 
   defp normalize_gateway_auto_context("gateway_auto", context) do
     case AutoEligibility.normalize_context(context) do
@@ -1650,10 +1725,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     redemption = metadata["saved_reset_redemption"]
 
     cond do
-      # A lifecycle that already consumed a credit (pending, in-flight, expired,
-      # or unrecognized) can never be overridden into a second consumption, not
-      # even by the stale-admin recovery path. Recovery is evidence-only.
-      RedemptionLifecycle.blocks_new_redemption?(redemption, started_at) ->
+      # Only an explicit manual claim may replace the historical empty-binding
+      # defect after an independently confirmed later provider cycle.
+      redemption_blocked_for_trigger?(locked_identity, assignment, trigger_kind, started_at) ->
         Repo.rollback(:redemption_in_progress)
 
       redemption_in_progress_for_trigger?(redemption, started_at, receive_timeout, trigger_kind) ->
@@ -2151,6 +2225,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_scheduled_decision_evidence(scheduled_decision_evidence)
           |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
           |> put_claim_confirmation_resources(metadata["saved_reset_redemption"] || %{}, locked_identity, started_at)
+          |> put_manual_replacement_context(locked_identity, trigger_kind, started_at)
 
         case ensure_confirmation_descriptors(claim["included_window_descriptors"]) do
           :ok -> :ok
@@ -2686,7 +2761,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         metadata = Map.delete(metadata, @redemption_target_key)
 
         replay = %{
-          "version" => 1,
+          "version" => if(Map.has_key?(claim, "manual_replacement"), do: 2, else: 1),
           "endpoint_family" => endpoint_family,
           "scope_fingerprint" => scope_fingerprint,
           "provider_dispatches" => 0,
@@ -2747,6 +2822,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            :ok <- lock_confirmation_windows(claim[:gateway_auto_context]),
            {:ok, locked_assignment} <-
              lock_reservation_assignment(claim.assignment.id, identity.id),
+           :ok <- manual_replacement_fence(identity, locked_assignment, redemption, now()),
            :ok <-
              gateway_auto_reservation_fence(
                identity,
@@ -2861,6 +2937,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # lifecycle phase.
   defp settle_cancelled_reservation!(identity, claim, redemption, code) do
     expected = %{generation: claim.generation, attempt_id: claim.attempt_id}
+    redemption = put_manual_replacement_history(redemption, get_in(claim.identity.metadata, ["saved_reset_redemption"]))
 
     case settle_consume_not_applied!(identity, claim.assignment, redemption, expected, now()) do
       {:noop, _phase, settled_identity, _assignment} ->
@@ -2902,7 +2979,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     descriptors = redemption["included_window_descriptors"]
     captured = get_in(claim.identity.metadata || %{}, ["saved_reset_redemption", "included_window_descriptors"])
 
-    valid_confirmation_descriptors?(descriptors) and descriptors == captured
+    valid_confirmation_descriptors?(descriptors) and descriptors == captured and
+      Map.fetch(redemption, "manual_replacement") == Map.fetch(get_in(claim.identity.metadata || %{}, ["saved_reset_redemption"]) || %{}, "manual_replacement")
   end
 
   defp lock_reservation_assignment(assignment_id, identity_id) do
@@ -2921,7 +2999,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp validate_replay_contract(
          %{
-           "version" => 1,
+           "version" => version,
            "endpoint_family" => endpoint_family,
            "scope_fingerprint" => scope_fingerprint,
            "provider_dispatches" => provider_dispatches
@@ -2929,7 +3007,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          endpoint_family,
          scope_fingerprint
        )
-       when is_integer(provider_dispatches) and provider_dispatches == 0,
+       when version in [1, 2] and is_integer(provider_dispatches) and provider_dispatches == 0,
        do: :ok
 
   defp validate_replay_contract(_replay, _endpoint_family, _scope_fingerprint), do: :error
@@ -3064,8 +3142,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
       |> put_carried_applied_consume(redemption)
       |> put_provider_replay_history(redemption)
+      |> put_manual_replacement_history(redemption)
       |> put_captured_confirmation_resources(redemption)
       |> Map.merge(redemption_lifecycle_fields(finalized_result))
+      |> put_closed_manual_replacement_phase(finalized_result)
       |> put_finalizer_confirmation_metadata(
         finalized_result,
         confirmation_evidence,
@@ -3587,6 +3667,21 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     do: Map.put(base, "provider_replay", replay)
 
   defp put_provider_replay_history(base, _redemption), do: base
+
+  defp put_manual_replacement_history(base, %{"manual_replacement" => context}),
+    do: Map.put(base, "manual_replacement", context)
+
+  defp put_manual_replacement_history(base, _redemption), do: base
+
+  defp put_closed_manual_replacement_phase(%{"manual_replacement" => _context} = redemption, %{applied?: false}),
+    do: Map.merge(redemption, %{"phase" => RedemptionLifecycle.manual_replacement_not_applied(), "status" => "failed"})
+
+  defp put_closed_manual_replacement_phase(redemption, _result), do: redemption
+
+  defp replay_version_supported?(redemption, 1, _timestamp), do: not Map.has_key?(redemption, "manual_replacement")
+
+  defp replay_version_supported?(%{"trigger_kind" => "admin_manual", "manual_replacement" => context}, 2, timestamp), do: ManualRedemptionGate.stored_context_valid?(context, timestamp)
+  defp replay_version_supported?(_redemption, _version, _timestamp), do: false
 
   defp claim_has_reserved_dispatch?(%{reserved_provider_dispatches: reserved})
        when is_integer(reserved) and reserved > 0,

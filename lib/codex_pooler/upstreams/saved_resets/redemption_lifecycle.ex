@@ -19,6 +19,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     * `reblocked` — fresh evidence proved genuine exhaustion, or the outcome was
       a non-consuming failure; the identity is blocked again.
     * `expired` — the bounded window elapsed without confirmation; fail-closed.
+    * `manual_replacement_not_applied` — an exceptional manual replacement did
+      not apply; its historical hold remains, including on older nodes.
 
   The nonterminal phases (`consuming`, `consumed_pending_probe`) project to the
   legacy top-level `status` of `"redeeming"` so that readers written before the
@@ -38,6 +40,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   @reblocked "reblocked"
   @expired "expired"
   @consume_not_applied "consume_not_applied"
+  @manual_replacement_not_applied "manual_replacement_not_applied"
 
   @phases [
     @consuming,
@@ -46,7 +49,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     @confirmed_by_quota,
     @reblocked,
     @expired,
-    @consume_not_applied
+    @consume_not_applied,
+    @manual_replacement_not_applied
   ]
 
   # Nonterminal phases still hold the consume/probe claim: they must block any
@@ -57,7 +61,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     @confirmed_by_quota,
     @reblocked,
     @expired,
-    @consume_not_applied
+    @consume_not_applied,
+    @manual_replacement_not_applied
   ]
 
   # The single bounded post-consume window. Long enough for scheduler
@@ -79,7 +84,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     @confirmed_by_quota => "succeeded",
     @reblocked => "failed",
     @expired => "failed",
-    @consume_not_applied => "failed"
+    @consume_not_applied => "failed",
+    @manual_replacement_not_applied => "failed"
   }
 
   # Allowed compare-and-set transitions. A transition is valid only from one of
@@ -88,7 +94,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   # record: fresh provider evidence may still settle it, otherwise one elapsed
   # confirmation window would disable saved resets on the identity forever.
   @transitions %{
-    @consuming => [@consumed_pending_probe, @reblocked, @expired, @consume_not_applied],
+    @consuming => [@consumed_pending_probe, @reblocked, @expired, @consume_not_applied, @manual_replacement_not_applied],
     @consumed_pending_probe => [
       @confirmed_by_upstream,
       @confirmed_by_quota,
@@ -122,6 +128,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
 
   @spec consume_not_applied() :: phase()
   def consume_not_applied, do: @consume_not_applied
+
+  @spec manual_replacement_not_applied() :: phase()
+  def manual_replacement_not_applied, do: @manual_replacement_not_applied
 
   @spec phases() :: [phase()]
   def phases, do: @phases
@@ -192,14 +201,16 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   """
   @spec blocks_new_redemption?(redemption() | term(), DateTime.t()) :: boolean()
   def blocks_new_redemption?(redemption, %DateTime{} = _now) do
-    case phase(redemption) do
-      @consuming -> true
-      @consumed_pending_probe -> true
-      @reblocked -> consumed_credit?(redemption)
-      @expired -> true
-      :unknown -> true
-      _absent_in_flight_or_settled -> false
-    end
+    unresolved_manual_replacement?(redemption) or
+      case phase(redemption) do
+        @consuming -> true
+        @consumed_pending_probe -> true
+        @reblocked -> consumed_credit?(redemption)
+        @expired -> true
+        @manual_replacement_not_applied -> true
+        :unknown -> true
+        _absent_in_flight_or_settled -> false
+      end
   end
 
   defp consumed_credit?(%{"result" => %{"applied" => true}}), do: true
@@ -252,6 +263,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
           :blocked_awaiting_quota | :cooldown | :clear
   def gateway_auto_latch(redemption, %DateTime{} = now) do
     cond do
+      unresolved_manual_replacement?(redemption) ->
+        :blocked_awaiting_quota
+
       not applied_consume?(redemption) ->
         if within_carried_consume_cooldown?(redemption, now), do: :cooldown, else: :clear
 
@@ -274,6 +288,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
           :blocked_awaiting_quota | :cooldown | :clear
   def gateway_auto_sibling_fence(redemption, %DateTime{} = now) do
     cond do
+      unresolved_manual_replacement?(redemption) ->
+        :blocked_awaiting_quota
+
       within_consume_cooldown?(redemption, now) and applied_consume?(redemption) ->
         :cooldown
 
@@ -293,6 +310,16 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
         :clear
     end
   end
+
+  # A cancelled replacement did not verify or supersede the older applied
+  # receipt. Preserve its automatic hold even after the temporal floor passes.
+  @spec unresolved_manual_replacement?(term()) :: boolean()
+  def unresolved_manual_replacement?(%{"phase" => @manual_replacement_not_applied}), do: true
+
+  def unresolved_manual_replacement?(%{"manual_replacement" => _context} = redemption),
+    do: not applied_consume?(redemption)
+
+  def unresolved_manual_replacement?(_redemption), do: false
 
   @doc """
   The applied-consume timestamp a replacement claim must carry so an
@@ -434,6 +461,12 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   defp allowed_transition?(_redemption, nil, @consuming, _generation, _attempt_id), do: true
   defp allowed_transition?(_redemption, nil, _to_phase, _generation, _attempt_id), do: false
   defp allowed_transition?(_redemption, :unknown, _to_phase, _generation, _attempt_id), do: false
+
+  defp allowed_transition?(redemption, @consuming, @manual_replacement_not_applied, expected_generation, expected_attempt_id) do
+    exact_transition_identity?(redemption, expected_generation, expected_attempt_id) and
+      match?(%{"version" => 2, "provider_dispatches" => 0}, Map.get(redemption, "provider_replay")) and
+      Map.has_key?(redemption, "manual_replacement")
+  end
 
   defp allowed_transition?(
          redemption,

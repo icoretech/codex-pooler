@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
+  alias CodexPooler.Upstreams.SavedResets.CreditLocator
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @worker "CodexPooler.Jobs.SavedResetRedemptionWorker"
@@ -48,6 +50,46 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
 
   for surface <- [:bank, :cockpit] do
     @surface surface
+
+    test "#{surface} a later exhausted cycle permits one manual request without rewriting the expired receipt", context do
+      %{conn: conn, assignment: assignment, pool: pool} = context
+      {identity, original} = historical_redemption(context.identity)
+      view = mount_surface(conn, identity.id, @surface)
+      params = %{"id" => identity.id, "pool-id" => pool.id}
+
+      assert has_element?(view, redeem_control(@surface, identity.id) <> ":not([disabled])")
+      assert has_element?(view, heading(@surface, identity.id), "Quota confirmation timed out")
+      capture_html(@surface, "later-cycle-ready", render(view))
+      render_click(view, "open_saved_reset_redemption_confirmation", params)
+      assert has_element?(view, confirmation(@surface), @confirmation_copy)
+      view |> element(confirm(@surface)) |> render_click()
+
+      assert [job] = jobs(assignment.id)
+      assert job.args["trigger_kind"] == "admin_manual"
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == original
+      assert Repo.reload!(identity).metadata["saved_resets"]["available_count"] == 2
+      assert has_element?(view, heading(@surface, identity.id), "Request accepted")
+      render_click(view, "redeem_saved_reset", params)
+      assert [same_job] = jobs(assignment.id)
+      assert same_job.id == job.id
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == original
+      capture_html(@surface, "later-cycle-queued", render(view))
+      finish_scenario(context.fake, @surface, "later-cycle", %{jobs: 1, repeated_jobs: 1, historical_receipt_unchanged?: true, available_count: 2})
+    end
+
+    for blocker <- [:floating, :no_anchor, :same_cycle, :inflight, :ambiguous, :old_credentials, :old_window_epoch] do
+      @blocker blocker
+
+      test "#{surface} historical receipt with #{blocker} evidence keeps manual redemption disabled", context do
+        {identity, _original} = historical_redemption(context.identity, @blocker)
+        view = mount_surface(context.conn, identity.id, @surface)
+        assert has_element?(view, redeem_control(@surface, identity.id) <> "[disabled]")
+        render_click(view, "open_saved_reset_redemption_confirmation", %{"id" => identity.id, "pool-id" => context.pool.id})
+        refute has_element?(view, confirmation(@surface))
+        assert jobs(context.assignment.id) == []
+        finish_scenario(context.fake, @surface, "historical-#{@blocker}", %{jobs: 0, manual_disabled?: true})
+      end
+    end
 
     for {locale, message} <- [
           {"en", "Quota details are unavailable. No reset was spent. Wait for the next quota check and try again."},
@@ -251,6 +293,54 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
     Repo.all(from job in Oban.Job, where: job.worker == ^@worker and fragment("?->>'pool_upstream_assignment_id'", job.args) == ^assignment_id)
   end
 
+  defp historical_redemption(identity, blocker \\ nil) do
+    now = DateTime.utc_now()
+    consumed_at = DateTime.add(now, -2, :day)
+
+    record = %{
+      "phase" => "expired",
+      "status" => "failed",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 3,
+      "included_window_descriptors" => [],
+      "started_at" => DateTime.to_iso8601(DateTime.add(consumed_at, -1, :second)),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => DateTime.to_iso8601(DateTime.add(consumed_at, 15, :minute)),
+      "finished_at" => DateTime.to_iso8601(DateTime.add(consumed_at, 16, :minute)),
+      "result" => %{"code" => "reset", "applied" => true},
+      "provider_replay" => %{"version" => 1, "provider_dispatches" => 1, "endpoint_family" => "chatgpt_api", "scope_fingerprint" => CreditLocator.scope_fingerprint("chatgpt_api", identity.metadata["usage_base_url"] <> "/backend-api/wham/rate-limit-reset-credits/consume", identity.chatgpt_account_id || "")}
+    }
+
+    record =
+      case blocker do
+        :inflight -> Map.merge(record, %{"phase" => "consuming", "status" => "redeeming", "started_at" => DateTime.to_iso8601(now)})
+        :ambiguous -> Map.delete(record, "result")
+        _other -> record
+      end
+
+    metadata = identity.metadata |> Map.put("credential_epoch", 15) |> Map.put("saved_reset_redemption", record) |> put_in(["saved_resets", "available_count"], 2) |> put_in(["saved_resets", "path_style"], "chatgpt_api") |> put_in(["saved_resets", "usage_path"], "/backend-api/wham/usage")
+    identity = identity |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+    Repo.delete_all(from window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id)
+    reset_at = DateTime.add(now, if(blocker == :same_cycle, do: 4, else: 6), :day)
+
+    for offset <- [-600, -400, -200] do
+      at = DateTime.add(now, offset, :second)
+      assert {:ok, _} = QuotaWindows.record_evidence(identity, %{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, used_percent: Decimal.new(100), reset_at: reset_at, observed_at: at, last_sync_at: at, source: "codex_usage_api", source_precision: "observed", freshness_state: "fresh", metadata: %{"credential_epoch" => 15, "reset_after_seconds" => DateTime.diff(reset_at, at)}}, at)
+    end
+
+    [window] = QuotaWindows.list_evidence(identity)
+    assert CycleConfirmation.selector_valid?(window, DateTime.utc_now())
+
+    window |> Ecto.Changeset.change(metadata: historical_window_metadata(window.metadata, blocker)) |> Repo.update!()
+    identity = if blocker == :old_credentials, do: identity |> Ecto.Changeset.change(metadata: Map.put(identity.metadata, "credential_epoch", 16)) |> Repo.update!(), else: identity
+    {identity, record}
+  end
+
+  defp historical_window_metadata(metadata, :floating), do: Map.put(metadata, "reset_state", "floating")
+  defp historical_window_metadata(metadata, :no_anchor), do: Map.delete(metadata, "__quota_cycle_confirmation_v1")
+  defp historical_window_metadata(metadata, :old_window_epoch), do: Map.put(metadata, "credential_epoch", 14)
+  defp historical_window_metadata(metadata, _blocker), do: metadata
+
   defp redeem_control(:bank, _identity_id), do: "#saved-reset-redemption-action"
   defp redeem_control(:cockpit, identity_id), do: "#cockpit-redeem-saved-reset-upstream-account-#{identity_id}"
 
@@ -269,7 +359,9 @@ defmodule CodexPoolerWeb.Admin.SavedResetSubmissionWorkflowTest do
 
       directory ->
         File.mkdir_p!(directory)
-        File.write!(Path.join(directory, "#{surface}-#{scenario}.html"), html)
+        operations = html |> LazyHTML.from_document() |> LazyHTML.query("[data-role='saved-reset-operation']")
+        facts = %{provider_outcomes: LazyHTML.attribute(operations, "data-provider-outcome"), verification_states: LazyHTML.attribute(operations, "data-verification-state")}
+        File.write!(Path.join(directory, "#{surface}-#{scenario}-render.json"), Jason.encode!(facts, pretty: true))
     end
   end
 

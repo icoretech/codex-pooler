@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
 
   alias CodexPooler.Quotas.{CapacityFacts, Evidence}
   alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, CapacityFactsStore, RoutingQuotaSnapshot, WindowSelector}
+  alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
 
   @reset_rounding_seconds 5
@@ -34,7 +35,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
          %{"code" => code} when code in ["reset", "already_redeemed", "target_redeemed"] <- redemption["result"],
          generation when is_integer(generation) and generation > 0 <- redemption["generation"],
          {:ok, _attempt_id} <- Ecto.UUID.cast(redemption["attempt_id"]),
-         %{"version" => 1, "provider_dispatches" => dispatches} when dispatches in 1..6 <- redemption["provider_replay"],
+         %{"version" => version, "provider_dispatches" => dispatches} when dispatches in 1..6 <- redemption["provider_replay"],
+         true <- valid_replay_version?(redemption, version, as_of),
          {:ok, consumed_at, _offset} <- parse_datetime(redemption["consumed_at"]),
          {:ok, finished_at, _offset} <- parse_datetime(redemption["finished_at"]),
          true <- DateTime.compare(consumed_at, finished_at) != :gt and DateTime.compare(finished_at, as_of) != :gt,
@@ -48,6 +50,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
   end
 
   defp confirmed_reset(_snapshot), do: :error
+
+  defp valid_replay_version?(_redemption, 1, _as_of), do: true
+
+  defp valid_replay_version?(%{"trigger_kind" => "admin_manual", "manual_replacement" => context}, 2, as_of),
+    do: ManualRedemptionGate.stored_context_valid?(context, as_of)
+
+  defp valid_replay_version?(_redemption, _version, _as_of), do: false
 
   defp included_permission?(%{capacity_facts: %CapacityFacts{included_permission: :available, denial_category: :none} = facts} = snapshot, consumed_at) do
     CapacityFactsStore.fresh?(facts, snapshot.credential_epoch, snapshot.as_of) and

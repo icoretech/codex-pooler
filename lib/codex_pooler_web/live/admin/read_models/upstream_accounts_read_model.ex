@@ -503,7 +503,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       reauth_required?: reauth_required?(identity),
       reauth_reason_code: reauth_reason_code(identity),
       reauth_reason_message: reauth_reason_message(identity),
-      saved_resets: SavedResetProjection.snapshot(identity, datetime_preferences),
+      saved_resets: SavedResetProjection.snapshot(identity, datetime_preferences, raw_quota_windows, snapshot_at),
       saved_reset_policy: SavedResetProjection.policy(identity),
       saved_reset_confirmation:
         QuotaProjection.saved_reset_confirmation(
