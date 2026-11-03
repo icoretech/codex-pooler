@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :backend_image_proxy_surface,
-      contract: "backend image generation and edit routes are explicit authenticated JSON proxy routes under /backend-api/codex/images; on either exact native route, any policy-authorized effective image model genuinely absent from the Pool catalog may use eligible visible host capacity while preserving that effective identifier exactly, but catalog-present invisible targets remain invalid; image-specific prompt and source fields stay intact, and the native routes remain distinct from the public /v1 image translator surface"
+      contract: "backend image generation and edit routes are explicit authenticated JSON proxy routes under /backend-api/codex/images; on either exact native route, any policy-authorized effective image model genuinely absent from the Pool catalog may use eligible visible host capacity while preserving that effective identifier exactly, but catalog-present invisible targets remain invalid; image-specific prompt and source fields stay intact, native output_format gif and independently optional numeric frame_count/frame_duration_ms stay unchanged without injected controls or n, and JSON b64_json animation bytes are relayed unchanged; Full/Lite host selection does not rewrite native image options, and the native routes remain distinct from the public /v1 image translator surface"
     },
     %{
       slug: :backend_models_etag,
@@ -1435,6 +1435,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       auth: "required_bearer_api_key",
       default_enabled: true,
       route_class: "proxy_http",
+      animated_output: %{
+        output_format: "gif",
+        controls: ["frame_count", "frame_duration_ms"],
+        omitted_controls: :preserved_as_absent,
+        response: :unchanged_base64_json,
+        serving_modes: ["full", "lite"],
+        public_v1_schema: :separate
+      },
       routes: [
         "/backend-api/codex/images/generations",
         "/backend-api/codex/images/edits"
