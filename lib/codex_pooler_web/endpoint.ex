@@ -90,7 +90,10 @@ defmodule CodexPoolerWeb.Endpoint do
 
   defp parse_body(conn, _opts) do
     opts = if RuntimeIngress.authenticated_multipart_media_request?(conn), do: @media_parser_opts, else: @ordinary_parser_opts
-    Plug.Parsers.call(conn, opts)
+
+    conn
+    |> Plug.Parsers.call(opts)
+    |> RuntimeIngress.handle_body_read_timeout()
   rescue
     error in [Plug.Parsers.ParseError, Plug.Parsers.RequestTooLargeError, Plug.Conn.InvalidQueryError] ->
       case RuntimeIngress.handle_parser_error(conn, error) do

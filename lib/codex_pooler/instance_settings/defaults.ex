@@ -49,6 +49,7 @@ defmodule CodexPooler.InstanceSettings.Defaults do
       "max_compressed_body_bytes" => settings.max_compressed_body_bytes,
       "max_decompressed_body_bytes" => settings.max_decompressed_body_bytes,
       "max_decompression_ratio" => settings.max_decompression_ratio,
+      "body_read_timeout_ms" => settings.body_read_timeout_ms,
       "decompression_timeout_ms" => settings.decompression_timeout_ms
     }
   end

@@ -80,6 +80,7 @@ __pycache__/
 .desloppify/
 scorecard.png
 .omo/
+.sisyphus/
 output/
 outputs/
 .claude/

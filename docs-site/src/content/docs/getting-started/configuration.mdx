@@ -201,9 +201,26 @@ that request.
 
 Compressed JSON ingress is enabled for `gzip`, `deflate`, and `zstd` when runtime
 support is available. New installations default to 128 MiB compressed, 256 MiB decompressed, a
-200:1 expansion ratio, and a 10-second decode timeout. Tune these four values and
+200:1 expansion ratio, and a 10-second decompression timeout. Tune these limits and
 the algorithm list together. Multipart uploads are not decompressed here; file,
 audio, and image routes keep their own route-specific limits.
+
+**Body read timeout (ms)** (`ingress.body_read_timeout_ms`) separately controls
+HTTP JSON body reception, including compressed bodies and MCP requests. It defaults
+to `15000` on new installations. Each socket read collects at most 64 KiB within
+that budget; it is not a deadline for the entire upload. **Decompression timeout
+(ms)** (`ingress.decompression_timeout_ms`) controls decoding after the compressed
+body has arrived. Existing installations without a saved body-read setting inherit
+their saved decompression timeout as the initial body-read value, preserving the
+operator's upload allowance.
+
+Runtime API body-read timeouts return HTTP `408` with `request_body_read_timeout`;
+MCP uses HTTP `408` with its JSON-RPC invalid-request envelope. The incomplete HTTP
+connection closes before upstream dispatch. To allow more time for body
+reception, change **Body read timeout (ms)** on **System > Firewall** while retaining
+the byte, expansion-ratio, and decompression limits. New requests use the saved
+value across replicas without restarting. These settings do not control upstream
+generation time, multipart uploads, or websocket frame reception.
 
 An image-heavy Codex history can exceed the byte limit before token-based
 compaction starts. Retrying the same body, or compacting with that same history,

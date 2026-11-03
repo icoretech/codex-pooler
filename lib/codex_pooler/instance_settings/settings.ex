@@ -79,6 +79,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :max_compressed_body_bytes, :integer
       field :max_decompressed_body_bytes, :integer
       field :max_decompression_ratio, :integer
+      field :body_read_timeout_ms, :integer
       field :decompression_timeout_ms, :integer
     end
 
@@ -195,6 +196,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
         db_available?: db_available?,
         secrets_available?: db_available?,
         gateway: default_gateway(settings.gateway),
+        ingress: default_ingress(settings.ingress),
         catalog: default_catalog(settings.catalog),
         development: default_development(settings.development),
         metrics: mark_metrics_status(settings.metrics, source),
@@ -317,6 +319,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp ingress_changeset(ingress, attrs) do
     ingress
+    |> default_ingress()
     |> cast(attrs, [
       :firewall_allowlist,
       :trusted_proxies,
@@ -326,6 +329,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :max_compressed_body_bytes,
       :max_decompressed_body_bytes,
       :max_decompression_ratio,
+      :body_read_timeout_ms,
       :decompression_timeout_ms
     ])
     |> validate_required([
@@ -336,6 +340,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :max_compressed_body_bytes,
       :max_decompressed_body_bytes,
       :max_decompression_ratio,
+      :body_read_timeout_ms,
       :decompression_timeout_ms
     ])
     |> validate_change(:firewall_allowlist, &validate_cidr_rules/2)
@@ -349,6 +354,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_positive_integer(:max_compressed_body_bytes)
     |> validate_positive_integer(:max_decompressed_body_bytes)
     |> validate_positive_integer(:max_decompression_ratio)
+    |> validate_positive_integer(:body_read_timeout_ms)
     |> validate_positive_integer(:decompression_timeout_ms)
   end
 
@@ -729,6 +735,13 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> Enum.reject(fn {_field, value} -> is_nil(value) end)
     |> Map.new()
   end
+
+  # Existing ingress rows used the decompression timeout for uploads as well.
+  # Keep that saved policy until an operator chooses a separate body timeout.
+  defp default_ingress(%{body_read_timeout_ms: nil} = ingress),
+    do: %{ingress | body_read_timeout_ms: ingress.decompression_timeout_ms}
+
+  defp default_ingress(ingress), do: ingress
 
   defp default_catalog(nil), do: default().catalog
 

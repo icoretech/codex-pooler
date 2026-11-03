@@ -10,7 +10,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias CodexPoolerWeb.GatewayControllerHelpers
   alias CodexPoolerWeb.Mcp.Authentication
   alias CodexPoolerWeb.Plugs.BackendFilesMultipartGuard
-  alias CodexPoolerWeb.Plugs.RuntimeIngress.{CompressedBody, Firewall, Path}
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.{BodyReader, CompressedBody, Firewall, Path}
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
   alias CodexPoolerWeb.V1.UnsupportedRoutes
   alias Plug.Conn.Query
@@ -92,6 +92,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   def handle_parser_error(conn, %Plug.Parsers.RequestTooLargeError{}) do
+    conn = put_resp_header(conn, "connection", "close")
+
     case {Path.fetch(conn).scope, Enum.any?(get_req_header(conn, "content-type"), &json_content_type?/1)} do
       {:passthrough, _json?} ->
         :unhandled
@@ -105,6 +107,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         send_scoped_parser_error(conn, 413, "request_too_large", "request body is too large", -32_600)
     end
   end
+
+  @spec handle_body_read_timeout(Plug.Conn.t()) :: Plug.Conn.t()
+  def handle_body_read_timeout(%Plug.Conn{private: %{codex_pooler_body_read_timeout: true}} = conn) do
+    error = BodyReader.timeout_error()
+    {:ok, conn} = send_scoped_parser_error(conn, error.status, error.code, error.message, -32_600)
+    conn
+  end
+
+  def handle_body_read_timeout(conn), do: conn
 
   defp send_scoped_parser_error(conn, status, code, message, mcp_code) do
     case Path.fetch(conn).scope do
@@ -247,17 +258,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   defp operational_settings(_conn), do: OperationalSettings.current()
 
   defp read_mcp_body(conn, settings) do
-    read_opts = [
-      length: settings.max_decompressed_body_bytes,
-      read_length: settings.max_decompressed_body_bytes,
-      read_timeout: settings.decompression_timeout_ms
-    ]
+    timeout_ms = Map.get(settings, :body_read_timeout_ms) || settings.decompression_timeout_ms
 
-    case Plug.Conn.read_body(conn, read_opts) do
+    case BodyReader.read(conn, settings.max_decompressed_body_bytes, timeout_ms) do
       {:ok, body, conn} -> {:ok, body, conn}
       {:more, _partial, conn} -> {:error, 413, -32_600, "request body is too large", conn}
-      {:error, :timeout} -> {:error, 408, -32_600, "request body read timed out"}
-      {:error, _reason} -> {:error, 400, -32_600, "request body could not be read"}
+      {:error, :timeout, conn} -> {:error, 408, -32_600, "request body read timed out", conn}
+      {:error, _reason, conn} -> {:error, 400, -32_600, "request body could not be read", conn}
     end
   end
 

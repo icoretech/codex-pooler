@@ -2082,7 +2082,7 @@ msgstr ""
 msgid "Account primary window"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:498
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:499
 #, elixir-autogen, elixir-format
 msgid "Account reconciliation paused"
 msgstr ""
@@ -3212,27 +3212,27 @@ msgstr ""
 msgid "Basics"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:504
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:505
 #, elixir-autogen, elixir-format
 msgid "Bearer token"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:505
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:506
 #, elixir-autogen, elixir-format
 msgid "Bearer token action"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:502
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:503
 #, elixir-autogen, elixir-format
 msgid "Bearer token fingerprint"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:501
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:502
 #, elixir-autogen, elixir-format
 msgid "Bearer token hmac digest"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:503
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:504
 #, elixir-autogen, elixir-format
 msgid "Bearer token key version"
 msgstr ""
@@ -3460,7 +3460,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/model_serving_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:302
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:494
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:495
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/gateway.ex:139
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:385
 #, elixir-autogen, elixir-format
@@ -4655,11 +4655,6 @@ msgstr ""
 msgid "Decompression algorithms"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:482
-#, elixir-autogen, elixir-format
-msgid "Decompression timeout ms"
-msgstr ""
-
 #: lib/codex_pooler_web/datetime_display.ex:122
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:555
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:589
@@ -4840,7 +4835,7 @@ msgstr ""
 msgid "Details"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:496
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:497
 #: lib/codex_pooler_web/live/admin/pages/system_live.ex:570
 #, elixir-autogen, elixir-format
 msgid "Development"
@@ -4952,7 +4947,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components/limits.ex:39
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:282
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:900
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:225
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:231
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:96
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/provider_credits_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:134
@@ -5277,8 +5272,8 @@ msgid "Enable metadata-only MCP access for this operator account and manage labe
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:900
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:225
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:507
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:231
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:508
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/mcp.ex:45
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/provider_credits_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:491
@@ -5727,7 +5722,7 @@ msgstr ""
 msgid "File upload limit"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:483
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:484
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:387
 #, elixir-autogen, elixir-format
 msgid "Files"
@@ -5933,7 +5928,7 @@ msgstr ""
 msgid "Fresh"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:511
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:512
 #, elixir-autogen, elixir-format
 msgid "From"
 msgstr ""
@@ -6117,7 +6112,7 @@ msgstr ""
 msgid "High"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:508
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:509
 #, elixir-autogen, elixir-format
 msgid "Host"
 msgstr ""
@@ -6202,7 +6197,7 @@ msgstr ""
 msgid "Impacted Pool"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:497
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:498
 #, elixir-autogen, elixir-format
 msgid "Impeccable live enabled"
 msgstr ""
@@ -7107,7 +7102,7 @@ msgstr ""
 msgid "Local operator"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:523
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:524
 #, elixir-autogen, elixir-format
 msgid "Lock version"
 msgstr ""
@@ -7136,7 +7131,7 @@ msgstr ""
 msgid "Logged out successfully."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:489
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:490
 #, elixir-autogen, elixir-format
 msgid "Login base url"
 msgstr ""
@@ -7382,12 +7377,12 @@ msgstr ""
 msgid "Max ratio"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:484
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:485
 #, elixir-autogen, elixir-format
 msgid "Max size bytes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:487
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:488
 #, elixir-autogen, elixir-format
 msgid "Max upload bytes"
 msgstr ""
@@ -7429,7 +7424,7 @@ msgstr ""
 msgid "Maximum time allowed to establish a connection to an upstream account."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:499
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:500
 #, elixir-autogen, elixir-format
 msgid "Mcp"
 msgstr ""
@@ -7462,7 +7457,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:135
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/detail_drawer.ex:47
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:522
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:523
 #, elixir-autogen, elixir-format
 msgid "Metadata"
 msgstr ""
@@ -7472,7 +7467,7 @@ msgstr ""
 msgid "Method Not Allowed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:500
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:501
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/metrics.ex:28
 #: lib/codex_pooler_web/live/admin/pages/system_live.ex:567
 #, elixir-autogen, elixir-format
@@ -8852,12 +8847,12 @@ msgstr ""
 msgid "OpenAI-style /v1 compatibility routes."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:495
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:496
 #, elixir-autogen, elixir-format
 msgid "Openai pricing url"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:492
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:493
 #, elixir-autogen, elixir-format
 msgid "Openai status polling enabled"
 msgstr ""
@@ -8878,7 +8873,7 @@ msgstr ""
 msgid "Operations alerts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:488
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:489
 #, elixir-autogen, elixir-format
 msgid "Operator"
 msgstr ""
@@ -9180,7 +9175,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/controllers/user_session_controller.ex:222
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:168
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:519
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:454
 #: lib/codex_pooler_web/live/auth_live/bootstrap.ex:45
 #: lib/codex_pooler_web/live/auth_live/force_password_change.ex:165
@@ -9189,12 +9184,12 @@ msgstr ""
 msgid "Password"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:517
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:518
 #, elixir-autogen, elixir-format
 msgid "Password aad"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:521
 #, elixir-autogen, elixir-format
 msgid "Password action"
 msgstr ""
@@ -9221,7 +9216,7 @@ msgstr ""
 msgid "Password changed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:515
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:516
 #, elixir-autogen, elixir-format
 msgid "Password ciphertext"
 msgstr ""
@@ -9231,12 +9226,12 @@ msgstr ""
 msgid "Password could not be updated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:518
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:519
 #, elixir-autogen, elixir-format
 msgid "Password key version"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:516
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:517
 #, elixir-autogen, elixir-format
 msgid "Password nonce"
 msgstr ""
@@ -9709,7 +9704,7 @@ msgstr ""
 msgid "Poor"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:509
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:510
 #, elixir-autogen, elixir-format
 msgid "Port"
 msgstr ""
@@ -10900,7 +10895,7 @@ msgid "Retired %{time}"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:75
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:514
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:515
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/smtp.ex:128
 #, elixir-autogen, elixir-format
 msgid "Retries"
@@ -12084,7 +12079,7 @@ msgstr ""
 msgid "Signing secret %{status}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:521
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:522
 #, elixir-autogen, elixir-format
 msgid "Singleton"
 msgstr ""
@@ -12094,7 +12089,7 @@ msgstr ""
 msgid "Six-digit code"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:506
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:507
 #, elixir-autogen, elixir-format
 msgid "Smtp"
 msgstr ""
@@ -12132,7 +12127,7 @@ msgstr ""
 msgid "Sse keepalive interval ms"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:512
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:513
 #, elixir-autogen, elixir-format
 msgid "Ssl"
 msgstr ""
@@ -12846,7 +12841,6 @@ msgid "Timeout"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/bulkhead_editor.ex:112
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:184
 #, elixir-autogen, elixir-format
 msgid "Timeout (ms)"
 msgstr ""
@@ -12866,7 +12860,7 @@ msgstr ""
 msgid "Timezone"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:513
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:514
 #, elixir-autogen, elixir-format
 msgid "Tls"
 msgstr ""
@@ -13136,7 +13130,7 @@ msgstr ""
 msgid "Traffic: Last 7 days"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:486
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:487
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:388
 #, elixir-autogen, elixir-format
 msgid "Transcription"
@@ -13485,7 +13479,7 @@ msgstr ""
 msgid "Update unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:524
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:525
 #, elixir-autogen, elixir-format
 msgid "Updated by user"
 msgstr ""
@@ -13559,7 +13553,7 @@ msgstr ""
 msgid "Upload one auth.json file"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:485
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:486
 #, elixir-autogen, elixir-format
 msgid "Upload ttl seconds"
 msgstr ""
@@ -13991,7 +13985,7 @@ msgstr ""
 msgid "User"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:510
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:511
 #, elixir-autogen, elixir-format
 msgid "Username"
 msgstr ""
@@ -18757,4 +18751,16 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:149
 #, elixir-autogen, elixir-format
 msgid "Recently recovered"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:184
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:482
+#, elixir-autogen, elixir-format
+msgid "Body read timeout (ms)"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:190
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:483
+#, elixir-autogen, elixir-format
+msgid "Decompression timeout (ms)"
 msgstr ""

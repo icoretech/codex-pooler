@@ -60,6 +60,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.max_compressed_body_bytes == 128 * 1024 * 1024
     assert settings.max_decompressed_body_bytes == 256 * 1024 * 1024
     assert settings.max_decompression_ratio == 200
+    assert settings.body_read_timeout_ms == 15_000
     assert settings.decompression_timeout_ms == 10_000
     refute settings.gateway_debug?
     assert settings.bulkheads["file_upload"].max_concurrency > 0
@@ -132,6 +133,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
                  "max_compressed_body_bytes" => 2048,
                  "max_decompressed_body_bytes" => 4096,
                  "max_decompression_ratio" => 12,
+                 "body_read_timeout_ms" => 1_250,
                  "decompression_timeout_ms" => 250
                },
                "gateway" => %{
@@ -173,6 +175,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.max_compressed_body_bytes == 2048
     assert settings.max_decompressed_body_bytes == 4096
     assert settings.max_decompression_ratio == 12
+    assert settings.body_read_timeout_ms == 1_250
     assert settings.decompression_timeout_ms == 250
     assert settings.gateway_debug?
     assert settings.sse_keepalive_interval_ms == 0
@@ -502,6 +505,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.decompression_algorithms == ["gzip", "deflate", "zstd"]
     assert settings.max_compressed_body_bytes == 128 * 1024 * 1024
     assert settings.max_decompressed_body_bytes == 256 * 1024 * 1024
+    assert settings.body_read_timeout_ms == 15_000
     assert settings.decompression_timeout_ms == 10_000
     assert settings.bulkheads["proxy_control"].max_concurrency == 8
   end

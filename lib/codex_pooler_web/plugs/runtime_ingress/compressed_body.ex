@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
 
   import Plug.Conn
 
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.BodyReader
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
 
@@ -33,6 +34,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
           required(:max_decompressed_body_bytes) => pos_integer(),
           required(:max_decompression_ratio) => pos_integer(),
           required(:decompression_timeout_ms) => pos_integer(),
+          optional(:body_read_timeout_ms) => pos_integer(),
           optional(atom()) => term()
         }
   @type read_result ::
@@ -50,13 +52,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
   def read_plain_json_body(conn, opts) do
     settings = Map.fetch!(conn.private, @settings_private_key)
 
-    read_opts =
-      opts
-      |> Keyword.put(:length, settings.max_decompressed_body_bytes)
-      |> Keyword.put(:read_length, settings.max_decompressed_body_bytes)
-      |> Keyword.put(:read_timeout, settings.decompression_timeout_ms)
+    timeout_ms = Map.get(settings, :body_read_timeout_ms) || settings.decompression_timeout_ms
 
-    Plug.Conn.read_body(conn, read_opts)
+    case BodyReader.read(conn, settings.max_decompressed_body_bytes, timeout_ms, opts) do
+      # Preserve the updated connection and before-send callbacks until the
+      # endpoint sends the scoped timeout response after parser completion.
+      {:error, :timeout, conn} -> {:ok, "", conn}
+      {:error, reason, _conn} -> {:error, reason}
+      result -> result
+    end
   end
 
   @spec decode(Plug.Conn.t(), settings()) :: decode_result()
@@ -129,42 +133,19 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
   end
 
   defp read_compressed_body(conn, settings) do
-    read_compressed_body(conn, settings, [], 0)
-  end
+    timeout_ms = Map.get(settings, :body_read_timeout_ms) || settings.decompression_timeout_ms
 
-  defp read_compressed_body(conn, settings, acc, total_bytes) do
-    remaining_bytes = settings.max_compressed_body_bytes - total_bytes
-
-    if remaining_bytes <= 0 do
-      compressed_body_too_large(conn, settings)
-    else
-      read_opts = [
-        length: remaining_bytes,
-        read_length: min(remaining_bytes, 1_000_000),
-        read_timeout: settings.decompression_timeout_ms
-      ]
-
-      read_compressed_body_chunk(conn, settings, acc, total_bytes, read_opts)
-    end
-  end
-
-  defp read_compressed_body_chunk(conn, settings, acc, total_bytes, read_opts) do
-    case Plug.Conn.read_body(conn, read_opts) do
+    case BodyReader.read(conn, settings.max_compressed_body_bytes, timeout_ms) do
       {:ok, body, conn} ->
-        {:ok, IO.iodata_to_binary(Enum.reverse([body | acc])), conn}
+        {:ok, body, conn}
 
-      {:more, body, conn} ->
-        read_compressed_body(conn, settings, [body | acc], total_bytes + byte_size(body))
+      {:more, _body, conn} ->
+        compressed_body_too_large(conn, settings)
 
-      {:error, :timeout} ->
-        {:error,
-         %{
-           status: 408,
-           code: "request_decompression_timeout",
-           message: "request body decompression timed out"
-         }, conn}
+      {:error, :timeout, conn} ->
+        {:error, BodyReader.timeout_error(), conn}
 
-      {:error, _reason} ->
+      {:error, _reason, conn} ->
         {:error, %{status: 400, code: "invalid_request", message: "request body could not be read"}, conn}
     end
   end

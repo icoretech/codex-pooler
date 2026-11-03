@@ -516,6 +516,29 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
   end
 
   describe "MCP admission" do
+    @tag :capture_log
+    test "a real body-read timeout returns JSON-RPC, closes keepalive and releases admission", %{conn: conn, user: user} do
+      setup_runtime_ingress(%OperationalSettings{
+        body_read_timeout_ms: 100,
+        decompression_timeout_ms: 5_000,
+        bulkheads: Map.put(OperationalSettings.current().bulkheads, RouteClass.mcp(), %{max_concurrency: 1, queue_limit: 0, queue_timeout_ms: 25})
+      })
+
+      raw_token = enabled_mcp_token!(user)
+      port = start_mcp_method_probe!()
+      response = stalled_mcp_body!(port, raw_token)
+
+      assert response.status == 408
+      assert response.connection == "close"
+      assert response.body == %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32_600, "message" => "request body read timed out"}}
+      assert_receive {:mcp_method_observed, _request, 408}, 5_000
+
+      completed = conn |> authenticated_json_rpc_conn(raw_token) |> post("/mcp", CodexPooler.JSON.encode!(initialize_request()))
+      assert json_response(completed, 200)["result"]["protocolVersion"] == @mcp_version
+      assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
+      assert Repo.aggregate(CodexPooler.Accounting.Attempt, :count) == 0
+    end
+
     test "MCP uses a dedicated local admission lane before controller dispatch", %{conn: conn, user: user} do
       setup_runtime_ingress(%OperationalSettings{
         bulkheads:
@@ -596,6 +619,35 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
     end
   end
 
+  defp stalled_mcp_body!(port, raw_token) do
+    assert {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 2_000)
+    on_exit(fn -> :gen_tcp.close(socket) end)
+
+    try do
+      fields = [{"host", "example.com"}, {"content-type", "application/json"}, {"content-length", "100"}, {"connection", "keep-alive"}, {"authorization", "Bearer " <> raw_token}]
+      request = ["POST /mcp HTTP/1.1\r\n", Enum.map(fields, fn {name, value} -> [name, ": ", value, "\r\n"] end), "\r\n{"]
+      assert :ok = :gen_tcp.send(socket, request)
+      response = receive_closed_mcp_response!(socket, "")
+      [head, body] = String.split(response, "\r\n\r\n", parts: 2)
+      [status_line | headers] = String.split(head, "\r\n", trim: true)
+      [_version, status | _reason] = String.split(status_line, " ")
+      connection = Enum.find_value(headers, fn field -> if String.starts_with?(String.downcase(field), "connection:"), do: field |> String.split(":", parts: 2) |> List.last() |> String.trim() end)
+      %{status: String.to_integer(status), connection: connection, body: CodexPooler.JSON.decode!(body)}
+    after
+      :gen_tcp.close(socket)
+    end
+  end
+
+  defp receive_closed_mcp_response!(socket, acc) do
+    assert byte_size(acc) <= 32_768
+
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, bytes} -> receive_closed_mcp_response!(socket, acc <> bytes)
+      {:error, :closed} -> acc
+      {:error, reason} -> flunk("MCP response did not close: #{inspect(reason)}")
+    end
+  end
+
   defp receive_mcp_headers!(socket, buffer) do
     assert byte_size(buffer) < 32_768
 
@@ -638,6 +690,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
                  "max_compressed_body_bytes" => settings.max_compressed_body_bytes,
                  "max_decompressed_body_bytes" => settings.max_decompressed_body_bytes,
                  "max_decompression_ratio" => settings.max_decompression_ratio,
+                 "body_read_timeout_ms" => settings.body_read_timeout_ms,
                  "decompression_timeout_ms" => settings.decompression_timeout_ms
                },
                "gateway" => %{"bulkheads" => string_keyed_map(settings.bulkheads)}

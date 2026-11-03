@@ -1618,6 +1618,38 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     end
   end
 
+  test "firewall saves independent body-read and decompression timeout controls", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+
+    assert has_element?(view, "label[for='instance-settings-body-read-timeout-ms']", "Body read timeout (ms)")
+    assert has_element?(view, "label[for='instance-settings-decompression-timeout-ms']", "Decompression timeout (ms)")
+    assert has_element?(view, "#instance-settings-body-read-timeout-ms[value='15000']")
+
+    view
+    |> element("#instance-settings-ingress-form")
+    |> render_submit(%{"instance_settings" => %{"ingress" => %{"body_read_timeout_ms" => "42000", "decompression_timeout_ms" => "3000"}}})
+
+    assert InstanceSettings.get!().ingress.body_read_timeout_ms == 42_000
+    assert InstanceSettings.get!().ingress.decompression_timeout_ms == 3_000
+    {:ok, reloaded, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+    assert has_element?(reloaded, "#instance-settings-body-read-timeout-ms[value='42000']")
+    assert has_element?(reloaded, "#instance-settings-decompression-timeout-ms[value='3000']")
+  end
+
+  test "Chinese firewall translates body-read timeout and its validation", %{conn: conn} do
+    {:ok, view, _html} = live(put_locale(conn, "zh-CN"), ~p"/admin/system?#{%{"tab" => "firewall"}}")
+
+    assert has_element?(view, "label[for='instance-settings-body-read-timeout-ms']", "请求体读取超时（ms）")
+    assert has_element?(view, "label[for='instance-settings-decompression-timeout-ms']", "解压超时（ms）")
+
+    view
+    |> element("#instance-settings-ingress-form")
+    |> render_submit(%{"instance_settings" => %{"ingress" => %{"body_read_timeout_ms" => "0"}}})
+
+    assert has_element?(view, "#instance-settings-ingress-errors", "请求体读取超时（ms）")
+    assert InstanceSettings.get!().ingress.body_read_timeout_ms == 15_000
+  end
+
   test "saves and reloads every valid forwarded client policy", %{conn: conn} do
     for {source, depth} <- [
           {"peer", 0},

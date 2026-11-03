@@ -1988,7 +1988,7 @@ msgstr "账号套餐：%{plan}"
 msgid "Account primary window"
 msgstr "账号主配额窗口"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:498
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:499
 #, elixir-autogen, elixir-format
 msgid "Account reconciliation paused"
 msgstr "已暂停账号核对"
@@ -3114,27 +3114,27 @@ msgstr "储备重置到期 — %{label}"
 msgid "Basics"
 msgstr "基础"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:504
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:505
 #, elixir-autogen, elixir-format
 msgid "Bearer token"
 msgstr "Bearer 令牌"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:505
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:506
 #, elixir-autogen, elixir-format
 msgid "Bearer token action"
 msgstr "Bearer 令牌操作"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:502
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:503
 #, elixir-autogen, elixir-format
 msgid "Bearer token fingerprint"
 msgstr "Bearer 令牌指纹"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:501
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:502
 #, elixir-autogen, elixir-format
 msgid "Bearer token hmac digest"
 msgstr "Bearer 令牌 HMAC 摘要"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:503
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:504
 #, elixir-autogen, elixir-format
 msgid "Bearer token key version"
 msgstr "Bearer 令牌密钥版本"
@@ -3362,7 +3362,7 @@ msgstr "排除的候选项"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/model_serving_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:302
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:494
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:495
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/gateway.ex:139
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:385
 #, elixir-autogen, elixir-format
@@ -4557,11 +4557,6 @@ msgstr "调试错误"
 msgid "Decompression algorithms"
 msgstr "解压算法"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:482
-#, elixir-autogen, elixir-format
-msgid "Decompression timeout ms"
-msgstr "解压超时（ms）"
-
 #: lib/codex_pooler_web/datetime_display.ex:122
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:555
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:589
@@ -4741,7 +4736,7 @@ msgstr "桌面客户端"
 msgid "Details"
 msgstr "详情"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:496
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:497
 #: lib/codex_pooler_web/live/admin/pages/system_live.ex:570
 #, elixir-autogen, elixir-format
 msgid "Development"
@@ -4852,7 +4847,7 @@ msgstr "出站访问受限时，请禁用轮询。现有事件历史记录会保
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components/limits.ex:39
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:282
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:900
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:225
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:231
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:96
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/provider_credits_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:134
@@ -5177,8 +5172,8 @@ msgid "Enable metadata-only MCP access for this operator account and manage labe
 msgstr "为此运营者账号启用仅限元数据的 MCP 访问，并管理带标签的 Bearer 令牌。"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:900
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:225
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:507
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:231
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:508
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/mcp.ex:45
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/provider_credits_components.ex:138
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:491
@@ -5623,7 +5618,7 @@ msgstr "文件状态"
 msgid "File upload limit"
 msgstr "文件上传上限"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:483
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:484
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:387
 #, elixir-autogen, elixir-format
 msgid "Files"
@@ -5829,7 +5824,7 @@ msgstr "转发代理层数"
 msgid "Fresh"
 msgstr "新鲜"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:511
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:512
 #, elixir-autogen, elixir-format
 msgid "From"
 msgstr "发件人"
@@ -6013,7 +6008,7 @@ msgstr "隐藏分配给此运营者的 Pool（%{pools}）"
 msgid "High"
 msgstr "高"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:508
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:509
 #, elixir-autogen, elixir-format
 msgid "Host"
 msgstr "主机"
@@ -6098,7 +6093,7 @@ msgstr "可用时"
 msgid "Impacted Pool"
 msgstr "受影响的 Pool"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:497
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:498
 #, elixir-autogen, elixir-format
 msgid "Impeccable live enabled"
 msgstr "启用 Impeccable Live"
@@ -7001,7 +6996,7 @@ msgstr "下次完整加载页面时，从正在运行的本地 Impeccable 辅助
 msgid "Local operator"
 msgstr "本地运营者"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:523
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:524
 #, elixir-autogen, elixir-format
 msgid "Lock version"
 msgstr "锁版本"
@@ -7030,7 +7025,7 @@ msgstr "退出其他会话"
 msgid "Logged out successfully."
 msgstr "已成功退出登录。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:489
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:490
 #, elixir-autogen, elixir-format
 msgid "Login base url"
 msgstr "登录基础 URL"
@@ -7276,12 +7271,12 @@ msgstr "解压比上限"
 msgid "Max ratio"
 msgstr "最大比率"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:484
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:485
 #, elixir-autogen, elixir-format
 msgid "Max size bytes"
 msgstr "大小上限（字节）"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:487
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:488
 #, elixir-autogen, elixir-format
 msgid "Max upload bytes"
 msgstr "上传大小上限（字节）"
@@ -7323,7 +7318,7 @@ msgstr "网关请求等待池中可用连接的最长时间。"
 msgid "Maximum time allowed to establish a connection to an upstream account."
 msgstr "与上游账号建立连接所允许的最长时间。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:499
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:500
 #, elixir-autogen, elixir-format
 msgid "Mcp"
 msgstr "MCP"
@@ -7356,7 +7351,7 @@ msgstr "消息"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:135
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/detail_drawer.ex:47
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:522
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:523
 #, elixir-autogen, elixir-format
 msgid "Metadata"
 msgstr "元数据"
@@ -7366,7 +7361,7 @@ msgstr "元数据"
 msgid "Method Not Allowed"
 msgstr "不允许使用此方法"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:500
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:501
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/metrics.ex:28
 #: lib/codex_pooler_web/live/admin/pages/system_live.ex:567
 #, elixir-autogen, elixir-format
@@ -8741,12 +8736,12 @@ msgstr "OpenAI 状态轮询"
 msgid "OpenAI-style /v1 compatibility routes."
 msgstr "OpenAI 风格的 /v1 兼容路由。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:495
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:496
 #, elixir-autogen, elixir-format
 msgid "Openai pricing url"
 msgstr "OpenAI 定价 URL"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:492
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:493
 #, elixir-autogen, elixir-format
 msgid "Openai status polling enabled"
 msgstr "启用 OpenAI 状态轮询"
@@ -8767,7 +8762,7 @@ msgstr "操作失败"
 msgid "Operations alerts"
 msgstr "运维告警"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:488
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:489
 #, elixir-autogen, elixir-format
 msgid "Operator"
 msgstr "运营者"
@@ -9069,7 +9064,7 @@ msgstr "部分完成"
 
 #: lib/codex_pooler_web/controllers/user_session_controller.ex:222
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:168
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:519
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:454
 #: lib/codex_pooler_web/live/auth_live/bootstrap.ex:45
 #: lib/codex_pooler_web/live/auth_live/force_password_change.ex:165
@@ -9078,12 +9073,12 @@ msgstr "部分完成"
 msgid "Password"
 msgstr "密码"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:517
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:518
 #, elixir-autogen, elixir-format
 msgid "Password aad"
 msgstr "密码 AAD"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:521
 #, elixir-autogen, elixir-format
 msgid "Password action"
 msgstr "密码操作"
@@ -9110,7 +9105,7 @@ msgstr "需要修改密码"
 msgid "Password changed"
 msgstr "密码已更改"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:515
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:516
 #, elixir-autogen, elixir-format
 msgid "Password ciphertext"
 msgstr "密码密文"
@@ -9120,12 +9115,12 @@ msgstr "密码密文"
 msgid "Password could not be updated"
 msgstr "无法更新密码"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:518
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:519
 #, elixir-autogen, elixir-format
 msgid "Password key version"
 msgstr "密码密钥版本"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:516
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:517
 #, elixir-autogen, elixir-format
 msgid "Password nonce"
 msgstr "密码随机数"
@@ -9597,7 +9592,7 @@ msgstr "Pool"
 msgid "Poor"
 msgstr "较差"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:509
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:510
 #, elixir-autogen, elixir-format
 msgid "Port"
 msgstr "端口"
@@ -10784,7 +10779,7 @@ msgid "Retired %{time}"
 msgstr "于 %{time} 停止跟踪"
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:75
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:514
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:515
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/smtp.ex:128
 #, elixir-autogen, elixir-format
 msgid "Retries"
@@ -11966,7 +11961,7 @@ msgstr "签名密钥"
 msgid "Signing secret %{status}"
 msgstr "签名密钥%{status}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:521
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:522
 #, elixir-autogen, elixir-format
 msgid "Singleton"
 msgstr "单例"
@@ -11976,7 +11971,7 @@ msgstr "单例"
 msgid "Six-digit code"
 msgstr "六位代码"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:506
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:507
 #, elixir-autogen, elixir-format
 msgid "Smtp"
 msgstr "SMTP"
@@ -12014,7 +12009,7 @@ msgstr "无需运营者操作即可消耗储备重置；下方卡片决定何时
 msgid "Sse keepalive interval ms"
 msgstr "SSE 保活间隔（ms）"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:512
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:513
 #, elixir-autogen, elixir-format
 msgid "Ssl"
 msgstr "SSL"
@@ -12727,7 +12722,6 @@ msgid "Timeout"
 msgstr "超时"
 
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/bulkhead_editor.ex:112
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:184
 #, elixir-autogen, elixir-format
 msgid "Timeout (ms)"
 msgstr "超时（ms）"
@@ -12747,7 +12741,7 @@ msgstr "保留证据的时间戳；数值可能包含较早的报告"
 msgid "Timezone"
 msgstr "时区"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:513
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:514
 #, elixir-autogen, elixir-format
 msgid "Tls"
 msgstr "TLS"
@@ -13017,7 +13011,7 @@ msgstr "流量：过去 5 小时"
 msgid "Traffic: Last 7 days"
 msgstr "流量：过去 7 天"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:486
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:487
 #: lib/codex_pooler_web/live/observatory/components/activity.ex:388
 #, elixir-autogen, elixir-format
 msgid "Transcription"
@@ -13366,7 +13360,7 @@ msgstr "更新此页面和上游账号列表中显示的运营者标签。"
 msgid "Update unavailable"
 msgstr "更新不可用"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:524
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:525
 #, elixir-autogen, elixir-format
 msgid "Updated by user"
 msgstr "更新用户"
@@ -13440,7 +13434,7 @@ msgstr "上传一个 .json 文件"
 msgid "Upload one auth.json file"
 msgstr "上传一个 auth.json 文件"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:485
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:486
 #, elixir-autogen, elixir-format
 msgid "Upload ttl seconds"
 msgstr "上传 TTL（秒）"
@@ -13872,7 +13866,7 @@ msgstr "使用率阈值"
 msgid "User"
 msgstr "用户"
 
-#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:510
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:511
 #, elixir-autogen, elixir-format
 msgid "Username"
 msgstr "用户名"
@@ -18623,3 +18617,15 @@ msgstr "近期熔断故障"
 #, elixir-autogen, elixir-format
 msgid "Recently recovered"
 msgstr "近期已恢复"
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:184
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:482
+#, elixir-autogen, elixir-format
+msgid "Body read timeout (ms)"
+msgstr "请求体读取超时（ms）"
+
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex:190
+#: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:483
+#, elixir-autogen, elixir-format
+msgid "Decompression timeout (ms)"
+msgstr "解压超时（ms）"

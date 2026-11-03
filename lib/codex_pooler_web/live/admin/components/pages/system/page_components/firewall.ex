@@ -179,9 +179,15 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
       },
       %{
         type: :number,
+        id: "instance-settings-body-read-timeout-ms",
+        field: :body_read_timeout_ms,
+        label: gettext("Body read timeout (ms)")
+      },
+      %{
+        type: :number,
         id: "instance-settings-decompression-timeout-ms",
         field: :decompression_timeout_ms,
-        label: gettext("Timeout (ms)")
+        label: gettext("Decompression timeout (ms)")
       }
     ]
   end

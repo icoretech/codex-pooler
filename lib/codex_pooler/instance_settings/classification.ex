@@ -337,7 +337,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :live,
-      notes: "Runtime ingress plugs can evaluate these limits for each new request body."
+      notes: "Runtime ingress plugs evaluate body-read and decompression timeouts independently for each new request body."
     },
     %{
       key: :expired_alias_ttl,

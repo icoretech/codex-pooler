@@ -333,7 +333,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   # PubSub message, and the scripted repo proves the cache reloaded from it.
   test "a committed postgres notification reloads the cache without a PubSub broadcast" do
     settings = InstanceSettings.current()
-    newer = %{settings | lock_version: settings.lock_version + 7}
+    newer = %{settings | lock_version: settings.lock_version + 7, ingress: %{settings.ingress | body_read_timeout_ms: 27_000}}
     assert %{postgres_listen: %{ref: listen_ref}} = :sys.get_state(Cache)
     assert is_reference(listen_ref)
 
@@ -349,6 +349,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert_receive {Cache, {:applied, ^expected_lock_version}}, 5_000
     assert_received {ScriptedRepo, :get}
     assert InstanceSettings.current().lock_version == expected_lock_version
+    assert InstanceSettings.current().ingress.body_read_timeout_ms == 27_000
   end
 
   test "the cache listens again on the next reconciliation after its notification listener goes down" do

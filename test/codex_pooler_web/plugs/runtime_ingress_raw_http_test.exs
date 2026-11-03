@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
   @max_response_bytes 32_768
   @max_json_bytes 16_384
 
-  setup do
+  setup context do
     previous_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     settings = %OperationalSettings{
@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
 
     {:ok, listener} =
       Bandit.start_link(
-        plug: CodexPoolerWeb.Endpoint,
+        plug: upload_probe(context),
         port: 0,
         ip: {127, 0, 0, 1},
         startup_log: false
@@ -111,6 +111,186 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
       assert List.keymember?(response.headers, "x-request-id", 0)
     end
 
+    assert_no_gateway_side_effects(ctx.upstream)
+  end
+
+  for encoding <- [:identity, :gzip, :deflate] do
+    @tag :capture_log
+    test "#{encoding} incomplete JSON returns a structured body timeout and closes keepalive", ctx do
+      set_body_read_settings(body_read_timeout_ms: 100, decompression_timeout_ms: 100)
+      plain = CodexPooler.JSON.encode!(%{"probe" => "unfinished upload"})
+      body = encode_upload(plain, unquote(encoding))
+
+      response =
+        raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, unquote(encoding)),
+          body: binary_part(body, 0, 1),
+          content_length: byte_size(body),
+          expect_closed: true
+        )
+
+      assert response.status == 408
+      assert json_field(response, ["error", "code"]) == "request_body_read_timeout"
+      assert json_field(response, ["error", "message"]) == "request body read timed out"
+      assert {"connection", " close"} in response.headers
+      assert_no_gateway_side_effects(ctx.upstream)
+    end
+  end
+
+  for {encoding, framing, decompression_timeout} <- [{:identity, :content_length, 500}, {:gzip, :content_length, 500}, {:deflate, :content_length, 500}, {:identity, :chunked, 500}, {:gzip, :chunked, 500}, {:identity, :content_length, 0}] do
+    @tag :capture_log
+    @tag :observe_body_read
+    @tag slow: "paced upload must exceed a 500 ms read budget while completing bounded chunks"
+    test "#{encoding} #{framing} body progresses beyond one read budget with decompression timeout #{decompression_timeout}", ctx do
+      read_timeout = 500
+      set_body_read_settings(body_read_timeout_ms: read_timeout, decompression_timeout_ms: unquote(decompression_timeout))
+      plain = invalid_upload_body()
+      body = encode_upload(plain, unquote(encoding))
+      started = System.monotonic_time(:millisecond)
+
+      response =
+        raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, unquote(encoding)),
+          content_length: byte_size(body),
+          framing: unquote(framing),
+          after_send: fn socket ->
+            assert_receive {:trace, _request, :call, {Plug.Conn, :read_body, 2}}, 5_000
+            send_paced_body(socket, body, unquote(framing))
+          end
+        )
+
+      assert System.monotonic_time(:millisecond) - started > read_timeout
+      assert response.status == 400
+      assert json_field(response, ["error", "code"]) == "invalid_request"
+      assert json_field(response, ["error", "message"]) == parse_error_message(unquote(encoding))
+      assert_no_gateway_side_effects(ctx.upstream)
+    end
+  end
+
+  test "a completed compressed upload retains its distinct decompression timeout", ctx do
+    set_body_read_settings(body_read_timeout_ms: 500, decompression_timeout_ms: 0)
+    body = encode_upload(CodexPooler.JSON.encode!(%{"probe" => "complete upload"}), :gzip)
+
+    response = raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, :gzip), body: body)
+
+    assert response.status == 408
+    assert json_field(response, ["error", "code"]) == "request_decompression_timeout"
+    assert_no_gateway_side_effects(ctx.upstream)
+  end
+
+  for encoding <- [:identity, :gzip, :deflate] do
+    @tag :capture_log
+    test "#{encoding} upload accepts its exact byte limit and rejects one byte over it", ctx do
+      plain = CodexPooler.JSON.encode!(%{"probe" => "exact boundary"}) <> "!"
+      body = encode_upload(plain, unquote(encoding))
+      limit = if unquote(encoding) == :identity, do: :max_decompressed_body_bytes, else: :max_compressed_body_bytes
+      set_body_read_settings([{limit, byte_size(body)}, {:body_read_timeout_ms, 500}])
+
+      exact = raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, unquote(encoding)), body: body)
+      assert exact.status == 400
+      assert json_field(exact, ["error", "message"]) == parse_error_message(unquote(encoding))
+
+      set_body_read_settings([{limit, byte_size(body) - 1}])
+      over = raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, unquote(encoding)), body: body)
+      assert over.status == 413
+
+      assert json_field(over, ["error", "code"]) ==
+               if(unquote(encoding) == :identity, do: "decompressed_request_too_large", else: "compressed_request_too_large")
+
+      assert_no_gateway_side_effects(ctx.upstream)
+    end
+  end
+
+  for encoding <- [:identity, :gzip] do
+    @tag :capture_log
+    test "#{encoding} over-limit partial upload returns 413 and closes without draining", ctx do
+      limit = if unquote(encoding) == :identity, do: :max_decompressed_body_bytes, else: :max_compressed_body_bytes
+      set_body_read_settings([{limit, 100}, {:body_read_timeout_ms, 500}])
+
+      response =
+        raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, unquote(encoding)),
+          body: String.duplicate("a", 101),
+          content_length: 1_000,
+          expect_closed: true
+        )
+
+      assert response.status == 413
+      assert {"connection", " close"} in response.headers
+      assert_no_gateway_side_effects(ctx.upstream)
+    end
+  end
+
+  test "missing credentials reject an incomplete JSON upload before its read budget", ctx do
+    set_body_read_settings(body_read_timeout_ms: 100, decompression_timeout_ms: 100)
+    headers = upload_headers(ctx, :identity) |> List.keydelete("authorization", 0)
+
+    response = raw_request(ctx, "POST", "/v1/responses", headers, content_length: 100)
+
+    assert response.status == 401
+    assert json_field(response, ["error", "code"]) == "api_key_missing"
+    assert_no_gateway_side_effects(ctx.upstream)
+  end
+
+  test "timeout diagnostics report completed chunks without body, credentials or dynamic path data", ctx do
+    set_body_read_settings(body_read_timeout_ms: 100, decompression_timeout_ms: 5_000)
+    body = "private-body-marker" <> String.duplicate(" ", 65_537 - byte_size("private-body-marker"))
+    headers = [{"x-request-id", "raw-http-timeout-probe"} | upload_headers(ctx, :identity)]
+
+    {response, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        raw_request(ctx, "POST", "/backend-api/files/private-file-marker/uploaded?probe=private-query-marker", headers,
+          body: body,
+          content_length: 100_000,
+          expect_closed: true
+        )
+      end)
+
+    assert response.status == 408
+    [diagnostic] = log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "ingress body read timed out"))
+    assert diagnostic =~ "route=/backend-api/files/:file_id/uploaded"
+    assert diagnostic =~ "method=POST"
+    assert diagnostic =~ "request_id=raw-http-timeout-probe"
+    assert diagnostic =~ "content_encoding=identity framing=content_length"
+    assert diagnostic =~ "declared_content_length=100000"
+    assert diagnostic =~ "timeout_ms=100 completed_body_bytes=65536"
+    refute diagnostic =~ "private-body-marker"
+    refute diagnostic =~ "private-file-marker"
+    refute diagnostic =~ "private-query-marker"
+    refute diagnostic =~ ctx.gateway.authorization
+    assert_no_gateway_side_effects(ctx.upstream)
+  end
+
+  test "malformed HTTP chunks retain their protocol failure instead of a body timeout", ctx do
+    set_body_read_settings(body_read_timeout_ms: 100)
+
+    {response, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, :identity),
+          framing: :chunked,
+          after_send: fn socket -> assert :ok = :gen_tcp.send(socket, "not-a-chunk-size\r\n") end,
+          expect_closed: true
+        )
+      end)
+
+    assert response.status == 400
+    refute log =~ "ingress body read timed out"
+    assert_no_gateway_side_effects(ctx.upstream)
+  end
+
+  test "a disconnected body sender is not classified as a body-read timeout", ctx do
+    set_body_read_settings(body_read_timeout_ms: 100)
+
+    {response, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        raw_request(ctx, "POST", "/v1/responses", upload_headers(ctx, :identity),
+          body: "{",
+          content_length: 100,
+          after_send: fn socket -> assert :ok = :gen_tcp.shutdown(socket, :write) end,
+          raw_response: true,
+          expect_closed: :after_write_shutdown
+        )
+      end)
+
+    refute String.starts_with?(response, "HTTP/1.1 408 ")
+    refute log =~ "ingress body read timed out"
     assert_no_gateway_side_effects(ctx.upstream)
   end
 
@@ -334,9 +514,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
       " HTTP/1.1\r\n",
       Enum.map(Keyword.get(opts, :host_fields, [{"host", "127.0.0.1:#{ctx.port}"}]), fn {name, value} -> [name, ": ", value, "\r\n"] end),
       Enum.map(headers, fn {name, value} -> [name, ": ", value, "\r\n"] end),
-      "content-length: ",
-      Integer.to_string(Keyword.get(opts, :content_length, byte_size(body))),
-      "\r\n",
+      upload_framing(opts, body),
       if(List.keymember?(headers, "connection", 0), do: [], else: "connection: close\r\n"),
       "\r\n",
       body
@@ -344,7 +522,23 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
 
     try do
       :ok = :gen_tcp.send(socket, request)
-      socket |> receive_response("") |> parse_response()
+      if after_send = Keyword.get(opts, :after_send), do: after_send.(socket)
+      raw_response = receive_response(socket, "")
+      response = if Keyword.get(opts, :raw_response, false), do: raw_response, else: parse_response(raw_response)
+
+      case Keyword.get(opts, :expect_closed, false) do
+        true ->
+          assert {:error, :closed} = :gen_tcp.recv(socket, 0, @receive_timeout)
+
+        :after_write_shutdown ->
+          assert {:error, reason} = :gen_tcp.recv(socket, 0, @receive_timeout)
+          assert reason in [:closed, :enotconn]
+
+        false ->
+          :ok
+      end
+
+      response
     after
       :gen_tcp.close(socket)
 
@@ -353,6 +547,80 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
       end
     end
   end
+
+  defp set_body_read_settings(overrides) do
+    config = Application.fetch_env!(:codex_pooler, OperationalSettings)
+    settings = config |> Keyword.fetch!(:settings) |> Map.merge(Map.new(overrides))
+    Application.put_env(:codex_pooler, OperationalSettings, Keyword.put(config, :settings, settings))
+  end
+
+  defp upload_probe(%{observe_body_read: true}) do
+    observer = self()
+    Code.ensure_loaded!(Plug.Conn)
+    on_exit(fn -> :erlang.trace_pattern({Plug.Conn, :read_body, 2}, false, [:local]) end)
+    assert :erlang.trace_pattern({Plug.Conn, :read_body, 2}, true, [:local]) == 1
+
+    fn conn, opts ->
+      :erlang.trace(self(), true, [:call, :arity, {:tracer, observer}])
+
+      try do
+        CodexPoolerWeb.Endpoint.call(conn, opts)
+      after
+        :erlang.trace(self(), false, [:call])
+      end
+    end
+  end
+
+  defp upload_probe(_context), do: CodexPoolerWeb.Endpoint
+
+  defp upload_framing(opts, body) do
+    case Keyword.get(opts, :framing, :content_length) do
+      :content_length -> ["content-length: ", Integer.to_string(Keyword.get(opts, :content_length, byte_size(body))), "\r\n"]
+      :chunked -> "transfer-encoding: chunked\r\n"
+    end
+  end
+
+  defp send_paced_body(socket, <<>>, :chunked), do: assert(:ok = :gen_tcp.send(socket, "0\r\n\r\n"))
+  defp send_paced_body(_socket, <<>>, :content_length), do: :ok
+
+  defp send_paced_body(socket, body, framing) do
+    chunk_size = min(byte_size(body), 65_536)
+    <<chunk::binary-size(^chunk_size), remaining::binary>> = body
+    wire = if framing == :chunked, do: [Integer.to_string(chunk_size, 16), "\r\n", chunk, "\r\n"], else: chunk
+    assert :ok = :gen_tcp.send(socket, wire)
+
+    if remaining != <<>> do
+      timer = make_ref()
+      Process.send_after(self(), {:next_upload_chunk, timer}, 200)
+      assert_receive {:next_upload_chunk, ^timer}, 5_000
+    end
+
+    send_paced_body(socket, remaining, framing)
+  end
+
+  defp parse_error_message(:identity), do: "request body could not be parsed"
+  defp parse_error_message(_encoding), do: "request body must be JSON"
+
+  defp invalid_upload_body do
+    bytes = for index <- 1..8_192, into: <<>>, do: :crypto.hash(:sha256, Integer.to_string(index))
+    CodexPooler.JSON.encode!(%{"probe" => Base.encode64(bytes)}) <> "!"
+  end
+
+  defp upload_headers(ctx, encoding) do
+    headers = [
+      {"authorization", ctx.gateway.authorization},
+      {"x-forwarded-for", "198.51.100.20"},
+      {"content-type", "application/json"},
+      {"accept", "application/json"},
+      {"connection", "keep-alive"}
+    ]
+
+    if encoding == :identity, do: headers, else: [{"content-encoding", Atom.to_string(encoding)} | headers]
+  end
+
+  defp encode_upload(body, :identity), do: body
+  defp encode_upload(body, :gzip), do: :zlib.gzip(body)
+  defp encode_upload(body, :deflate), do: :zlib.compress(body)
 
   defp receive_response(socket, acc) when byte_size(acc) <= @max_response_bytes do
     case :gen_tcp.recv(socket, 0, @receive_timeout) do
