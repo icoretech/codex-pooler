@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.14.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.1...codex-pooler-v0.14.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* allow manual resets after historical verification timeouts ([98fadd1](https://github.com/icoretech/codex-pooler/commit/98fadd1db5be9a6e5b35b370acfd65a9f1df37f7))
+* describe pending resets as waiting for quota evidence ([33c6550](https://github.com/icoretech/codex-pooler/commit/33c655021b3a198a83e4ef9b484f99e1f317a653))
+* distinguish recovered circuits from active recovery ([5f678f2](https://github.com/icoretech/codex-pooler/commit/5f678f2e40e74a00971b7d68487a7a9c4cedacd3))
+* separate request-body reads from decompression timeouts ([a4f31c1](https://github.com/icoretech/codex-pooler/commit/a4f31c1b84826978953bfea4f9cbbd6e5be2a5af))
+
+
+### Dependencies
+
+* lock file maintenance ([61dcd2a](https://github.com/icoretech/codex-pooler/commit/61dcd2aaf73fc21ee41afaf5c8e7a24fdcb2a402))
+* update helm release codex-pooler to v0.15.1 ([4c734db](https://github.com/icoretech/codex-pooler/commit/4c734db2d6f8ecf3b922d5bb6f8e041e83fb087d))
+
+
+### Tests
+
+* cover native GIF image requests and animated results ([7388a99](https://github.com/icoretech/codex-pooler/commit/7388a99ee87c05d45c9c1c0341270ff258c12394))
+
 ## [0.14.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.0...codex-pooler-v0.14.1) (2026-10-31)
 
 
