@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
         key: "circuit",
         label: gettext("Circuit"),
         short_label: gettext("Circuit"),
-        detail_label: circuit_label(circuit_readiness.state),
+        detail_label: circuit_label(circuit_readiness),
         ready?: circuit_readiness.ready?,
         tone: circuit_readiness.tone
       }
@@ -125,7 +125,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
 
   defp human_status_label(_value), do: gettext("unknown")
 
-  defp circuit_label(:blocked), do: gettext("Circuit protection active")
-  defp circuit_label(:recovering), do: gettext("Circuit recovery in progress")
-  defp circuit_label(_state), do: gettext("Circuit clear")
+  defp circuit_label(%{state: :blocked}), do: gettext("Circuit protection active")
+  defp circuit_label(%{state: :recovering}), do: gettext("Circuit recovery in progress")
+
+  defp circuit_label(%{state: :recent} = circuit) do
+    status = if Map.get(circuit, :recent_failure_lane_count, 0) > 0, do: gettext("Recent circuit failure"), else: gettext("Recently recovered")
+
+    case Map.get(circuit, :representative) do
+      %{model_identifier: model, route_class: route} -> gettext("%{status}; %{model} via %{route}", status: status, model: model, route: route)
+      _missing -> status
+    end
+  end
+
+  defp circuit_label(_circuit), do: gettext("Circuit clear")
 end

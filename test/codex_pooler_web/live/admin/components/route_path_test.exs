@@ -171,4 +171,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePathTest do
              tone: :success
            }
   end
+
+  test "recent closed circuit history remains ready and identifies the model and route" do
+    for {label, tone} <- [{"Recently recovered", :success}, {"Recent circuit failure", :warning}] do
+      assignment = %{pool_label: "Sample Pool", status: "active", health_status: "active", quota_priming_status: "known", quota_priming_label: "Quota known", circuit_readiness: %{state: :recent, ready?: true, tone: tone, label: label, recent_failure_lane_count: if(tone == :warning, do: 1, else: 0), representative: %{model_identifier: "sample-model", route_class: "proxy_http"}}}
+      segment = assignment |> RoutePath.segments() |> List.last()
+      assert segment.ready?
+      assert segment.tone == tone
+      assert segment.detail_label == "#{label}; sample-model via proxy_http"
+      assert RoutePath.ready_count(assignment) == 4
+      assert RoutePath.aria_label(assignment) =~ segment.detail_label
+    end
+  end
 end

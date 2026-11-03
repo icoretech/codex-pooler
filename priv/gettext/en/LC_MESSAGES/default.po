@@ -3662,7 +3662,7 @@ msgstr ""
 msgid "Circuit"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:130
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:140
 #, elixir-autogen, elixir-format
 msgid "Circuit clear"
 msgstr ""
@@ -10054,7 +10054,7 @@ msgid "Quota evidence not reported"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:52
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:201
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:203
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:975
 #, elixir-autogen, elixir-format
 msgid "Quota exhausted"
@@ -10066,7 +10066,7 @@ msgid "Quota first"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:396
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:203
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:205
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:977
 #, elixir-autogen, elixir-format
 msgid "Quota missing"
@@ -10221,7 +10221,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:990
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/reconciliation_status.ex:90
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:154
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:156
 #, elixir-autogen, elixir-format
 msgid "Reauthentication required"
 msgstr ""
@@ -16252,27 +16252,27 @@ msgstr ""
 msgid "A request succeeded on the new quota; the usage report has not caught up yet."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:160
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:162
 #, elixir-autogen, elixir-format
 msgid "Account deleted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:162
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:164
 #, elixir-autogen, elixir-format
 msgid "Account disabled"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:165
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:167
 #, elixir-autogen, elixir-format
 msgid "Account errored"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:168
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:170
 #, elixir-autogen, elixir-format
 msgid "Account paused"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:173
 #, elixir-autogen, elixir-format
 msgid "Account pending"
 msgstr ""
@@ -16298,22 +16298,22 @@ msgstr ""
 msgid "Assign this account to a Pool before using account actions."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:191
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:193
 #, elixir-autogen, elixir-format
 msgid "Assignment unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:151
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:153
 #, elixir-autogen, elixir-format
 msgid "Auth refresh failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:184
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:186
 #, elixir-autogen, elixir-format
 msgid "Availability is conditional on the request model, transport and serving mode. The account summary is not permission for every model or route."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:206
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:208
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:342
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:981
 #, elixir-autogen, elixir-format
@@ -16347,7 +16347,7 @@ msgstr ""
 msgid "Check the latest reset before acting."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:185
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:187
 #, elixir-autogen, elixir-format
 msgid "Check the request-specific capacity decision before relying on this account."
 msgstr ""
@@ -16357,18 +16357,18 @@ msgstr ""
 msgid "Close failure panel"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:173
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:175
 #, elixir-autogen, elixir-format
 msgid "Complete account setup and reconciliation."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:205
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:207
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:979
 #, elixir-autogen, elixir-format
 msgid "Conditional provider availability"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:183
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:185
 #, elixir-autogen, elixir-format
 msgid "Current provider credit permission, identity lifecycle and assignment availability allow routing. Each request still checks its model, transport and serving mode; this does not identify a billing debit."
 msgstr ""
@@ -16383,22 +16383,22 @@ msgstr ""
 msgid "Deleted channel"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:161
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:163
 #, elixir-autogen, elixir-format
 msgid "Deleted upstream accounts are excluded from model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:163
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:165
 #, elixir-autogen, elixir-format
 msgid "Disabled upstream accounts are excluded from model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:193
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:195
 #, elixir-autogen, elixir-format
 msgid "Enable a healthy, eligible pool assignment."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:164
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:166
 #, elixir-autogen, elixir-format
 msgid "Enable the upstream account before routing."
 msgstr ""
@@ -16445,22 +16445,22 @@ msgstr ""
 msgid "HTTP %{status_code} with a provider instruction"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:180
 #, elixir-autogen, elixir-format
 msgid "Identity lifecycle status is unavailable, so model routing cannot select this account."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:187
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:189
 #, elixir-autogen, elixir-format
 msgid "Identity lifecycle, assignment availability, and quota readiness allow model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:181
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:183
 #, elixir-autogen, elixir-format
 msgid "Identity refresh is in progress, but this lifecycle state remains visible for model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:177
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:179
 #, elixir-autogen, elixir-format
 msgid "Identity unavailable"
 msgstr ""
@@ -16470,7 +16470,7 @@ msgstr ""
 msgid "Incoming quota report"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:167
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:169
 #, elixir-autogen, elixir-format
 msgid "Inspect the sanitized account error and recover the upstream account."
 msgstr ""
@@ -16535,7 +16535,7 @@ msgstr ""
 msgid "Latest failure"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:188
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:190
 #, elixir-autogen, elixir-format
 msgid "Lifecycle blocked"
 msgstr ""
@@ -16545,7 +16545,7 @@ msgstr ""
 msgid "Limit reached"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:174
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:176
 #, elixir-autogen, elixir-format
 msgid "Limited model availability"
 msgstr ""
@@ -16585,7 +16585,7 @@ msgstr ""
 msgid "Next run"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:192
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:194
 #, elixir-autogen, elixir-format
 msgid "No active, healthy, eligible pool assignment is available for this upstream account."
 msgstr ""
@@ -16656,7 +16656,7 @@ msgstr ""
 msgid "OAuth relink failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:195
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:197
 #, elixir-autogen, elixir-format
 msgid "Observed balance does not grant routing; current account evidence does not establish usable provider credit permission."
 msgstr ""
@@ -16672,12 +16672,12 @@ msgstr ""
 msgid "One or more model and route lanes are blocked; unaffected routes may remain available."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:149
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:151
 #, elixir-autogen, elixir-format
 msgid "One or more model and route lanes are recovering; unaffected routes may remain available."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:177
 #, elixir-autogen, elixir-format
 msgid "Only the independently evidenced Spark allowance permits model routing; ordinary account quota remains blocked."
 msgstr ""
@@ -16687,7 +16687,7 @@ msgstr ""
 msgid "Other source"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:169
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:171
 #, elixir-autogen, elixir-format
 msgid "Paused upstream accounts are excluded from model routing."
 msgstr ""
@@ -16697,7 +16697,7 @@ msgstr ""
 msgid "Pending provider measurement"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:172
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:174
 #, elixir-autogen, elixir-format
 msgid "Pending upstream accounts are excluded from model routing until setup completes."
 msgstr ""
@@ -16727,13 +16727,13 @@ msgstr ""
 msgid "Priority"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:200
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:202
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:974
 #, elixir-autogen, elixir-format
 msgid "Provider available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:208
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:210
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:367
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:373
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:983
@@ -16741,12 +16741,12 @@ msgstr ""
 msgid "Provider credit capacity unverified"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:194
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:196
 #, elixir-autogen, elixir-format
 msgid "Provider credit-dependent admission is disabled; independently valid included capacity, ordinary provider permission and authorized banked-reset recovery remain separate."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:207
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:209
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:345
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:982
 #, elixir-autogen, elixir-format
@@ -16763,7 +16763,7 @@ msgstr ""
 msgid "Queued. Nothing has been sent to the provider yet."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:204
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:206
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:978
 #, elixir-autogen, elixir-format
 msgid "Quota blocked"
@@ -16816,13 +16816,13 @@ msgstr ""
 msgid "Quota readiness blocks model routing: %{label}."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:198
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:200
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:972
 #, elixir-autogen, elixir-format
 msgid "Quota ready"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:202
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:204
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:976
 #, elixir-autogen, elixir-format
 msgid "Quota refresh needed"
@@ -16858,12 +16858,12 @@ msgstr ""
 msgid "Rate-limit event"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:156
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:158
 #, elixir-autogen, elixir-format
 msgid "Reauthenticate or replace the stored credentials."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:155
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:157
 #, elixir-autogen, elixir-format
 msgid "Reauthentication is required before this account can be selected for model routing."
 msgstr ""
@@ -16873,7 +16873,7 @@ msgstr ""
 msgid "Reconciling quota"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:190
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:192
 #, elixir-autogen, elixir-format
 msgid "Recover the upstream account lifecycle before routing."
 msgstr ""
@@ -16888,17 +16888,17 @@ msgstr ""
 msgid "Recovery verified by a request"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:197
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:199
 #, elixir-autogen, elixir-format
 msgid "Refresh quota evidence or wait for quota reset."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:159
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:161
 #, elixir-autogen, elixir-format
 msgid "Refresh the account token."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:153
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:155
 #, elixir-autogen, elixir-format
 msgid "Relink credentials or complete a successful token refresh."
 msgstr ""
@@ -17005,7 +17005,7 @@ msgstr ""
 msgid "Response headers"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:170
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:172
 #, elixir-autogen, elixir-format
 msgid "Resume the upstream account before routing."
 msgstr ""
@@ -17031,18 +17031,18 @@ msgstr ""
 msgid "Routing permission"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:186
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:188
 #, elixir-autogen, elixir-format
 msgid "Routing ready"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:182
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:184
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:980
 #, elixir-autogen, elixir-format
 msgid "Routing ready via credits"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:180
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:182
 #, elixir-autogen, elixir-format
 msgid "Routing while refreshing"
 msgstr ""
@@ -17153,27 +17153,27 @@ msgstr ""
 msgid "The reset was applied, but quota is still blocked. No further reset is spent automatically."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:166
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:168
 #, elixir-autogen, elixir-format
 msgid "The upstream account lifecycle is errored and excluded from model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:189
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:191
 #, elixir-autogen, elixir-format
 msgid "This upstream account lifecycle state is excluded from model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:157
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:159
 #, elixir-autogen, elixir-format
 msgid "Token refresh due"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:152
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:154
 #, elixir-autogen, elixir-format
 msgid "Token refresh failed; this account is excluded from model routing until auth is recovered."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:158
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:160
 #, elixir-autogen, elixir-format
 msgid "Token refresh is due before this account can be selected for model routing."
 msgstr ""
@@ -17198,12 +17198,12 @@ msgstr ""
 msgid "Usage polling is paused or unavailable, so confirmation can take longer."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:178
 #, elixir-autogen, elixir-format
 msgid "Use Spark or wait for ordinary account quota to recover."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:179
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:181
 #, elixir-autogen, elixir-format
 msgid "Verify the upstream account lifecycle state."
 msgstr ""
@@ -17218,12 +17218,12 @@ msgstr ""
 msgid "Wait for circuit protection to clear before relying on affected routes."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:152
 #, elixir-autogen, elixir-format
 msgid "Wait for circuit recovery to complete before relying on affected routes."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:196
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:198
 #, elixir-autogen, elixir-format
 msgid "Waiting for fresh included-quota data to confirm the reset."
 msgstr ""
@@ -17249,7 +17249,7 @@ msgstr ""
 msgid "Weekly"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:199
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:201
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:973
 #, elixir-autogen, elixir-format
 msgid "Weekly quota probe"
@@ -18740,4 +18740,21 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:37
 #, elixir-autogen, elixir-format
 msgid "Quota details are unavailable. No reset was spent. Wait for the next quota check and try again."
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:135
+#, elixir-autogen, elixir-format
+msgid "%{status}; %{model} via %{route}"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:132
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:150
+#, elixir-autogen, elixir-format
+msgid "Recent circuit failure"
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:132
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:149
+#, elixir-autogen, elixir-format
+msgid "Recently recovered"
 msgstr ""

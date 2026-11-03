@@ -521,6 +521,8 @@ The right column shows how the account serves traffic:
 3. `Request health` shows the request facts and the daily chart described below
 4. `Recent activity` lists failed requests and account changes, with links to Request logs, Audit logs, and Jobs
 
+A closed circuit leaves an otherwise healthy account `Routing ready`. Its lane can show `Recently recovered` after a successful recovery or `Recent circuit failure` when a recent failure has no later successful close. `Circuit recovery in progress` describes a lane currently recovering, and `Circuit protection active` identifies a blocked lane. Recent history retains the affected model and route without renewing its history window on every successful request.
+
 Saved-reset manual redemption is available from the cockpit and from the account-card saved-reset dialog. The summary metric shows the reported count, the actions area shows `Redeem saved reset` when manual redemption is available, and the saved-reset policy form controls auto redemption, trigger mode, near-limit threshold, natural reset buffer, and resets to keep.
 
 For each current reset expiration, the bank shows `banked` only when the upstream reported a valid grant time. When that time is unavailable, it shows `seen` for Codex Pooler's first discovery of the expiration and uses that discovery only as the display fallback. It never estimates a grant date from the expiration date.

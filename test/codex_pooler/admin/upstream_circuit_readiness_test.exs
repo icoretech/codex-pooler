@@ -64,6 +64,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
              detail: "No circuit protection is active",
              blocked_lane_count: 0,
              recovering_lane_count: 0,
+             recent_lane_count: 0,
+             recent_failure_lane_count: 0,
              affected_lane_count: 0,
              blocked_reasons: [],
              representative: nil
@@ -221,9 +223,9 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
         latest_source.id => ["gpt-latest"]
       })
 
-    assert summaries[lower.id].state == :recovering
-    assert summaries[upper.id].state == :recovering
-    assert summaries[latest_source.id].state == :recovering
+    assert summaries[lower.id].state == :recent
+    assert summaries[upper.id].state == :recent
+    assert summaries[latest_source.id].state == :recent
     assert summaries[stale.id] == UpstreamCircuitReadiness.clear()
     assert summaries[future.id] == UpstreamCircuitReadiness.clear()
   end
@@ -251,8 +253,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
         @observed_at
       )
 
-    assert lower[lower_clamp.id].state == :recovering
-    assert upper[upper_clamp.id].state == :recovering
+    assert lower[lower_clamp.id].state == :recent
+    assert upper[upper_clamp.id].state == :recent
   end
 
   test "latest exact row controls current classification while eligible older evidence remains independent" do
@@ -300,7 +302,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
     refute CircuitHealth.blocked?(older_blocked, @settings, @observed_at) ==
              CircuitHealth.blocked?(newer_closed_row, @settings, @observed_at)
 
-    assert summaries[newer_closed.id].state == :recovering
+    assert summaries[newer_closed.id].state == :recent
     assert summaries[newer_closed.id].ready?
     assert CircuitHealth.blocked?(newer_closed_row, @settings, @observed_at) == false
 
@@ -327,12 +329,143 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
       metadata: %{"probe_in_flight_count" => 99}
     )
 
+    insert_state!(pool, assignment, "gpt-retired-recovered", "proxy_http",
+      last_failure_at: DateTime.add(@observed_at, -30),
+      closed_at: DateTime.add(@observed_at, -10),
+      last_success_at: DateTime.add(@observed_at, -10)
+    )
+
     summary = project(%{assignment.id => ["gpt-served"]}) |> Map.fetch!(assignment.id)
 
     assert summary == UpstreamCircuitReadiness.clear()
     assert UpstreamCircuitReadiness.aggregate([summary]) == UpstreamCircuitReadiness.clear()
     refute inspect(summary) =~ "gpt-retired"
     refute inspect(summary) =~ "proxy_stream"
+  end
+
+  for {name, closed_offset, success_offset, expected_label} <- [
+        {:successful_close, -30, -10, "Recently recovered"},
+        {:equal_failure_boundary, -60, -60, "Recently recovered"},
+        {:no_close, nil, -10, "Recent circuit failure"},
+        {:no_success, -30, nil, "Recent circuit failure"},
+        {:failure_after_close, -61, -10, "Recent circuit failure"},
+        {:failure_after_success, -30, -61, "Recent circuit failure"},
+        {:future_close, 1, -10, "Recent circuit failure"},
+        {:future_success, -30, 1, "Recent circuit failure"}
+      ] do
+    test "closed recent lane classifies #{name} from the persisted close and success clocks" do
+      pool = pool_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+      row =
+        insert_state!(pool, assignment, "sample-model", "proxy_websocket",
+          last_failure_at: DateTime.add(@observed_at, -60),
+          closed_at: offset_time(unquote(closed_offset)),
+          last_success_at: offset_time(unquote(success_offset)),
+          failure_count: 0,
+          success_count: 38
+        )
+
+      summary = project(%{assignment.id => ["sample-model"]}) |> Map.fetch!(assignment.id)
+      assert summary.state == :recent
+      assert summary.ready?
+      assert summary.label == unquote(expected_label)
+      assert summary.recent_lane_count == 1
+      assert summary.recovering_lane_count == 0
+      assert summary.blocked_lane_count == 0
+      assert summary.affected_lane_count == 1
+      assert summary.recent_failure_lane_count == if(unquote(expected_label) == "Recently recovered", do: 0, else: 1)
+      refute CircuitHealth.blocked?(row, @settings, @observed_at)
+      assert Repo.reload!(row) == row
+    end
+  end
+
+  test "new successes do not extend the failure-based closed-lane memory" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    insert_state!(pool, assignment, "sample-model", "proxy_http",
+      last_failure_at: DateTime.add(@observed_at, -601),
+      closed_at: DateTime.add(@observed_at, -1),
+      last_success_at: @observed_at
+    )
+
+    assert project(%{assignment.id => ["sample-model"]})[assignment.id] == UpstreamCircuitReadiness.clear()
+  end
+
+  test "mixed persisted lanes aggregate blocked then recovering then recent while retaining separate recent failure counts" do
+    pool = pool_fixture()
+    assignments = for _ <- 1..4, do: upstream_assignment_fixture(pool).assignment
+    [blocked, recovering, recovered, failed] = assignments
+    insert_state!(pool, blocked, "sample-model", "proxy_http", status: "open", next_probe_at: DateTime.add(@observed_at, 30))
+    insert_state!(pool, recovering, "sample-model", "proxy_http", status: "half_open", metadata: %{"probe_in_flight_count" => 0})
+    insert_state!(pool, recovered, "sample-model", "proxy_http", last_failure_at: DateTime.add(@observed_at, -30), closed_at: @observed_at, last_success_at: @observed_at)
+    insert_state!(pool, failed, "sample-model", "proxy_http", failure_count: 1, last_failure_at: DateTime.add(@observed_at, -30))
+    summaries = project(Map.new(assignments, &{&1.id, ["sample-model"]}))
+    combined = UpstreamCircuitReadiness.aggregate(Map.values(summaries))
+    assert combined.state == :blocked
+    assert combined.blocked_lane_count == 1
+    assert combined.recovering_lane_count == 1
+    assert combined.recent_lane_count == 2
+    assert combined.recent_failure_lane_count == 1
+    assert combined.affected_lane_count == 4
+    assert UpstreamCircuitReadiness.aggregate([summaries[recovering.id], summaries[recovered.id], summaries[failed.id]]).state == :recovering
+    recent = UpstreamCircuitReadiness.aggregate([summaries[recovered.id], summaries[failed.id]])
+    assert recent.state == :recent
+    assert recent.ready?
+    assert recent.label == "Recent circuit failure"
+    assert recent.tone == :warning
+    recovered_only = UpstreamCircuitReadiness.aggregate([summaries[recovered.id], UpstreamCircuitReadiness.clear()])
+    assert recovered_only.state == :recent
+    assert recovered_only.label == "Recently recovered"
+    assert recovered_only.tone == :success
+  end
+
+  for topology <- [:one_assignment, :separate_assignments] do
+    test "recent failure representative identifies the unrecovered lane across #{topology}" do
+      pool = pool_fixture()
+      %{assignment: recovered} = upstream_assignment_fixture(pool)
+      failed = if unquote(topology) == :one_assignment, do: recovered, else: upstream_assignment_fixture(pool).assignment
+
+      insert_state!(pool, recovered, "a-model", "proxy_http",
+        last_failure_at: DateTime.add(@observed_at, -30),
+        closed_at: @observed_at,
+        last_success_at: @observed_at
+      )
+
+      failure = insert_state!(pool, failed, "z-model", "proxy_websocket", last_failure_at: DateTime.add(@observed_at, -60))
+      authorized_models = Enum.reduce([{recovered.id, "a-model"}, {failed.id, "z-model"}], %{}, fn {id, model}, acc -> Map.update(acc, id, [model], &[model | &1]) end)
+      summaries = project(authorized_models)
+      summary = UpstreamCircuitReadiness.aggregate(Map.values(summaries))
+      assert summary.state == :recent
+      assert summary.recent_lane_count == 2
+      assert summary.recent_failure_lane_count == 1
+      assert summary.representative == %{model_identifier: "z-model", route_class: "proxy_websocket"}
+      assert summaries[failed.id].representative == %{model_identifier: "z-model", route_class: "proxy_websocket"}
+
+      failure |> Ecto.Changeset.change(closed_at: @observed_at, last_success_at: @observed_at) |> Repo.update!()
+      recovered_summary = authorized_models |> project() |> Map.values() |> UpstreamCircuitReadiness.aggregate()
+      assert recovered_summary.recent_failure_lane_count == 0
+      assert recovered_summary.representative == %{model_identifier: "a-model", route_class: "proxy_http"}
+    end
+  end
+
+  test "normalized duplicate recent lanes retain an unrecovered failure despite newer recovered evidence" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    insert_state!(pool, assignment, " SAMPLE-MODEL ", "proxy_http",
+      last_failure_at: DateTime.add(@observed_at, -10),
+      closed_at: @observed_at,
+      last_success_at: @observed_at
+    )
+
+    insert_state!(pool, assignment, "sample-model", "proxy_http", last_failure_at: DateTime.add(@observed_at, -60))
+    summary = project(%{assignment.id => ["sample-model"]})[assignment.id]
+    assert summary.state == :recent
+    assert summary.recent_lane_count == 1
+    assert summary.recent_failure_lane_count == 1
+    assert summary.label == "Recent circuit failure"
   end
 
   test "normalized duplicate exact rows count once while distinct display lanes count separately" do
@@ -560,6 +693,9 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
   defp project(authorized_models) do
     UpstreamCircuitReadiness.by_assignment_id(authorized_models, @settings, @observed_at)
   end
+
+  defp offset_time(nil), do: nil
+  defp offset_time(seconds), do: DateTime.add(@observed_at, seconds)
 
   defp insert_state!(pool, assignment, model_identifier, route_class, attrs) do
     defaults = [

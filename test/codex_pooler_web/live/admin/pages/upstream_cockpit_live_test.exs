@@ -63,6 +63,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     :ok
   end
 
+  @tag :circuit_recent_presentation
+  test "recently closed circuit history keeps list and cockpit routing ready", %{conn: conn, scope: scope} do
+    pool = pool_fixture(%{created_by_user_id: scope.user.id})
+    now = DateTime.utc_now()
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool, %{assignment_metadata: %{"quota_priming" => %{"status" => "known"}}})
+    advertise_assignment_model!(pool, assignment, "sample-recovered-model")
+    insert_circuit_state!(pool, assignment, "sample-recovered-model", "proxy_http", status: "closed", opened_at: DateTime.add(now, -60, :second), last_failure_at: DateTime.add(now, -40, :second), closed_at: DateTime.add(now, -20, :second), last_success_at: DateTime.add(now, -20, :second))
+    upsert_fresh_quota!(identity, now)
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    assert account.routing_readiness.label == "Routing ready"
+    assert [%{circuit_readiness: %{state: :recent, recent_lane_count: 1, recovering_lane_count: 0}}] = account.assignments
+    {:ok, list, _html} = live(conn, ~p"/admin/upstreams")
+    assert has_element?(list, "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route-circuit[title='Recently recovered; sample-recovered-model via proxy_http']")
+
+    {:ok, cockpit, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    assert has_element?(cockpit, "#upstream-routing-verdict[data-tone='success']", "Routing ready")
+    assert has_element?(cockpit, "#upstream-assignment-#{assignment.id}-route[aria-valuenow='4']")
+    assert has_element?(cockpit, "#upstream-assignment-#{assignment.id}-route-circuit[title='Recently recovered; sample-recovered-model via proxy_http']")
+    render_async(list)
+    render_async(cockpit)
+  end
+
   @tag :cockpit_consistency
   test "usage availability circuit recovery and reset confirmation stay independent", %{
     conn: conn,

@@ -146,6 +146,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting do
   defp readiness_text("One or more model and route lanes are blocked; unaffected routes may remain available."), do: gettext("One or more model and route lanes are blocked; unaffected routes may remain available.")
   defp readiness_text("Wait for circuit protection to clear before relying on affected routes."), do: gettext("Wait for circuit protection to clear before relying on affected routes.")
   defp readiness_text("Circuit recovery in progress"), do: gettext("Circuit recovery in progress")
+  defp readiness_text("Recently recovered"), do: gettext("Recently recovered")
+  defp readiness_text("Recent circuit failure"), do: gettext("Recent circuit failure")
   defp readiness_text("One or more model and route lanes are recovering; unaffected routes may remain available."), do: gettext("One or more model and route lanes are recovering; unaffected routes may remain available.")
   defp readiness_text("Wait for circuit recovery to complete before relying on affected routes."), do: gettext("Wait for circuit recovery to complete before relying on affected routes.")
   defp readiness_text("Auth refresh failed"), do: gettext("Auth refresh failed")

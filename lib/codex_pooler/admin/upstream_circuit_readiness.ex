@@ -12,7 +12,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
   @unknown_model "unknown model"
   @unknown_route "unknown route"
 
-  @type state :: :blocked | :recovering | :closed
+  @type state :: :blocked | :recovering | :recent | :closed
   @type tone :: :error | :warning | :success
   @type representative :: %{
           required(:model_identifier) => String.t(),
@@ -26,6 +26,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
           required(:detail) => String.t(),
           required(:blocked_lane_count) => non_neg_integer(),
           required(:recovering_lane_count) => non_neg_integer(),
+          required(:recent_lane_count) => non_neg_integer(),
+          required(:recent_failure_lane_count) => non_neg_integer(),
           required(:affected_lane_count) => non_neg_integer(),
           required(:blocked_reasons) => [String.t()],
           required(:representative) => representative() | nil
@@ -72,6 +74,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
             next_probe_at: state.next_probe_at,
             opened_at: state.opened_at,
             last_failure_at: state.last_failure_at,
+            closed_at: state.closed_at,
+            last_success_at: state.last_success_at,
             metadata: state.metadata,
             created_at: state.created_at,
             updated_at: state.updated_at
@@ -123,6 +127,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       detail: "No circuit protection is active",
       blocked_lane_count: 0,
       recovering_lane_count: 0,
+      recent_lane_count: 0,
+      recent_failure_lane_count: 0,
       affected_lane_count: 0,
       blocked_reasons: [],
       representative: nil
@@ -143,6 +149,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
                 model_identifier: display_model(model_identifier),
                 route_class: display_route(route_class),
                 evidence_at: nil,
+                recent_failure?: non_negative_count(summary, :recent_failure_lane_count) > 0,
                 reason: nil
               }
             ]
@@ -159,6 +166,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
             acc
             | blocked_lane_count: acc.blocked_lane_count + non_negative_count(summary, :blocked_lane_count),
               recovering_lane_count: acc.recovering_lane_count + non_negative_count(summary, :recovering_lane_count),
+              recent_lane_count: acc.recent_lane_count + non_negative_count(summary, :recent_lane_count),
+              recent_failure_lane_count: acc.recent_failure_lane_count + non_negative_count(summary, :recent_failure_lane_count),
               affected_lane_count: acc.affected_lane_count + non_negative_count(summary, :affected_lane_count),
               blocked_reasons: bounded_reasons(acc.blocked_reasons ++ Map.get(summary, :blocked_reasons, []))
           }
@@ -171,6 +180,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       cond do
         totals.blocked_lane_count > 0 -> :blocked
         totals.recovering_lane_count > 0 -> :recovering
+        totals.recent_lane_count > 0 -> :recent
         true -> :closed
       end
 
@@ -225,6 +235,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       cond do
         blocked? -> :blocked
         latest.status == "half_open" -> :recovering
+        latest.status == "closed" and match?(%DateTime{}, evidence_at) -> :recent
         match?(%DateTime{}, evidence_at) -> :recovering
         true -> :closed
       end
@@ -234,9 +245,17 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       model_identifier: normalize_identifier(latest.model_identifier),
       route_class: normalize_identifier(latest.route_class),
       evidence_at: evidence_at,
+      recent_failure?: state == :recent and not successful_close?(latest, evidence_at, observed_at),
       reason: if(blocked?, do: CircuitHealth.blocked_reason(current, settings, observed_at), else: nil)
     }
   end
+
+  defp successful_close?(%{closed_at: closed_at, last_success_at: last_success_at}, %DateTime{} = evidence_at, observed_at) do
+    eligible_evidence?(closed_at, evidence_at, observed_at) and
+      eligible_evidence?(last_success_at, evidence_at, observed_at)
+  end
+
+  defp successful_close?(_row, _evidence_at, _observed_at), do: false
 
   defp latest_eligible_evidence(rows, observed_at, recent_window_seconds) do
     lower_bound = DateTime.add(observed_at, -recent_window_seconds, :second)
@@ -267,12 +286,14 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
   defp summarize(lanes) do
     blocked_lanes = Enum.filter(lanes, &(&1.state == :blocked))
     recovering_lanes = Enum.filter(lanes, &(&1.state == :recovering))
-    affected_lanes = blocked_lanes ++ recovering_lanes
+    recent_lanes = Enum.filter(lanes, &(&1.state == :recent))
+    affected_lanes = blocked_lanes ++ recovering_lanes ++ recent_lanes
 
     state =
       cond do
         blocked_lanes != [] -> :blocked
         recovering_lanes != [] -> :recovering
+        recent_lanes != [] -> :recent
         true -> :closed
       end
 
@@ -285,6 +306,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
     clear()
     |> Map.put(:blocked_lane_count, length(blocked_lanes))
     |> Map.put(:recovering_lane_count, length(recovering_lanes))
+    |> Map.put(:recent_lane_count, length(recent_lanes))
+    |> Map.put(:recent_failure_lane_count, Enum.count(recent_lanes, & &1.recent_failure?))
     |> Map.put(:affected_lane_count, length(affected_lanes))
     |> Map.put(:blocked_reasons, bounded_reasons(Enum.map(blocked_lanes, & &1.reason)))
     |> present(state, representative)
@@ -316,6 +339,20 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
     }
   end
 
+  defp present(summary, :recent, representative) do
+    recovered? = summary.recent_failure_lane_count == 0
+
+    %{
+      summary
+      | state: :recent,
+        ready?: true,
+        tone: if(recovered?, do: :success, else: :warning),
+        label: if(recovered?, do: "Recently recovered", else: "Recent circuit failure"),
+        detail: detail(summary.recent_lane_count, if(recovered?, do: "recently recovered", else: "with recent failures"), representative),
+        representative: representative
+    }
+  end
+
   defp detail(count, state, %{model_identifier: model_identifier, route_class: route_class}) do
     "#{lane_count_label(count)} #{state}; #{model_identifier} via #{route_class}"
   end
@@ -337,6 +374,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
   defp lane_sort_key(lane) do
     {
       severity(lane.state),
+      if(lane.state == :recent and lane.recent_failure?, do: 0, else: 1),
       lane.model_identifier,
       lane.route_class,
       -datetime_key(lane.evidence_at)
@@ -345,8 +383,9 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
 
   defp severity(:blocked), do: 0
   defp severity(:recovering), do: 1
-  defp severity(:closed), do: 2
-  defp severity(_state), do: 3
+  defp severity(:recent), do: 2
+  defp severity(:closed), do: 3
+  defp severity(_state), do: 4
 
   defp bounded_reasons(reasons) do
     reasons
