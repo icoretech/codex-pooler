@@ -17091,8 +17091,8 @@ msgstr "请等待熔断恢复完成后再使用受影响的路由。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:196
 #, elixir-autogen, elixir-format
-msgid "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."
-msgstr "正在等待使用套餐内配额的请求确认重置。使用服务商额度付费的请求不计入确认。"
+msgid "Waiting for fresh included-quota data to confirm the reset."
+msgstr "正在等待最新的套餐内配额数据以确认重置。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format

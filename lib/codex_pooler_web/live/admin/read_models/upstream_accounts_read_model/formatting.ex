@@ -193,7 +193,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting do
   defp readiness_text("Enable a healthy, eligible pool assignment."), do: gettext("Enable a healthy, eligible pool assignment.")
   defp readiness_text("Provider credit-dependent admission is disabled; independently valid included capacity, ordinary provider permission and authorized banked-reset recovery remain separate."), do: gettext("Provider credit-dependent admission is disabled; independently valid included capacity, ordinary provider permission and authorized banked-reset recovery remain separate.")
   defp readiness_text("Observed balance does not grant routing; current account evidence does not establish usable provider credit permission."), do: gettext("Observed balance does not grant routing; current account evidence does not establish usable provider credit permission.")
-  defp readiness_text("Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."), do: gettext("Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count.")
+  defp readiness_text("Waiting for fresh included-quota data to confirm the reset."), do: gettext("Waiting for fresh included-quota data to confirm the reset.")
   defp readiness_text("Refresh quota evidence or wait for quota reset."), do: gettext("Refresh quota evidence or wait for quota reset.")
   defp readiness_text("Quota ready"), do: gettext("Quota ready")
   defp readiness_text("Weekly quota probe"), do: gettext("Weekly quota probe")

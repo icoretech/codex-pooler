@@ -301,7 +301,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
       case reason_code do
         "provider_credits_disabled" -> "Provider credit-dependent admission is disabled; independently valid included capacity, ordinary provider permission and authorized banked-reset recovery remain separate."
         "provider_credit_capacity_unverified" -> "Observed balance does not grant routing; current account evidence does not establish usable provider credit permission."
-        "saved_reset_probe_pending" -> "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."
+        "saved_reset_probe_pending" -> "Waiting for fresh included-quota data to confirm the reset."
         _other -> "Quota readiness blocks model routing: #{label}."
       end
 

@@ -292,7 +292,7 @@ defmodule CodexPoolerWeb.Admin.SavedResetOperationTest do
 
   @tag :receipt_state_rendering
   test "an account that cannot route shows its routing reason on the bank receipt" do
-    readiness = %{label: "Banked-reset recovery pending", reason: "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count.", routing_ready_now?: false}
+    readiness = %{label: "Banked-reset recovery pending", reason: "Waiting for fresh included-quota data to confirm the reset.", routing_ready_now?: false}
     document = project(%{redemption: applied("consumed_pending_probe"), serving_readiness: readiness}) |> receipt(:bank) |> LazyHTML.from_fragment()
     line = LazyHTML.query(document, "[data-role='saved-reset-serving-readiness']")
     assert LazyHTML.text(line) =~ "Routing: Banked-reset recovery pending"

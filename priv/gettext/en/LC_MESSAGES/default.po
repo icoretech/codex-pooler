@@ -17225,7 +17225,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:196
 #, elixir-autogen, elixir-format
-msgid "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."
+msgid "Waiting for fresh included-quota data to confirm the reset."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299

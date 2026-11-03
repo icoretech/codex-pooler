@@ -167,7 +167,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
                  label: "Banked-reset recovery pending",
                  tone: :warning,
                  reason_code: "saved_reset_probe_pending",
-                 reason: "Waiting for a request on included quota to confirm the reset. Requests paid with provider credits do not count."
+                 reason: "Waiting for fresh included-quota data to confirm the reset."
                } =
                  UpstreamRoutingReadiness.from_inputs(identity, [healthy_assignment()], quota_readiness)
       end
