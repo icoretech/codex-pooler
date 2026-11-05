@@ -51,10 +51,10 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert result.compatible?
     assert result.errors == []
 
-    for model <- ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst) do
+    for model <- ~w(gpt-image-2.6-flare gpt-image-2.6-sunburst) do
       refute Enum.any?(result.rows, &(&1.model_identifier == model))
 
-      for tier <- ~w(batch standard), bucket <- ~w(text image) do
+      for tier <- Map.keys(payload["models"][model]["prices"]), bucket <- ~w(text image) do
         path = "models.#{model}.prices.#{tier}.#{bucket}"
         assert Enum.any?(result.warnings, &(&1.code == :unsupported_price_bucket and &1.path == path))
 

@@ -497,12 +497,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert_imported_target_settles("gpt-6.1-sol", ultrafast: "19440")
   end
 
-  test "malformed image batch rates reject the whole catalog without snapshot writes" do
+  test "malformed image modality rates reject the whole catalog without snapshot writes" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
     count = Repo.aggregate(PricingSnapshot, :count)
 
-    for model <- ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst), bucket <- ~w(image text) do
-      invalid = put_in(payload, ["models", model, "prices", "batch", bucket, "input"], "1")
+    for model <- ~w(gpt-image-2.6-flare gpt-image-2.6-sunburst),
+        tier <- ~w(standard batch),
+        bucket <- ~w(image text) do
+      # Batch is a synthetic variant when the published model has only Standard rates.
+      prices = payload["models"][model]["prices"]
+      candidate = put_in(payload, ["models", model, "prices"], Map.put_new(prices, "batch", prices["standard"]))
+      invalid = put_in(candidate, ["models", model, "prices", tier, bucket, "input"], "1")
 
       assert {:error, %{code: :incompatible_pricing_catalog}} =
                OpenAIPricingImporter.import_file(write_json!(invalid))

@@ -1,33 +1,6 @@
 {
-  "generated_at": "2026-10-31T08:25:21.774807Z",
+  "generated_at": "2026-11-04T23:45:30.599125Z",
   "models": {
-    "babbage-002": {
-      "categories": [
-        "finetuning"
-      ],
-      "category": "finetuning",
-      "model": "babbage-002",
-      "prices": {
-        "batch": {
-          "inference": {
-            "input": 0.8,
-            "output": 0.9,
-            "training": 0.4
-          }
-        },
-        "standard": {
-          "inference": {
-            "input": 1.6,
-            "output": 1.6,
-            "training": 0.4
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
     "chat-latest": {
       "categories": [
         "chatgpt"
@@ -89,209 +62,6 @@
             "cached_input": 1.25,
             "input": 5.0,
             "output": 10.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "davinci-002": {
-      "categories": [
-        "finetuning"
-      ],
-      "category": "finetuning",
-      "model": "davinci-002",
-      "prices": {
-        "batch": {
-          "inference": {
-            "input": 6.0,
-            "output": 6.0,
-            "training": 6.0
-          }
-        },
-        "standard": {
-          "inference": {
-            "input": 12.0,
-            "output": 12.0,
-            "training": 6.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-3.5-turbo": {
-      "categories": [
-        "finetuning",
-        "language_model"
-      ],
-      "category": "finetuning",
-      "context_pricing": {
-        "tiers": {
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "aa5374ed378424303337f95d61a97ab1b116c205d59d86e5d5610baaf07fd20b",
-              "locator": "gpt-3.5-turbo/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-3.5-turbo",
-      "prices": {
-        "batch": {
-          "inference": {
-            "input": 1.5,
-            "output": 3.0,
-            "training": 8.0
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 0.5,
-            "output": 1.5
-          },
-          "inference": {
-            "input": 3.0,
-            "output": 6.0,
-            "training": 8.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-3.5-turbo-0125": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-3.5-turbo-0125/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-3.5-turbo-0125/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-3.5-turbo-0125",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 0.25,
-            "output": 0.75
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 0.5,
-            "output": 1.5
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-4-0613": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4-0613/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4-0613/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-4-0613",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 15.0,
-            "output": 30.0
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 30.0,
-            "output": 60.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-4-turbo-2024-04-09": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4-turbo-2024-04-09/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4-turbo-2024-04-09/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-4-turbo-2024-04-09",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 5.0,
-            "output": 15.0
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 10.0,
-            "output": 30.0
           }
         }
       },
@@ -476,94 +246,6 @@
         "per_1m_tokens"
       ]
     },
-    "gpt-4.1-nano": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4.1-nano/batch/context"
-            },
-            "status": "uniform"
-          },
-          "fast": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4.1-nano/fast/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4.1-nano/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-4.1-nano",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 0.05,
-            "output": 0.2
-          }
-        },
-        "fast": {
-          "default": {
-            "cached_input": 0.05,
-            "input": 0.2,
-            "output": 0.8
-          }
-        },
-        "standard": {
-          "default": {
-            "cached_input": 0.025,
-            "input": 0.1,
-            "output": 0.4
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-4.1-nano-2025-04-14": {
-      "categories": [
-        "finetuning"
-      ],
-      "category": "finetuning",
-      "model": "gpt-4.1-nano-2025-04-14",
-      "prices": {
-        "batch": {
-          "inference": {
-            "cached_input": 0.025,
-            "input": 0.1,
-            "output": 0.4,
-            "training": 1.5
-          }
-        },
-        "standard": {
-          "inference": {
-            "cached_input": 0.05,
-            "input": 0.2,
-            "output": 0.8,
-            "training": 1.5
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
     "gpt-4o": {
       "categories": [
         "language_model"
@@ -615,63 +297,6 @@
             "cached_input": 1.25,
             "input": 2.5,
             "output": 10.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "gpt-4o-2024-05-13": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4o-2024-05-13/batch/context"
-            },
-            "status": "uniform"
-          },
-          "fast": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4o-2024-05-13/fast/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "gpt-4o-2024-05-13/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "gpt-4o-2024-05-13",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 2.5,
-            "output": 7.5
-          }
-        },
-        "fast": {
-          "default": {
-            "input": 8.75,
-            "output": 26.25
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 5.0,
-            "output": 15.0
           }
         }
       },
@@ -3203,6 +2828,54 @@
         "per_1m_tokens"
       ]
     },
+    "gpt-image-2.6-flare": {
+      "categories": [
+        "image_generation"
+      ],
+      "category": "image_generation",
+      "model": "gpt-image-2.6-flare",
+      "prices": {
+        "standard": {
+          "image": {
+            "cached_input": 2.0,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "text": {
+            "cached_input": 1.25,
+            "input": 5.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-image-2.6-sunburst": {
+      "categories": [
+        "image_generation"
+      ],
+      "category": "image_generation",
+      "model": "gpt-image-2.6-sunburst",
+      "prices": {
+        "standard": {
+          "image": {
+            "cached_input": 2.0,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "text": {
+            "cached_input": 1.25,
+            "input": 5.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
     "gpt-live-1": {
       "categories": [
         "realtime_audio"
@@ -3549,95 +3222,6 @@
         "per_minute"
       ]
     },
-    "o1": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o1/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o1/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "o1",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 7.5,
-            "output": 30.0
-          }
-        },
-        "standard": {
-          "default": {
-            "cached_input": 7.5,
-            "input": 15.0,
-            "output": 60.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "o1-pro": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o1-pro/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o1-pro/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "o1-pro",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 75.0,
-            "output": 300.0
-          }
-        },
-        "standard": {
-          "default": {
-            "input": 150.0,
-            "output": 600.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
     "o3": {
       "categories": [
         "language_model"
@@ -3711,51 +3295,6 @@
         "per_1m_tokens"
       ]
     },
-    "o3-mini": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o3-mini/batch/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o3-mini/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "o3-mini",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 0.55,
-            "output": 2.2
-          }
-        },
-        "standard": {
-          "default": {
-            "cached_input": 0.55,
-            "input": 1.1,
-            "output": 4.4
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
     "o3-pro": {
       "categories": [
         "language_model"
@@ -3792,124 +3331,6 @@
           "default": {
             "input": 20.0,
             "output": 80.0
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "o4-mini": {
-      "categories": [
-        "language_model"
-      ],
-      "category": "language_model",
-      "context_pricing": {
-        "tiers": {
-          "batch": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o4-mini/batch/context"
-            },
-            "status": "uniform"
-          },
-          "fast": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o4-mini/fast/context"
-            },
-            "status": "uniform"
-          },
-          "flex": {
-            "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
-              "locator": "o4-mini/flex/context"
-            },
-            "status": "uniform"
-          },
-          "standard": {
-            "provenance": {
-              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
-              "locator": "o4-mini/standard/context"
-            },
-            "status": "uniform"
-          }
-        },
-        "version": 1
-      },
-      "model": "o4-mini",
-      "prices": {
-        "batch": {
-          "default": {
-            "input": 0.55,
-            "output": 2.2
-          }
-        },
-        "fast": {
-          "default": {
-            "cached_input": 0.5,
-            "input": 2.0,
-            "output": 8.0
-          }
-        },
-        "flex": {
-          "default": {
-            "cached_input": 0.138,
-            "input": 0.55,
-            "output": 2.2
-          }
-        },
-        "standard": {
-          "default": {
-            "cached_input": 0.275,
-            "input": 1.1,
-            "output": 4.4
-          }
-        }
-      },
-      "pricing_type": "per_1m_tokens",
-      "pricing_types": [
-        "per_1m_tokens"
-      ]
-    },
-    "o4-mini-2025-04-16": {
-      "categories": [
-        "finetuning"
-      ],
-      "category": "finetuning",
-      "model": "o4-mini-2025-04-16",
-      "prices": {
-        "batch": {
-          "inference": {
-            "cached_input": 0.5,
-            "input": 2.0,
-            "output": 8.0,
-            "training": 100.0,
-            "training_unit": "hour"
-          },
-          "inference_with_data_sharing": {
-            "cached_input": 0.25,
-            "input": 1.0,
-            "output": 4.0,
-            "training": 100.0,
-            "training_unit": "hour"
-          }
-        },
-        "standard": {
-          "inference": {
-            "cached_input": 1.0,
-            "input": 4.0,
-            "output": 16.0,
-            "training": 100.0,
-            "training_unit": "hour"
-          },
-          "inference_with_data_sharing": {
-            "cached_input": 0.5,
-            "input": 2.0,
-            "output": 8.0,
-            "training": 100.0,
-            "training_unit": "hour"
           }
         }
       },
@@ -4045,7 +3466,7 @@
       ]
     }
   },
-  "models_count": 85,
+  "models_count": 73,
   "schema_version": 2,
   "source": "openai_official_pricing_page",
   "source_url": "https://developers.openai.com/api/docs/pricing",
