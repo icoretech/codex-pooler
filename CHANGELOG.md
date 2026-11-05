@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.14.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.2...codex-pooler-v0.14.3) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* public Images requests using GPT Image 2.5 aliases or dated snapshots must switch to gpt-image-2.6-flare or gpt-image-2.6-sunburst.
+
+### Features
+
+* use GPT Image 2.6 for generation and edits ([5a2380d](https://github.com/icoretech/codex-pooler/commit/5a2380d857bf71d83a0feebf953c44d6ce12ae8e))
+
+
+### Bug Fixes
+
+* forward provider headers to file storage uploads ([3c42b35](https://github.com/icoretech/codex-pooler/commit/3c42b35dafe4a7890b3c0f74d17c2c7364d684ed))
+
+
+### Dependencies
+
+* refresh OpenAI pricing catalog for GPT Image 2.6 ([791a96e](https://github.com/icoretech/codex-pooler/commit/791a96e675b06543d44aa9f4568ae4e19d8fffbe))
+* update dependency astro to v7.4.5 ([#600](https://github.com/icoretech/codex-pooler/issues/600)) ([f5fb787](https://github.com/icoretech/codex-pooler/commit/f5fb78707cafe0b271ba6d693544d5255a4e8e9a))
+* update dependency lazy_html to v0.1.14 ([#603](https://github.com/icoretech/codex-pooler/issues/603)) ([4633a39](https://github.com/icoretech/codex-pooler/commit/4633a39711de424b939dce0520b2489c90fcbc43))
+* update dependency tailwindlabs/tailwindcss to v4.3.4 ([#601](https://github.com/icoretech/codex-pooler/issues/601)) ([0b4afb2](https://github.com/icoretech/codex-pooler/commit/0b4afb2380d817cda88c207dbd119836c9f3b73d))
+* update helm release codex-pooler to v0.15.2 ([#604](https://github.com/icoretech/codex-pooler/issues/604)) ([45dfc9e](https://github.com/icoretech/codex-pooler/commit/45dfc9e126982df453cacf64911d1e9f94758f69))
+
 ## [0.14.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.1...codex-pooler-v0.14.2) (2026-11-03)
 
 
