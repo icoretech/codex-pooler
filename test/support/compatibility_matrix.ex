@@ -52,7 +52,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :file_upload,
-      contract: "backend file routes use JSON SAS create and finalize, return upstream file_id plus upload_url, reject OpenAI /v1/files multipart semantics, and store metadata only"
+      contract: "backend file routes use JSON SAS create and finalize, return the upstream file_id, upload_url and optional upload_headers unchanged for the client-owned PUT, reject OpenAI /v1/files multipart semantics, and store metadata only"
     },
     %{
       slug: :backend_transcription,
@@ -3835,6 +3835,19 @@ defmodule CodexPooler.CompatibilityMatrix do
       privacy: "schema_shape_only"
     },
     v1_supported_surface: %{
+      file_upload_headers: %{
+        source: "upstream_file_create_upload_headers",
+        omitted_null_or_empty: "legacy_storage_defaults",
+        accepted: "unique_case_insensitive_HTTP_header_names_and_ASCII_string_values",
+        provider_precedence: ["content-type", "x-ms-blob-type"],
+        transport_owns: ["host", "content-length", "transfer-encoding"],
+        credential_and_hop_headers: "rejected_before_storage_dispatch_or_file_persistence",
+        malformed: "502_upstream_file_bridge_invalid_response",
+        lifetime: "request_local_unchanged_across_retries",
+        persistence: "never",
+        public_file_projection: "omitted",
+        native_create: "preserved_for_client_owned_upload"
+      },
       file_upload_retry: %{
         scope: "presigned_blob_put_only",
         attempts: 5,

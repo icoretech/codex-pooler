@@ -109,7 +109,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.FileDispatch do
     end
   end
 
-  defp prepare_upload_target(%{body: body}, {:v1, _purpose}), do: FileBridge.prepare_upload(Map.get(body, "upload_url"))
+  defp prepare_upload_target(%{body: body}, {:v1, _purpose}), do: FileBridge.prepare_upload(Map.get(body, "upload_url"), Map.get(body, "upload_headers"))
   defp prepare_upload_target(_bridge_result, :backend), do: {:ok, nil}
 
   defp create_file_payload(%{file_name: file_name, file_size: file_size, use_case: use_case}) do

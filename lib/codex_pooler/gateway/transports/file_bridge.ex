@@ -3,7 +3,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   require Logger
 
-  alias CodexPooler.Files.UploadUrlPolicy
+  alias CodexPooler.Files.{UploadHeaders, UploadUrlPolicy}
   alias CodexPooler.Files.UploadUrlPolicy.Target
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
@@ -66,7 +66,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   end
 
   @spec prepare_upload(term()) :: {:ok, Target.t()} | {:error, UploadUrlPolicy.file_error()}
-  def prepare_upload(upload_url), do: UploadUrlPolicy.resolve(upload_url)
+  @spec prepare_upload(term(), term()) :: {:ok, Target.t()} | {:error, UploadUrlPolicy.file_error()}
+  def prepare_upload(upload_url, upload_headers \\ nil) do
+    with {:ok, headers} <- UploadHeaders.normalize(upload_headers),
+         {:ok, target} <- UploadUrlPolicy.resolve(upload_url) do
+      {:ok, %{target | headers: headers}}
+    end
+  end
 
   @spec upload_file(String.t() | Target.t(), map(), bridge_opts()) :: :ok | {:error, map()}
   def upload_file(upload_url, file, opts \\ %{})
@@ -118,10 +124,10 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   defp classify_upload_attempt(result, _attempt), do: result
 
-  defp upload_once(%Target{url: url, address: address}, path, content_type, remaining) do
+  defp upload_once(%Target{url: url, address: address, headers: headers}, path, content_type, remaining) do
     with {:ok, body, byte_size} <- readable_file_stream(path) do
       options =
-        upload_req_options(body, content_type, byte_size)
+        upload_req_options(body, content_type, byte_size, headers)
         |> Keyword.put_new(:adapter, PinnedUpload)
 
       url |> upload_request(address, remaining) |> OutboundHTTP.put(options)
@@ -378,15 +384,19 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     path == root or String.starts_with?(path, root <> "/")
   end
 
-  defp upload_req_options(body, content_type, byte_size) do
+  defp upload_req_options(body, content_type, byte_size, provider_headers) do
+    headers =
+      %{
+        "content-length" => Integer.to_string(byte_size),
+        "content-type" => content_type || "application/octet-stream",
+        "x-ms-blob-type" => "BlockBlob"
+      }
+      |> Map.merge(Map.new(provider_headers))
+
     configured_upload_req_options()
     |> Keyword.merge(
       body: body,
-      headers: [
-        {"content-length", Integer.to_string(byte_size)},
-        {"content-type", content_type || "application/octet-stream"},
-        {"x-ms-blob-type", "BlockBlob"}
-      ],
+      headers: headers,
       redirect: false,
       retry: false,
       raw: true

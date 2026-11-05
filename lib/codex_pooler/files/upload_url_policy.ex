@@ -8,9 +8,9 @@ defmodule CodexPooler.Files.UploadUrlPolicy do
   defmodule Target do
     @moduledoc false
     @enforce_keys [:url, :address]
-    defstruct [:url, :address]
+    defstruct [:url, :address, headers: []]
 
-    @type t :: %__MODULE__{url: String.t(), address: :inet.ip_address()}
+    @type t :: %__MODULE__{url: String.t(), address: :inet.ip_address(), headers: [{String.t(), String.t()}]}
   end
 
   @type resolver :: (charlist(), :inet | :inet6 -> {:ok, [:inet.ip_address()]} | {:error, atom()})
