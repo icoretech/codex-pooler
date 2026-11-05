@@ -281,7 +281,7 @@ The conversion runs in one direction only. Codex Pooler translates an ordinary r
 
 ## Image generation and masked edits
 
-Unmasked GPT Image 2/2.5 generation and edits use the native Codex Images service. Its catalog host is an account-capacity carrier; a Full or Lite label on that request does not change the native image payload or establish a quality level.
+Unmasked GPT Image 2/2.6 generation and edits use the native Codex Images service. Its catalog host is an account-capacity carrier; a Full or Lite label on that request does not change the native image payload or establish a quality level.
 
 Masked `POST /v1/images/edits` requests instead require a Full Responses host with image-input support. Codex Pooler preserves the original mask in `input_image_mask` and explicitly selects the image generation tool. An eligible Full host is selected under the Pool's configured model and serving policy; an explicit Lite override on an exact requested model is not bypassed. The resolved mode is checked again before reservation.
 

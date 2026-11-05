@@ -510,7 +510,8 @@ agent:
 
 image_gen:
   provider: openai
-  model: gpt-image-2.5-flare-medium
+  openai:
+    model: gpt-image-2.6-flare
 
 stt:
   enabled: true

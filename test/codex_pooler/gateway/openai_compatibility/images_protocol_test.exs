@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
   use ExUnit.Case, async: true
   alias CodexPooler.Gateway.OpenAICompatibility.{Images, Responses}
 
-  @image_25_models ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-2.5-flare-2026-09-08 gpt-image-2.5-sunburst-2026-09-08)
+  @image_26_models ~w(gpt-image-2.6-flare gpt-image-2.6-sunburst)
   @edit_upload_limit 50 * 1024 * 1024
   # Detection only: N=4 scheduling can delay trace delivery or writer teardown;
   # successful cases finish on messages without spending this budget.
@@ -184,8 +184,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
     end
   end
 
-  test "GPT Image 2.5 preserves extended qualities and custom size boundaries" do
-    for model <- @image_25_models,
+  test "GPT Image 2.6 preserves extended qualities and custom size boundaries" do
+    for model <- @image_26_models,
         quality <- ~w(auto low medium high xhigh max),
         size <- ~w(auto 1536x864 864x1536 1024x640 640x1024 3840x2160 2160x3840 1536x512) do
       assert {:ok, response} =
@@ -205,8 +205,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
     end
   end
 
-  test "GPT Image 2.5 rejects malformed and out-of-range options" do
-    for model <- @image_25_models,
+  test "GPT Image 2.6 rejects malformed and out-of-range options" do
+    for model <- @image_26_models,
         {key, value} <- [
           {"quality", "ultra"},
           {"quality", 1},
@@ -362,7 +362,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
     assert response.payload["tool_choice"] == %{"type" => "image_generation"}
   end
 
-  test "GPT Image 2.5 masked edits preserve extended options in Responses translation" do
+  test "GPT Image 2.6 masked edits preserve extended options in Responses translation" do
     path =
       Path.join(System.tmp_dir!(), "image-mask-options-#{System.unique_integer([:positive])}")
 
@@ -370,7 +370,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
     on_exit(fn -> File.rm(path) end)
     upload = %Plug.Upload{path: path, filename: "sample.png", content_type: "image/png"}
 
-    for model <- @image_25_models, quality <- ~w(xhigh max) do
+    for model <- @image_26_models, quality <- ~w(xhigh max) do
       assert {:ok, response} =
                Images.coerce_edit(%{
                  "model" => model,

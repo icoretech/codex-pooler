@@ -277,11 +277,11 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
   for mode <- ["full", "lite"],
       {model, options, fidelity} <-
         Enum.map(
-          ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst),
+          ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini gpt-image-2 gpt-image-2.6-flare gpt-image-2.6-sunburst),
           &{&1, :mask, nil}
         ) ++
           for(
-            model <- ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-1-mini),
+            model <- ~w(gpt-image-2 gpt-image-2.6-flare gpt-image-2.6-sunburst gpt-image-1-mini),
             options <- [:fidelity, :both],
             fidelity <- ["low", "high"],
             do: {model, options, fidelity}
@@ -342,7 +342,7 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
         |> put_req_header("content-type", "multipart/form-data; boundary=edit-options")
         |> post("/v1/images/edits", IO.iodata_to_binary([parts, files, "--edit-options--\r\n"]))
 
-      if @image_model in ~w(gpt-image-2 gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-1-mini) and
+      if @image_model in ~w(gpt-image-2 gpt-image-2.6-flare gpt-image-2.6-sunburst gpt-image-1-mini) and
            @options != :mask do
         assert %{"error" => %{"param" => "input_fidelity", "type" => "invalid_request_error"}} =
                  json_response(response, 400)

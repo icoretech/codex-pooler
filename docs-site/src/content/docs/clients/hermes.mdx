@@ -162,7 +162,8 @@ Add these optional blocks to `config.yaml`:
 ```yaml title="config.yaml" frame="code"
 image_gen:
   provider: openai
-  model: gpt-image-2.5-flare-medium
+  openai:
+    model: gpt-image-2.6-flare
 
 stt:
   enabled: true
@@ -188,15 +189,13 @@ selection, and use `gpt-4o-transcribe` because Hermes' default `whisper-1` is
 not supported by Codex Pooler. The `gpt-transcribe` alias is also accepted.
 This enables transcription only; text-to-speech and Realtime audio are not supported.
 
-Use a Hermes version whose OpenAI image provider lists GPT Image 2.5. Its
-`gpt-image-2.5-flare-medium` preset sends `gpt-image-2.5-flare` to the API
-with `quality: medium`; use `gpt-image-2.5-sunburst-medium` for Sunburst.
-The `-low`, `-high`, `-xhigh`, and `-max` presets are also accepted and forwarded.
-The Codex backend can return a different quality or size than requested; these
-presets do not guarantee measured output quality. Older Hermes versions hardcode `gpt-image-2` in this
-provider; update Hermes before applying the new preset. See the
-[Hermes OpenAI image provider](https://github.com/NousResearch/hermes-agent/blob/b1f003e18633298d549668b8e186af84cca45b76/plugins/image_gen/openai/__init__.py)
-for the model-to-quality mapping.
+Set `image_gen.openai.model` to the API identifier `gpt-image-2.6-flare`,
+or use `gpt-image-2.6-sunburst` for Sunburst. Hermes' provider-scoped custom-model
+setting forwards that identifier without a quality preset. Keep it under
+`image_gen.openai`: an unknown model in the shared `image_gen.model` setting
+falls back to the provider's default. Do not append a quality suffix to a custom
+API identifier. `OPENAI_IMAGE_MODEL` can also select the exact API identifier.
+The Codex backend can return a different quality or size than requested.
 
 This provider uses the OpenAI SDK environment, so `OPENAI_API_KEY` and
 `OPENAI_BASE_URL` must be visible to the running Hermes process, not only to

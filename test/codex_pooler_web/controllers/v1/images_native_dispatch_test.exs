@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
         updated_at: now
       })
 
-      payload = %{"model" => "gpt-image-2.5-flare", "prompt" => "synthetic image"}
+      payload = %{"model" => "gpt-image-2.6-flare", "prompt" => "synthetic image"}
 
       payload =
         if @usage_operation == "edits" do
@@ -207,17 +207,17 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       operation <- ["generations", "edits"],
       {model, quality, size} <- [
         {"gpt-image-2", "medium", "1536x1024"},
-        {"gpt-image-2.5-flare", "xhigh", "1536x864"},
-        {"gpt-image-2.5-sunburst", "max", "1536x864"},
-        {"gpt-image-2.5-flare-2026-09-08", "max", "3840x2160"},
-        {"gpt-image-2.5-sunburst-2026-09-08", "xhigh", "3840x2160"}
+        {"gpt-image-2.6-flare", "xhigh", "1536x864"},
+        {"gpt-image-2.6-sunburst", "max", "1536x864"},
+        {"gpt-image-2.6-flare", "max", "3840x2160"},
+        {"gpt-image-2.6-sunburst", "xhigh", "3840x2160"}
       ] do
     @image_model model
     @quality quality
     @size size
     @mode mode
     @operation operation
-    test "#{@image_model} #{@operation} uses native image service with #{@mode} assignment", %{
+    test "#{@image_model} #{@operation} at #{@quality} #{@size} uses native image service with #{@mode} assignment", %{
       conn: conn
     } do
       upstream =

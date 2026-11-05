@@ -5,8 +5,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @image_25_models ~w(gpt-image-2.5-flare gpt-image-2.5-sunburst gpt-image-2.5-flare-2026-09-08 gpt-image-2.5-sunburst-2026-09-08)
-  @native_models ["gpt-image-2" | @image_25_models]
+  @image_26_models ~w(gpt-image-2.6-flare gpt-image-2.6-sunburst)
+  @native_models ["gpt-image-2" | @image_26_models]
   @supported_models ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini) ++ @native_models
   @sizes ~w(auto 1024x1024 1024x1536 1536x1024)
   @qualities ~w(auto low medium high)
@@ -170,13 +170,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
     end
   end
 
-  defp validate_quality(%{"model" => model} = payload) when model in @image_25_models,
+  defp validate_quality(%{"model" => model} = payload) when model in @image_26_models,
     do: validate_one_of(payload, "quality", @qualities ++ ~w(xhigh max))
 
   defp validate_quality(payload), do: validate_one_of(payload, "quality", @qualities)
 
   defp validate_size(%{"model" => model, "size" => size})
-       when model in @image_25_models and is_binary(size) and size != "auto" do
+       when model in @image_26_models and is_binary(size) and size != "auto" do
     if valid_dimensions?(size),
       do: :ok,
       else: {:error, Error.invalid_request("size is not supported", "size")}
