@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.3...codex-pooler-v0.14.4) (2026-11-06)
+
+
+### Dependencies
+
+* support Codex 0.167.0 catalog and client identity ([f119bbe](https://github.com/icoretech/codex-pooler/commit/f119bbed444f6b081256546637b9740a3425ae72))
+* update AI SDK contract probe packages ([48fc610](https://github.com/icoretech/codex-pooler/commit/48fc61004cb23a8b9d355af6288a01bcb97e8038))
+* update Astro to 7.4.7 and refresh docs packages ([261736e](https://github.com/icoretech/codex-pooler/commit/261736e101ab5bd8f086dbcf89169ae124550ea0))
+* update dependency @astrojs/starlight to v0.42.9 ([#605](https://github.com/icoretech/codex-pooler/issues/605)) ([076ad7a](https://github.com/icoretech/codex-pooler/commit/076ad7ac688fb5df9961e182dfd3d682676ed4e4))
+* update dependency websock_adapter to v0.7.1 ([#606](https://github.com/icoretech/codex-pooler/issues/606)) ([9cdfc05](https://github.com/icoretech/codex-pooler/commit/9cdfc0523f9f57fcaa9e50fdb34c8df2c6fd82af))
+* update Ecto to 3.14.3 and NimbleOptions to 1.2.0 ([0ba0fcb](https://github.com/icoretech/codex-pooler/commit/0ba0fcbb06fd4a6172a1b546457a19e86bb38dae))
+
+
+### Tests
+
+* allow per-lane auto-compaction limits in the Codex fixture ([19b7f9c](https://github.com/icoretech/codex-pooler/commit/19b7f9cd2e26471b0b877407952d6989a6697ae9))
+
 ## [0.14.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.2...codex-pooler-v0.14.3) (2026-11-05)
 
 
