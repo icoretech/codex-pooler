@@ -39,7 +39,6 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
   def provision!(run_id, upstream_base_url, journal, persist_journal, options \\ []) do
     scope = owner_scope!()
     interrupt_after = Keyword.get(options, :interrupt_after)
-    serving_mode = serving_mode(Keyword.get(options, :serving_mode))
 
     {:ok, provisioned} =
       Repo.transact(fn ->
@@ -58,7 +57,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
 
         maybe_interrupt!(interrupt_after, :assignment)
 
-        model = create_model!(pool, assignment, serving_mode)
+        model = create_model!(pool, assignment, options)
         journal = journal |> Journal.put_resource(:model, model.id) |> persist_journal.()
         create_quota_windows!(identity, model)
         maybe_interrupt!(interrupt_after, :model)
@@ -179,9 +178,10 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
     assignment
   end
 
-  defp create_model!(pool, assignment, serving_mode) do
+  defp create_model!(pool, assignment, options) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    use_responses_lite = serving_mode == :lite
+    use_responses_lite = serving_mode(Keyword.get(options, :serving_mode)) == :lite
+    auto_compact_token_limit = Keyword.get(options, :auto_compact_token_limit) || 200
 
     %Model{}
     |> Model.changeset(%{
@@ -237,7 +237,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
             "supported_reasoning_levels" => [%{"effort" => "low", "description" => "Low reasoning effort"}],
             "default_reasoning_level" => "low",
             "context_window" => 128_000,
-            "auto_compact_token_limit" => 200
+            "auto_compact_token_limit" => auto_compact_token_limit
           }
         }
       }

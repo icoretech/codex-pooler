@@ -34,6 +34,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
              run_id: :string,
              upstream_base_url: :string,
              serving_mode: :string,
+             auto_compact_token_limit: :integer,
              upstream_frame_count: :integer,
              duplicate_error_count: :integer,
              mode: :string
@@ -58,7 +59,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
         validate_args(:serving_override, options)
 
       _invalid ->
-        {:error, "use acquire --run-id RUN_ID --upstream-base-url ORIGIN [--serving-mode full|lite], status/release --run-id RUN_ID, receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N, cache-receipt --run-id RUN_ID, or serving-override --run-id RUN_ID --mode full|lite|auto"}
+        {:error, "use acquire --run-id RUN_ID --upstream-base-url ORIGIN [--serving-mode full|lite] [--auto-compact-token-limit N], status/release --run-id RUN_ID, receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N, cache-receipt --run-id RUN_ID, or serving-override --run-id RUN_ID --mode full|lite|auto"}
     end
   end
 
@@ -381,7 +382,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
     provisioned =
       Provisioner.provision!(run_id, origin, journal, persist_journal,
         interrupt_after: Keyword.get(options, :interrupt_after),
-        serving_mode: Keyword.get(options, :serving_mode)
+        serving_mode: Keyword.get(options, :serving_mode),
+        auto_compact_token_limit: Keyword.get(options, :auto_compact_token_limit)
       )
 
     journal = Map.put(provisioned.journal, "state", "prepared")
@@ -585,13 +587,22 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   defp exact_option_keys(:acquire, options) do
     keys = Enum.sort(Keyword.keys(options))
     serving_mode = Keyword.get(options, :serving_mode)
+    auto_compact_token_limit = Keyword.get(options, :auto_compact_token_limit)
 
     cond do
-      keys not in [[:run_id, :upstream_base_url], [:run_id, :serving_mode, :upstream_base_url]] ->
+      keys not in [
+        [:run_id, :upstream_base_url],
+        [:run_id, :serving_mode, :upstream_base_url],
+        [:auto_compact_token_limit, :run_id, :upstream_base_url],
+        [:auto_compact_token_limit, :run_id, :serving_mode, :upstream_base_url]
+      ] ->
         {:error, "acquire requires exact options"}
 
       not is_nil(serving_mode) and serving_mode not in ["full", "lite"] ->
         {:error, "serving mode must be full or lite"}
+
+      not is_nil(auto_compact_token_limit) and (not is_integer(auto_compact_token_limit) or auto_compact_token_limit <= 0) ->
+        {:error, "auto-compact token limit must be positive"}
 
       true ->
         :ok

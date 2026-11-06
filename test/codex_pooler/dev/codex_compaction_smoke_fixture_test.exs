@@ -155,6 +155,24 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
   end
 
+  @tag :unix_integration
+  test "a client lane can raise its own auto-compaction threshold", context do
+    options = Keyword.put(fixture_options(context), :auto_compact_token_limit, 10_000)
+    assert {:ok, acquired} = CodexCompactionSmokeFixture.acquire(options)
+    assert {:ok, secret} = Journal.read_secret(Journal.paths(context.root, context.run_id), context.run_id)
+
+    assert %Model{metadata: metadata} = Repo.get_by(Model, pool_id: secret["pool_id"])
+    assert get_in(metadata, ["source_assignment_models", acquired.assignment_id, "auto_compact_token_limit"]) == 10_000
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header("authorization", "Bearer " <> secret["api_key"])
+      |> Phoenix.ConnTest.dispatch(CodexPoolerWeb.Endpoint, :get, "/backend-api/codex/models")
+
+    assert %{"models" => [%{"auto_compact_token_limit" => 10_000}]} = Phoenix.ConnTest.json_response(conn, 200)
+    assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
+  end
+
   # The service tier the released Codex client sends for the fixture model when
   # nothing configures one: `default_service_tier` of `gpt-6-sol` in the
   # client's bundled `codex-rs/models-manager/models.json` (0.156.1). The
@@ -460,6 +478,30 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
              ])
 
     assert options[:run_id] == context.run_id
+
+    assert {:ok, :acquire, configured} =
+             CodexCompactionSmokeFixture.parse_args([
+               "acquire",
+               "--run-id",
+               context.run_id,
+               "--upstream-base-url",
+               "http://127.0.0.1:4567",
+               "--auto-compact-token-limit",
+               "10000"
+             ])
+
+    assert configured[:auto_compact_token_limit] == 10_000
+
+    assert {:error, "auto-compact token limit must be positive"} =
+             CodexCompactionSmokeFixture.parse_args([
+               "acquire",
+               "--run-id",
+               context.run_id,
+               "--upstream-base-url",
+               "http://127.0.0.1:4567",
+               "--auto-compact-token-limit",
+               "0"
+             ])
 
     assert {:ok, :status, _} =
              CodexCompactionSmokeFixture.parse_args(["status", "--run-id", context.run_id])
