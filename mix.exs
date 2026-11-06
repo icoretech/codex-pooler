@@ -100,7 +100,7 @@ defmodule CodexPooler.MixProject do
       {:gettext, "== 1.0.2"},
       {:dns_cluster, "== 0.3.1"},
       {:websock, "== 0.5.3"},
-      {:websock_adapter, "== 0.7.0"},
+      {:websock_adapter, "== 0.7.1"},
       {:bandit, "== 1.14.1"}
     ]
   end
