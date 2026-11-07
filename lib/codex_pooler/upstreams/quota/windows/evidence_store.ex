@@ -772,7 +772,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   # reset_after_seconds value below one week as proof.
   defp bounded_immediate_model_weekly_anchor?(
          %Evidence{
-           used_percent: %Decimal{} = incoming_percent,
            reset_at: %DateTime{} = incoming_reset,
            metadata: metadata,
            window_minutes: minutes
@@ -782,14 +781,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
            reset_at: %DateTime{} = existing_reset
          }
        ) do
-    zero_percent?(incoming_percent) and
-      zero_percent?(existing_percent) and
+    zero_percent?(existing_percent) and
       bounded_immediate_countdown?(RelativeLiveness.countdown_timing(metadata), minutes * 60) and
       abs(DateTime.diff(incoming_reset, existing_reset, :second)) <=
         @usage_reset_forward_tolerance_seconds
   end
-
-  defp bounded_immediate_model_weekly_anchor?(_evidence, _existing), do: false
 
   defp bounded_immediate_countdown?(
          {:ok,
@@ -806,18 +802,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp bounded_immediate_countdown?(_timing, _seconds), do: false
 
   defp started_model_weekly_countdown?(%Evidence{
-         used_percent: %Decimal{} = used_percent,
          metadata: metadata,
          window_minutes: minutes
        }) do
-    zero_percent?(used_percent) and
-      started_model_weekly_countdown_timing?(
-        RelativeLiveness.countdown_timing(metadata),
-        minutes * 60
-      )
+    started_model_weekly_countdown_timing?(
+      RelativeLiveness.countdown_timing(metadata),
+      minutes * 60
+    )
   end
-
-  defp started_model_weekly_countdown?(_evidence), do: false
 
   defp started_model_weekly_countdown_timing?(
          {:ok,
@@ -1019,21 +1011,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp anchored_restart_confirmed?(metadata, evidence, existing, timestamp) do
-    case parse_candidate(metadata) do
-      {:ok, candidate} ->
-        (fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) or
-           exhausted_same_anchor_candidate?(
-             candidate,
-             evidence,
-             existing,
-             metadata,
-             timestamp
-           )) and
-          confirmation_span_reached?(candidate, evidence)
+    {:ok, candidate} = parse_candidate(metadata)
 
-      :none ->
-        false
-    end
+    (fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) or
+       exhausted_same_anchor_candidate?(candidate, evidence, existing, metadata, timestamp)) and
+      confirmation_span_reached?(candidate, evidence)
   end
 
   defp fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) do
@@ -1180,14 +1162,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp exhausted_same_anchor_confirmed?(metadata, evidence, existing, timestamp) do
-    case parse_candidate(metadata) do
-      {:ok, candidate} ->
-        exhausted_same_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) and
-          confirmation_span_reached?(candidate, evidence)
+    {:ok, candidate} = parse_candidate(metadata)
 
-      :none ->
-        false
-    end
+    exhausted_same_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) and
+      confirmation_span_reached?(candidate, evidence)
   end
 
   defp log_cycle_decision(decision, reason, _existing, evidence, metadata) do
@@ -1244,15 +1222,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp bounded_idle_zero_forward_anchor?(
-         %Evidence{reset_at: %DateTime{} = incoming_reset, used_percent: %Decimal{} = incoming} =
+         %Evidence{reset_at: %DateTime{} = incoming_reset} =
            evidence,
          %Quota.AccountQuotaWindow{
            reset_at: %DateTime{} = existing_reset,
            used_percent: %Decimal{} = existing
          } = window
        ) do
-    zero_percent?(incoming) and
-      zero_percent?(existing) and
+    zero_percent?(existing) and
       anchored_forward_weekly_cycle?(evidence, window) and
       DateTime.diff(incoming_reset, existing_reset, :second) <=
         @usage_reset_reanchor_min_shift_seconds
@@ -1306,8 +1283,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
     abs(delta_reset - delta_observed) <= @weekly_restart_sliding_tolerance_seconds
   end
-
-  defp sliding_live_reset?(_candidate, _evidence), do: false
 
   defp unproven_model_weekly_zero_observation?(
          %Evidence{
@@ -1388,7 +1363,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       newer_observation?(evidence.observed_at, existing.observed_at) and
       (positive_percent?(existing_percent) or
          not same_cycle_sync_refresh?(evidence, existing, timestamp)) and
-      not runtime_weekly_restart_corroborated?(evidence, existing, timestamp)
+      not runtime_corroborated_weekly_restart?(evidence, existing, timestamp) and
+      not (anchored_forward_weekly_cycle?(evidence, existing) and
+             runtime_weekly_restart_corroborated?(evidence, existing, timestamp))
   end
 
   defp unconfirmed_weekly_zero_observation?(_evidence, _existing, _timestamp), do: false
@@ -1446,9 +1423,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
       incoming_updates_usage_with_existing_capacity?(evidence, existing) ->
         merge_usage_with_existing_capacity_attrs(existing, attrs, evidence, timestamp)
-
-      incoming_usage_advances_runtime_reset?(evidence, existing, timestamp) ->
-        merge_usage_reset_with_existing_percent_attrs(existing, attrs, timestamp)
 
       incoming_relative_usage_extends_existing_reset?(evidence, existing, timestamp) ->
         merge_weak_usage_with_existing_reset_attrs(existing, attrs, timestamp)
@@ -1583,8 +1557,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{used_percent: %Decimal{} = incoming_percent, metadata: metadata},
          %Quota.AccountQuotaWindow{used_percent: %Decimal{} = existing_percent}
        ) do
-    positive_percent?(incoming_percent) and
-      Decimal.compare(incoming_percent, existing_percent) == :lt and
+    Decimal.compare(incoming_percent, existing_percent) == :lt and
       provider_status_safe?(metadata)
   end
 
@@ -1819,8 +1792,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     )
   end
 
-  defp runtime_weekly_restart_corroborated?(_evidence, _existing, _timestamp), do: false
-
   defp runtime_corroborated_weekly_restart?(
          %Evidence{used_percent: %Decimal{}, metadata: metadata} = evidence,
          %Quota.AccountQuotaWindow{used_percent: %Decimal{}} = existing,
@@ -1858,6 +1829,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     abs(DateTime.diff(left, right, :second)) <= @account_snapshot_reset_tolerance_seconds
   end
 
+  defp reset_times_equivalent?(_left, _right), do: false
+
   # A same-cycle reset can drift earlier than the stored reset by countdown
   # rounding, fetch latency, or the provider interleaving two claims of the
   # same window whose resets differ by minutes. Any claim whose reset falls
@@ -1879,9 +1852,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        when is_integer(window_minutes) and window_minutes > 0 do
     window_minutes * 60 + @usage_reset_forward_tolerance_seconds
   end
-
-  defp same_cycle_backward_tolerance_seconds(_window_minutes),
-    do: @usage_reset_forward_tolerance_seconds
 
   defp accepted_snapshot_attrs(existing, attrs, timestamp) do
     metadata =
@@ -2187,7 +2157,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     case parse_candidate(metadata) do
       {:ok, candidate} ->
         if runtime_compatible_with_candidate?(evidence, candidate) and
-             runtime_not_older_than_candidate?(evidence, candidate) do
+             runtime_not_older_than_candidate?(evidence, candidate) and
+             not runtime_preserves_weekly_zero_candidate?(metadata, evidence, candidate) do
           clear_candidate(metadata)
         else
           metadata
@@ -2196,6 +2167,26 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       :none ->
         clear_candidate(metadata)
     end
+  end
+
+  # A matching runtime zero supports the pending provider reset; it must not
+  # erase the provider's observation span. Positive or denying runtime evidence
+  # still invalidates it. Only subsequent Usage API observations can accept it.
+  defp runtime_preserves_weekly_zero_candidate?(%{"credential_epoch" => epoch} = metadata, %Evidence{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, model: nil, upstream_model: nil, metadata: runtime_metadata} = evidence, candidate)
+       when is_integer(epoch) and epoch > 0 and is_map(runtime_metadata) do
+    Map.get(runtime_metadata, "credential_epoch", epoch) == epoch and zero_candidate?(candidate) and
+      zero_percent?(evidence.used_percent) and candidate_provider_status_safe?(metadata) and
+      runtime_zero_not_denied?(evidence, runtime_metadata) and
+      candidate_valid?(candidate, evidence.observed_at) and
+      abs(DateTime.diff(evidence.reset_at, candidate.reset_at, :second)) <= @restart_corroboration_reset_tolerance_seconds
+  end
+
+  defp runtime_preserves_weekly_zero_candidate?(_metadata, _evidence, _candidate), do: false
+
+  defp runtime_zero_not_denied?(evidence, metadata) do
+    evidence.source != "codex_rate_limit_error" and is_nil(metadata["rate_limit_reached_type"]) and
+      is_nil(metadata["rate_limit_error_code"]) and metadata["rate_limit_allowed"] != false and
+      metadata["rate_limit_reached"] != true
   end
 
   defp runtime_compatible_with_candidate?(
@@ -2243,21 +2234,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Quota.AccountQuotaWindow{} = existing,
          timestamp
        ) do
-    cond do
-      usage_api_supersedes_runtime_rollback?(evidence, existing, timestamp) ->
-        true
+    if runtime_percent_rollback?(evidence, existing, timestamp) do
+      false
+    else
+      case zero_percent_only_merge_decision(evidence, existing, timestamp) do
+        {:ok, decision} ->
+          decision
 
-      runtime_percent_rollback?(evidence, existing, timestamp) ->
-        false
-
-      true ->
-        case zero_percent_only_merge_decision(evidence, existing, timestamp) do
-          {:ok, decision} ->
-            decision
-
-          :continue ->
-            quality_supersedes?(evidence, existing, timestamp)
-        end
+        :continue ->
+          quality_supersedes?(evidence, existing, timestamp)
+      end
     end
   end
 
@@ -2268,30 +2254,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         {:ok, same_evidence_identity?(evidence, existing)}
 
       weak_zero_percent_evidence?(evidence) and
-        stronger_current_quota_information?(existing, timestamp) and
-          not newer_usage_reset_supersedes?(evidence, existing) ->
+          stronger_current_quota_information?(existing, timestamp) ->
         {:ok, false}
 
       true ->
         :continue
     end
   end
-
-  defp usage_api_supersedes_runtime_rollback?(
-         %Evidence{source: "codex_usage_api", used_percent: %Decimal{} = incoming_percent} =
-           evidence,
-         %Quota.AccountQuotaWindow{source: source, used_percent: %Decimal{} = existing_percent} =
-           existing,
-         timestamp
-       )
-       when source in @runtime_quota_sources do
-    rollback_guarded_quota_identity?(evidence) and same_evidence_identity?(evidence, existing) and
-      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
-      Decimal.compare(incoming_percent, existing_percent) != :lt
-  end
-
-  defp usage_api_supersedes_runtime_rollback?(_evidence, _existing, _timestamp),
-    do: false
 
   defp runtime_percent_rollback?(
          %Evidence{source: source, used_percent: %Decimal{} = incoming_percent} = evidence,
@@ -2332,19 +2301,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp confirmed_provider_cycle_matches?(_evidence, _existing, _timestamp), do: false
-
-  defp incoming_usage_advances_runtime_reset?(
-         %Evidence{source: "codex_usage_api"} = evidence,
-         %Quota.AccountQuotaWindow{source: source} = existing,
-         timestamp
-       )
-       when source in @runtime_quota_sources do
-    same_evidence_identity?(evidence, existing) and weak_zero_percent_evidence?(evidence) and
-      stronger_current_quota_information?(existing, timestamp) and
-      newer_usage_reset_supersedes?(evidence, existing)
-  end
-
-  defp incoming_usage_advances_runtime_reset?(_evidence, _existing, _timestamp), do: false
 
   defp incoming_weak_usage_extends_existing_reset?(
          %Evidence{source: "codex_usage_api", reset_at: %DateTime{} = incoming_reset} =
@@ -2394,7 +2350,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     higher_precedence_rate_limit_event_supersedes?(evidence, existing) or
       (not reset_bearing_rollback?(evidence, existing, timestamp) and
          (resetless_weekly_rate_limit_supersedes?(evidence, existing) ||
-            newer_usage_reset_supersedes?(evidence, existing) ||
             incoming_quality >= existing_quality))
   end
 
@@ -2452,27 +2407,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     evidence.source == existing.source and weak_zero_percent_evidence?(existing) and
       stronger_quota_information?(evidence)
   end
-
-  defp newer_usage_reset_supersedes?(
-         %Evidence{
-           source: "codex_usage_api",
-           source_precision: source_precision,
-           reset_at: %DateTime{} = reset_at,
-           observed_at: %DateTime{} = observed_at
-         } = evidence,
-         %Quota.AccountQuotaWindow{
-           source: "codex_response_headers",
-           reset_at: %DateTime{} = existing_reset_at,
-           observed_at: %DateTime{} = existing_observed_at
-         } = existing
-       )
-       when source_precision in ["observed", "authoritative"] do
-    same_evidence_identity?(evidence, existing) and
-      DateTime.compare(observed_at, existing_observed_at) == :gt and
-      DateTime.compare(reset_at, existing_reset_at) == :gt
-  end
-
-  defp newer_usage_reset_supersedes?(_evidence, _existing), do: false
 
   defp resetless_weekly_rate_limit_supersedes?(
          %Evidence{
@@ -2857,26 +2791,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     })
   end
 
-  defp merge_usage_reset_with_existing_percent_attrs(
-         %Quota.AccountQuotaWindow{} = existing,
-         attrs,
-         timestamp
-       ) do
-    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit), attrs)
-    credits = preserved_credits(existing, Map.get(attrs, :credits))
-
-    attrs
-    |> Map.put(:active_limit, active_limit)
-    |> Map.put(:credits, credits)
-    |> Map.put(
-      :used_percent,
-      runtime_usage_percent(existing, Map.get(attrs, :used_percent))
-    )
-    |> Map.put(:metadata, Map.merge(existing.metadata || %{}, Map.get(attrs, :metadata, %{})))
-    |> Map.put_new(:created_at, existing.created_at || timestamp)
-    |> Map.put(:updated_at, timestamp)
-  end
-
   defp refresh_existing_attrs(%Quota.AccountQuotaWindow{} = existing, attrs, timestamp) do
     existing
     |> window_attrs()
@@ -2892,9 +2806,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp latest_datetime(%DateTime{} = existing, %DateTime{} = incoming) do
     if DateTime.compare(incoming, existing) == :gt, do: incoming, else: existing
   end
-
-  defp latest_datetime(nil, %DateTime{} = incoming), do: incoming
-  defp latest_datetime(existing, _incoming), do: existing
 
   defp latest_reset_at(%DateTime{} = existing, %DateTime{} = incoming) do
     if DateTime.compare(incoming, existing) == :lt, do: existing, else: incoming
@@ -2969,6 +2880,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
+  defp codex_usage_active_limit(existing, nil, nil),
+    do: preserved_active_limit(existing, nil)
+
   defp codex_usage_active_limit(_existing, incoming, _used_percent), do: incoming
 
   defp max_positive_integer(left, right)
@@ -3005,11 +2919,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        when is_integer(active_limit) and active_limit > 0 do
     valid_existing_credits(existing.credits, active_limit)
   end
-
-  defp usage_credits(_existing, _evidence, active_limit, incoming)
-       when is_integer(active_limit) and active_limit > 0 and is_integer(incoming) and
-              incoming >= 0 and incoming <= active_limit,
-       do: incoming
 
   defp usage_credits(_existing, _evidence, active_limit, incoming)
        when not (is_integer(active_limit) and active_limit > 0) and is_integer(incoming) and
@@ -3052,12 +2961,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp highest_used_percent(nil, %Decimal{} = incoming), do: incoming
   defp highest_used_percent(existing, _incoming), do: existing
 
-  defp runtime_usage_percent(%Quota.AccountQuotaWindow{quota_scope: scope} = existing, incoming)
-       when scope in ["model", "upstream_model"],
-       do: highest_used_percent(existing.used_percent, incoming)
-
-  defp runtime_usage_percent(_existing, incoming), do: incoming
-
   defp positive_credits?(%{credits: credits}) when is_integer(credits), do: credits > 0
   defp positive_credits?(_evidence_or_window), do: false
 
@@ -3093,8 +2996,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp observed_rank(%Quota.AccountQuotaWindow{observed_at: %DateTime{} = observed_at}),
     do: DateTime.to_unix(observed_at, :microsecond)
-
-  defp observed_rank(_evidence_or_window), do: 0
 
   defp information_quality_rank(%{active_limit: active_limit})
        when is_integer(active_limit) and active_limit > 0,

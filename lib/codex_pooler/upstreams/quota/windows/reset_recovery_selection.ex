@@ -3,23 +3,26 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
 
   alias CodexPooler.Quotas.{CapacityFacts, Evidence}
   alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, CapacityFactsStore, RoutingQuotaSnapshot, WindowSelector}
+  alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
   alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
 
   @reset_rounding_seconds 5
 
   # A rolling restart can be accepted without becoming an anchored cycle.
-  # Only a confirmed applied reset with current included provider evidence may
-  # retire its own measured pre-consume cycle; the raw diagnostic view is intact.
+  # A confirmed applied reset with current included evidence retires its own
+  # prior cycle. A partial non-denying runtime measurement just after consume
+  # also yields once the new zero cycle was accepted; later pressure remains.
   @spec reject_recovered_prior_cycles([AccountQuotaWindow.t()], RoutingQuotaSnapshot.t()) :: [AccountQuotaWindow.t()]
   def reject_recovered_prior_cycles(windows, snapshot) do
-    with {:ok, consumed_at, descriptors} <- confirmed_reset(snapshot),
+    with {:ok, consumed_at, finished_at, descriptors} <- confirmed_reset(snapshot),
          true <- included_permission?(snapshot, consumed_at),
          witnesses <- Enum.filter(windows, &recovery_witness?(&1, snapshot, consumed_at)),
          true <- Enum.all?(descriptors, fn descriptor -> Enum.any?(witnesses, &matches_descriptor?(&1, descriptor)) end) do
       Enum.reject(windows, fn window ->
-        preconsume_measurement?(window, consumed_at) and
-          Enum.any?(descriptors, &recovered_resource?(window, &1, witnesses))
+        (preconsume_measurement?(window, consumed_at) and
+           Enum.any?(descriptors, &recovered_resource?(window, &1, witnesses))) or
+          superseded_partial_measurement?(window, consumed_at, finished_at, descriptors, witnesses, snapshot.as_of)
       end)
     else
       _unproven -> windows
@@ -43,7 +46,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
          [_ | _] = descriptors when length(descriptors) <= 2 <- redemption["included_window_descriptors"],
          true <- Enum.all?(descriptors, &valid_descriptor?/1),
          true <- length(Enum.uniq(descriptors)) == length(descriptors) do
-      {:ok, consumed_at, descriptors}
+      {:ok, consumed_at, finished_at, descriptors}
     else
       _invalid -> :error
     end
@@ -80,6 +83,51 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
     do: DateTime.compare(observed_at, consumed_at) == :lt
 
   defp preconsume_measurement?(_window, _consumed_at), do: false
+
+  @spec superseded_partial_measurement?(AccountQuotaWindow.t(), DateTime.t(), DateTime.t(), [map()], [AccountQuotaWindow.t()], DateTime.t()) :: boolean()
+  defp superseded_partial_measurement?(%AccountQuotaWindow{source: source, source_precision: precision, used_percent: %Decimal{} = used, observed_at: %DateTime{} = observed_at, reset_at: %DateTime{}, metadata: metadata} = window, consumed_at, finished_at, descriptors, witnesses, as_of)
+       when source in ["codex_response_headers", "codex_rate_limit_event"] and precision in ["observed", "authoritative"] and is_map(metadata) do
+    DateTime.compare(observed_at, consumed_at) != :lt and
+      non_denying_partial_measurement?(metadata, used) and
+      Enum.any?(descriptors, fn descriptor ->
+        descriptor == %{"window_kind" => "secondary", "window_minutes" => 10_080} and
+          matches_descriptor?(window, descriptor) and
+          Enum.any?(witnesses, fn witness ->
+            matches_descriptor?(witness, descriptor) and later_cycle?(witness, window) and
+              before_accepted_zero?(observed_at, witness, consumed_at, finished_at, as_of)
+          end)
+      end)
+  end
+
+  defp superseded_partial_measurement?(_window, _consumed_at, _finished_at, _descriptors, _witnesses, _as_of), do: false
+
+  defp non_denying_partial_measurement?(metadata, used) do
+    Decimal.compare(used, Decimal.new(0)) == :gt and Decimal.compare(used, Decimal.new(100)) == :lt and
+      is_nil(metadata["rate_limit_reached_type"]) and is_nil(metadata["rate_limit_error_code"]) and
+      metadata["rate_limit_allowed"] in [nil, true] and metadata["rate_limit_reached"] in [nil, false]
+  end
+
+  defp before_accepted_zero?(observed_at, %AccountQuotaWindow{used_percent: %Decimal{} = used, metadata: metadata} = witness, consumed_at, finished_at, as_of) do
+    with true <- Decimal.equal?(used, Decimal.new(0)),
+         %{"used_percent" => encoded_used} = encoded <- metadata[UsageCoherence.metadata_key()],
+         true <- map_size(encoded) == 8,
+         true <- is_binary(encoded_used),
+         {%Decimal{} = marker_used, ""} <- Decimal.parse(encoded_used),
+         true <- Decimal.equal?(marker_used, used),
+         {:ok, marker} <- UsageCoherence.parse_marker(metadata),
+         :eq <- DateTime.compare(marker.reset_at, witness.reset_at),
+         :eq <- DateTime.compare(marker.last_observed_at, witness.observed_at),
+         true <- DateTime.compare(marker.first_observed_at, consumed_at) != :lt,
+         true <- DateTime.compare(marker.first_observed_at, marker.last_observed_at) != :gt,
+         true <- DateTime.compare(marker.last_observed_at, as_of) != :gt do
+      # A coherence chain may restart after a polling gap. The settled receipt
+      # caps the cutoff so that later polls never hide newer runtime pressure.
+      cutoff = Enum.min([finished_at, marker.first_observed_at], DateTime)
+      DateTime.compare(observed_at, cutoff) == :lt
+    else
+      _unproven -> false
+    end
+  end
 
   defp later_cycle?(witness, window),
     do: DateTime.diff(witness.reset_at, window.reset_at, :microsecond) > @reset_rounding_seconds * 1_000_000
