@@ -194,7 +194,7 @@ config :esbuild,
   ]
 
 config :tailwind,
-  version: "4.3.4",
+  version: "4.3.5",
   codex_pooler: [
     args: ~w(
       --input=assets/css/app.css
