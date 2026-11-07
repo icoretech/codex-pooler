@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.4...codex-pooler-v0.14.5) (2026-11-07)
+
+
+### Bug Fixes
+
+* preserve weekly reset evidence during active traffic ([9be441f](https://github.com/icoretech/codex-pooler/commit/9be441f70e6c9b922f1680e6d05c093c6d570f91))
+
+
+### Dependencies
+
+* update helm release codex-pooler to v0.15.3 ([#610](https://github.com/icoretech/codex-pooler/issues/610)) ([3c1bca4](https://github.com/icoretech/codex-pooler/commit/3c1bca4dcc378c863202f0230c41ed67dd5af5f3))
+
 ## [0.14.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.3...codex-pooler-v0.14.4) (2026-11-06)
 
 
