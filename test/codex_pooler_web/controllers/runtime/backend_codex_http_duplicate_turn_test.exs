@@ -593,25 +593,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert {:ok, _uuid} = Ecto.UUID.cast(past_the_bound.correlation_id)
   end
 
-  # An unfinished request is not proof that its executor stopped. A retry
-  # stays fenced until shared recovery establishes a settled predecessor.
-  test "a retry while the predecessor is still unfinished is refused", %{conn: conn} do
+  # Visibility does not prove an executor stopped. Identical resends keep the
+  # fence both before and after output, unlike a grown post-terminal re-sample.
+  for visible? <- [false, true] do
+    test "an identical retry while its predecessor is unfinished is refused (visible output: #{visible?})", %{conn: conn} do
+      assert_unfinished_retry_fenced(conn, unquote(visible?))
+    end
+  end
+
+  defp assert_unfinished_retry_fenced(conn, visible?) do
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
-          FakeUpstream.json_response(%{"id" => "resp_live_one"}),
-          FakeUpstream.json_response(%{"id" => "resp_live_two"})
+          stream_success_sse(),
+          stream_success_sse()
         ])
       )
 
     setup = gateway_setup(upstream)
     session = session_id()
 
-    assert json_response(post_turn(conn, setup, session, @turn_id, stream: true), 200)
+    assert response(post_turn(conn, setup, session, @turn_id, stream: true), 200)
 
     # Strand the predecessor exactly as a killed node leaves it: accepted work,
     # no completion, nothing for `runtime_cleanup` to have swept yet.
     [predecessor] = pool_requests(setup)
+    predecessor_turn = Repo.get_by!(CodexTurn, request_id: predecessor.id)
+    assert %DateTime{} = predecessor_turn.first_visible_output_at
 
     {1, _} =
       Repo.update_all(
@@ -622,12 +630,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     {1, _} =
       Repo.update_all(
         from(t in CodexTurn, where: t.request_id == ^predecessor.id),
-        set: [status: "in_progress", first_visible_output_at: nil, completed_at: nil, final_attempt_id: nil]
+        set: [status: "in_progress", first_visible_output_at: if(visible?, do: predecessor_turn.first_visible_output_at, else: nil), completed_at: nil, final_attempt_id: nil]
       )
+
+    counts = pool_accounting_counts(setup)
+    turn = Repo.get_by!(CodexTurn, request_id: predecessor.id)
 
     assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(post_turn(conn, setup, session, @turn_id, stream: true), 409)
     assert FakeUpstream.count(upstream) == 1
-    assert length(pool_requests(setup)) == 1
+    assert pool_accounting_counts(setup) == counts
+    assert Repo.get_by!(CodexTurn, request_id: predecessor.id) == turn
+    refute Repo.exists?(from(link in CodexPooler.Accounting.RequestClientRetryLink, where: link.predecessor_request_id == ^predecessor.id))
   end
 
   # The released client sends the canonical turn metadata in the request body's

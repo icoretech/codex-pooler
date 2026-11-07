@@ -702,16 +702,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end
   end
 
-  # No output yet is not proof of a finished zero-output execution. Fence an
-  # unfinished HTTP predecessor at every chain hop, including a recovered
-  # opening successor with no mailbox witness. The shared session lock orders
-  # this check with admission before another reservation or dispatch.
+  # Fence unfinished executions, including identical resends after visible
+  # output. A different, non-mailbox re-sample can arrive after the client read
+  # the terminal but before settlement; preserve that separate continuation.
+  # The shared session lock orders this check with reservation at every hop.
   defp unfinished_http_predecessor?(%Request{transport: "http_sse", id: request_id} = request, context) do
     (is_nil(request.completed_at) or request.status in ["accepted", "in_progress"]) and
-      (not native_turn_visible_output?(request_id) or native_http_mailbox_witness?(request, context))
+      (not native_turn_visible_output?(request_id) or native_http_mailbox_witness?(request, context) or native_http_identical_request?(request, context))
   end
 
   defp unfinished_http_predecessor?(_predecessor, _context), do: false
+
+  defp native_http_identical_request?(request, %{opts: opts}) do
+    case attr(opts, :native_client_retry_witness) do
+      %ClientRetry.OriginalWitness{digest: digest, alternates: alternates} -> ClientRetry.witness_matches?(request.native_client_retry_digest, digest, alternates)
+      _missing -> false
+    end
+  end
 
   defp native_http_mailbox_witness?(%Request{request_metadata: %{"native_http_claim_arm" => arm}}, %{opts: opts})
        when arm in ["opening", "steered_continuation", "tool_continuation", "post_compaction_resume"] do

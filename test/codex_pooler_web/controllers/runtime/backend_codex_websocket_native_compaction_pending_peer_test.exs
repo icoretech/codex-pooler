@@ -16,4 +16,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketNativeCompactionPendingPee
       assert :ok = NativeCompactionPendingScenario.run!(unquote(mode), :peer, unquote(form), peer_node: peer)
     end
   end
+
+  for mode <- ["full", "lite"], form <- [:anchored, :full_history] do
+    @tag pending_negative: true, slow: "the actual 4 s source receive timeout must survive peer pending-control renewal"
+    test "#{mode} peer #{form}: pending controls preserve the source receive timeout", %{peer_node: peer} do
+      assert :ok = NativeCompactionPendingScenario.run!(unquote(mode), :peer, unquote(form), peer_node: peer, outcome: :timeout)
+    end
+  end
 end

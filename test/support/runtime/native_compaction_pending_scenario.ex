@@ -54,7 +54,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     {client, control} = next_text!(client, @watchdog)
     assert control == %{"type" => pending_type()}
-    context = %{client: client, request: request, attempt: attempt, upstream: upstream, hold: hold, setup: setup, mode: mode, thread: thread, topology: topology}
+    context = %{client: client, request: request, attempt: attempt, upstream: upstream, hold: hold, setup: setup, mode: mode, thread: thread, topology: topology, form: form}
 
     case outcome do
       :complete -> complete!(context)
@@ -67,8 +67,10 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
   end
 
   defp configure_environment!(outcome, topology, opts) do
-    receive_timeout = if outcome == :timeout, do: 2_000, else: 10_000
-    idle_timeout = if outcome in [:complete, :ignore_pong], do: 2_000, else: 10_000
+    # The 4 s source receive deadline outlasts the remote 5 s budget's first
+    # quarter-budget poll; 2 s receive / 10 s idle never exercised renewal.
+    receive_timeout = if outcome == :timeout, do: 4_000, else: 10_000
+    idle_timeout = if outcome in [:complete, :timeout, :ignore_pong], do: 2_000, else: 10_000
     DownstreamKeepaliveScenario.put_settings!([upstream_receive_timeout_ms: receive_timeout, websocket_idle_timeout_ms: idle_timeout], topology != :direct)
     previous = CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
     interval = Keyword.get(opts, :pending_interval_ms, 100)
@@ -119,15 +121,20 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
   end
 
   defp timeout!(ctx) do
-    began = System.monotonic_time(:millisecond)
     {client, events} = terminal!(ctx.client)
-    assert List.last(events)["type"] in ["error", "response.failed"]
+    # Full-history compact keeps its existing invalid-compact acknowledgement;
+    # both forms must retain the source timeout in accounting, not a proxy timeout.
+    expected_code = if ctx.form == :full_history, do: "invalid_compaction_response", else: "stream_idle_timeout"
+    assert %{"type" => "error", "status" => 502, "error" => %{"code" => ^expected_code}} = List.last(events)
     assert Enum.count(events, &(&1["type"] == pending_type())) > 2
     refute Enum.any?(events, &(&1["type"] == "response.output_item.done"))
-    assert System.monotonic_time(:millisecond) - began < 4_000
-    await!(fn -> Repo.reload!(ctx.request).status == "failed" end)
-    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^ctx.request.id), :count) == 1
+    await!(fn -> Repo.reload!(ctx.request).status == "failed" and Repo.reload!(ctx.attempt).status == "failed" end)
+    assert %Request{response_status_code: 502, last_error_code: "stream_idle_timeout"} = Repo.reload!(ctx.request)
+    assert [%Attempt{id: attempt_id, network_error_code: "stream_idle_timeout"} = attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^ctx.request.id))
+    assert attempt_id == ctx.attempt.id
+    assert %{"termination_source" => "pooler_receive_timeout", "phase" => "receive_timeout"} = attempt.response_metadata["transport_failure"]
     assert FakeUpstream.physical_counts(ctx.upstream).websocket_generation == 2
+    assert FakeUpstream.physical_counts(ctx.upstream).http_generation == 0
     Mint.HTTP.close(client.conn)
     FakeUpstream.release_remaining_frames(ctx.upstream, ctx.hold)
     WebsocketCleanupFence.await_session_cleanups!()

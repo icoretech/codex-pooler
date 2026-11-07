@@ -4,7 +4,6 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
   import CodexPooler.PoolerFixtures
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.AlertIncidentRelationships
-  alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Delivery.{AttemptLifecycle, Execution, PendingRecovery}
   alias CodexPooler.Alerts.Schemas.AlertDeliveryAttempt
   alias CodexPooler.Jobs.AlertDeliveryWorker
@@ -28,13 +27,10 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
     assert job.state == "executing"
   end
 
-  test "real channel deletion terminalizes malformed and pruned email and webhook receipts" do
+  test "legacy deletions leave malformed and pruned email and webhook receipts recoverable" do
     for adapter <- ["email", "webhook"] do
       for kind <- [:claimed, :unlinked, :malformed, :pruned] do
-        %{user: owner} = bootstrap_owner_fixture()
         {incident, channel, job, pending} = fixture!(%{"delivery_adapter" => adapter})
-        channel = Repo.update!(Ecto.Changeset.change(channel, created_by_user_id: owner.id))
-        assert {:ok, _deleted} = Alerts.delete_channel(Scope.for_user(owner), channel.id)
 
         metadata =
           case kind do
@@ -49,9 +45,11 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
         |> Repo.update!()
 
         if kind in [:unlinked, :malformed, :pruned], do: Repo.delete!(job)
+        Repo.delete!(channel)
 
         detached = Repo.get!(AlertDeliveryAttempt, pending.id)
         assert detached.channel_id == nil
+        assert detached.status == "pending"
         assert {:ok, recovered} = PendingRecovery.recover_one(detached, DateTime.utc_now())
         assert recovered.status == "failed"
         assert recovered.failure_code == "alert_delivery_channel_deleted"
@@ -65,10 +63,8 @@ defmodule CodexPooler.Alerts.PendingDeliveryRecoveryTest do
 
   test "batch recovery converges detached email and webhook receipts" do
     for adapter <- ["email", "webhook"] do
-      %{user: owner} = bootstrap_owner_fixture()
       {_incident, channel, _job, pending} = fixture!(%{"delivery_adapter" => adapter})
-      channel = Repo.update!(Ecto.Changeset.change(channel, created_by_user_id: owner.id))
-      assert {:ok, _deleted} = Alerts.delete_channel(Scope.for_user(owner), channel.id)
+      Repo.delete!(channel)
       pending |> Ecto.Changeset.change(created_at: DateTime.add(DateTime.utc_now(), -60)) |> Repo.update!()
     end
 

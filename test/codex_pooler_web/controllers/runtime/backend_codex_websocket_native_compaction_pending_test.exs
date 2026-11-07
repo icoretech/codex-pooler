@@ -20,6 +20,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketNativeCompactionPendingTes
     end
   end
 
+  for mode <- ["full", "lite"], topology <- [:direct, :local] do
+    @tag pending_negative: true, slow: "the actual 4 s receive timeout preserves full-history compaction's acknowledgement and accounting"
+    test "#{mode} #{topology} full_history: pending controls preserve the source timeout classification" do
+      assert :ok = NativeCompactionPendingScenario.run!(unquote(mode), unquote(topology), :full_history, outcome: :timeout)
+    end
+  end
+
   @tag slow: "the actual downstream idle deadline closes a client that ignores pending-control Pings"
   test "pending text does not renew the server idle deadline without a client Pong" do
     assert :ok = NativeCompactionPendingScenario.run!("full", :direct, :anchored, outcome: :ignore_pong)

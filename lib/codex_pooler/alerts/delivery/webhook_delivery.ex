@@ -329,7 +329,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
   defp fetch_channel(channel_id) do
     case Repo.get(AlertChannel, channel_id) do
       %AlertChannel{} = channel -> {:ok, channel}
-      nil -> {:failure, "alert_channel_not_found", "alert channel was not found"}
+      nil -> {:error, AttemptLifecycle.channel_deleted_error()}
     end
   end
 

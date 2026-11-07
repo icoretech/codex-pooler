@@ -19,11 +19,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.OwnerTurnIdleBudgetTest do
     @moduledoc false
 
     # Stands for the owner-node submission: it answers once released.
-    def hold(observer) do
+    def hold(observer, result \\ :answered) do
+      monitor = Process.monitor(observer)
       send(observer, {:held_turn, self()})
 
       receive do
-        :release -> :answered
+        :release ->
+          Process.demonitor(monitor, [:flush])
+          result
+
+        {:DOWN, ^monitor, :process, ^observer, _reason} ->
+          exit(:observer_down)
       end
     end
 
@@ -88,6 +94,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.OwnerTurnIdleBudgetTest do
       release_held_turns!(1)
     end
 
+    @tag slow: "a renewed source deadline and delayed timeout reply must outlast the original remote idle window"
+    test "pending controls preserve a renewed source timeout beyond the original forwarder window" do
+      budget_ms = 1_500
+      source_timeout_ms = 500
+      pacer = start_pending_source(self(), budget_ms, source_timeout_ms)
+      source_timeout = {:error, :upstream_websocket_receive_timeout}
+
+      assert ERPCNodeClient.call_owner_turn(node(), HeldTurn, :hold, [pacer, source_timeout], budget_ms) == source_timeout
+      assert_receive {:pending_source_timed_out, ^pacer}, @detection_timeout_ms
+      assert_receive {:pending_pacer_done, ^pacer}, @detection_timeout_ms
+      assert DownstreamProgress.drain_budget(budget_ms) == nil
+    end
+
+    @tag slow: "a late owner answer distinguishes the configured idle cap from an added one-second window"
+    test "one pending notice cannot exceed the configured idle budget after its source stops" do
+      budget_ms = 400
+      pacer = start_capped_pending_pacer(self(), budget_ms)
+
+      assert ERPCNodeClient.call_owner_turn(node(), HeldTurn, :hold, [pacer], budget_ms) == {:error, :owner_forward_timeout}
+      assert_receive {:pending_pacer_done, ^pacer}, @detection_timeout_ms
+      assert DownstreamProgress.drain_budget(budget_ms) == nil
+    end
+
     test "an owner failure comes back as call_owner/5 returns it" do
       assert ERPCNodeClient.call_owner_turn(node(), HeldTurn, :fail, [], 1_000) ==
                ERPCNodeClient.call_owner(node(), HeldTurn, :fail, [], 1_000)
@@ -123,6 +152,72 @@ defmodule CodexPooler.Gateway.Transports.Websocket.OwnerTurnIdleBudgetTest do
     receive do
       :next_notice -> pace_notices(caller, remaining - 1, every_ms)
     end
+  end
+
+  defp start_pending_source(caller, budget_ms, source_timeout_ms) do
+    start_supervised!({Task,
+     fn ->
+       receive do
+         {:held_turn, turn} ->
+           # Each synthetic collected provider frame renews the source receive
+           # deadline but emits only pending controls downstream. Keep that
+           # source progressing through the original forwarder window.
+           renew_pending_source(caller, System.monotonic_time(:millisecond) + budget_ms, source_timeout_ms)
+           send(caller, {:pending_source_timed_out, self()})
+
+           # Model reply delivery after the source deadline, still inside the
+           # one-second margin. A max-only renewal expires before this reply.
+           receive do
+           after
+             250 -> release_pending_turn(caller, turn)
+           end
+       after
+         @detection_timeout_ms -> exit(:held_turn_never_started)
+       end
+     end})
+  end
+
+  defp renew_pending_source(caller, deadline, source_timeout_ms) do
+    :ok = DownstreamProgress.notify_pending(caller, source_timeout_ms)
+
+    if System.monotonic_time(:millisecond) >= deadline do
+      receive do
+      after
+        source_timeout_ms -> :ok
+      end
+    else
+      receive do
+      after
+        div(source_timeout_ms, 4) -> renew_pending_source(caller, deadline, source_timeout_ms)
+      end
+    end
+  end
+
+  defp start_capped_pending_pacer(caller, budget_ms) do
+    start_supervised!({Task,
+     fn ->
+       receive do
+         {:held_turn, turn} ->
+           :ok = DownstreamProgress.notify_pending(caller, budget_ms * 10)
+
+           # This one notice must not add a second to a short explicit budget.
+           # The abandoned owner's reply arrives well after the capped window
+           # and before the uncapped margin would expire.
+           receive do
+           after
+             budget_ms * 3 -> release_pending_turn(caller, turn)
+           end
+       after
+         @detection_timeout_ms -> exit(:held_turn_never_started)
+       end
+     end})
+  end
+
+  defp release_pending_turn(caller, turn) do
+    monitor = Process.monitor(turn)
+    send(turn, :release)
+    assert_receive {:DOWN, ^monitor, :process, ^turn, _reason}, @detection_timeout_ms
+    send(caller, {:pending_pacer_done, self()})
   end
 
   # The abandoned submissions are still running on this node: release them and

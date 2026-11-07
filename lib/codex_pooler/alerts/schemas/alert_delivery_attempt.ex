@@ -80,6 +80,8 @@ defmodule CodexPooler.Alerts.Schemas.AlertDeliveryAttempt do
       greater_than_or_equal_to: 1
     )
     |> validate_number(:max_attempts, equal_to: @fixed_max_attempts)
+    |> foreign_key_constraint(:channel_id)
+    |> foreign_key_constraint(:incident_id)
     |> check_constraint(:status, name: :alert_delivery_attempts_status_check)
     |> check_constraint(:max_attempts, name: :alert_delivery_attempts_max_attempts_check)
     |> check_constraint(:attempt_number, name: :alert_delivery_attempts_attempt_number_check)

@@ -7,6 +7,7 @@ defmodule CodexPooler.Alerts.ChannelManagement do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Alerts.AuditLog, as: AlertAudit
   alias CodexPooler.Alerts.Authorization
+  alias CodexPooler.Alerts.Delivery.AttemptLifecycle
   alias CodexPooler.Alerts.Schemas.AlertChannel
   alias CodexPooler.Alerts.Schemas.AlertDeliveryAttempt
   alias CodexPooler.Pools
@@ -132,6 +133,7 @@ defmodule CodexPooler.Alerts.ChannelManagement do
   defp delete_channel_in_transaction(scope, channel_id, opts) do
     with {:ok, channel} <- locked_channel(scope, channel_id),
          :ok <- check_delete_revision(channel, opts),
+         {:ok, _count} <- cancel_queued_deliveries(channel),
          {:ok, channel} <- preserve_attempt_history(channel),
          {:ok, deleted} <- Repo.delete(channel) do
       {:ok, deleted}
@@ -155,8 +157,18 @@ defmodule CodexPooler.Alerts.ChannelManagement do
     end
   end
 
+  defp cancel_queued_deliveries(%AlertChannel{id: channel_id}) do
+    from(job in Oban.Job,
+      where: job.worker == "CodexPooler.Jobs.AlertDeliveryWorker",
+      where: job.state in ~w(available scheduled retryable suspended),
+      where: fragment("?->>'alert_channel_id' = ?", job.args, ^channel_id)
+    )
+    |> Oban.cancel_all_jobs()
+  end
+
   defp preserve_attempt_history(%AlertChannel{} = channel) do
     now = now()
+    :ok = AttemptLifecycle.terminalize_channel_attempts(channel, now)
 
     Repo.update_all(
       from(attempt in AlertDeliveryAttempt, where: attempt.channel_id == ^channel.id),

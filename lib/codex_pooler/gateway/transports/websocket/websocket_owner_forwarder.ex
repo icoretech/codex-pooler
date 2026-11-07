@@ -2669,6 +2669,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
     alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
 
+    @source_timeout_margin_ms 1_000
+
     @impl NodeClient
     def connected_app_nodes, do: Node.list()
 
@@ -2733,9 +2735,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           progress_budget = DownstreamProgress.drain_budget(idle_timeout)
 
           cond do
-            is_integer(progress_budget) -> await_owner_turn(request, idle_timeout, turn_deadline(progress_budget))
-            System.monotonic_time(:millisecond) >= deadline -> :erpc.receive_response(request, 0)
-            true -> await_owner_turn(request, idle_timeout, deadline)
+            is_integer(progress_budget) ->
+              # Pending controls carry the source receive deadline, not a new
+              # idle window. Keep its response margin without shortening an
+              # existing deadline or exceeding the configured idle budget.
+              renewed_budget = min(progress_budget + @source_timeout_margin_ms, idle_timeout)
+              await_owner_turn(request, idle_timeout, max(deadline, turn_deadline(renewed_budget)))
+
+            System.monotonic_time(:millisecond) >= deadline ->
+              :erpc.receive_response(request, 0)
+
+            true ->
+              await_owner_turn(request, idle_timeout, deadline)
           end
       end
     end

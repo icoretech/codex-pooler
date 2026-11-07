@@ -47,7 +47,7 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
     query =
       from a in AlertDeliveryAttempt,
         as: :receipt,
-        where: a.status == "pending" and not exists(subquery(current)),
+        where: (a.status == "pending" and not exists(subquery(current))) or (a.status == "retryable" and is_nil(a.channel_id)),
         order_by: [asc: fragment("coalesce(? #>> '{delivery_recovery,checked_at}', '')", a.response_metadata), asc: a.created_at, asc: a.id],
         limit: ^@batch_size
 
@@ -59,7 +59,7 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
 
   @spec recover_one(AlertDeliveryAttempt.t(), DateTime.t()) :: AttemptLifecycle.lifecycle_result() | {:ok, :unchanged}
   def recover_one(attempt, now) do
-    AttemptLifecycle.transition_pending(
+    AttemptLifecycle.transition_attempt(
       attempt,
       fn job, current ->
         case disposition(job, current) do
@@ -69,6 +69,9 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
           {:unresolved, reason} ->
             %{response_metadata: Map.put(current.response_metadata, "delivery_recovery", %{"state" => "unresolved", "reason" => reason, "checked_at" => DateTime.to_iso8601(now)}), updated_at: now}
 
+          {:revoked, false, "channel_deleted"} ->
+            channel_deleted_transition(current, now)
+
           {:revoked, retryable, reason} ->
             {adapter, code, message} = interruption(current.response_metadata, reason)
             metadata = current.response_metadata |> Map.put("delivery_outcome", "unknown") |> Map.put("delivery_recovery", %{"state" => "recovered", "reason" => reason, "checked_at" => DateTime.to_iso8601(now)})
@@ -76,17 +79,18 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
         end
       end,
       on_terminal: :unchanged,
+      statuses: ["pending", "retryable"],
       report_unchanged: true
     )
   rescue
     _error in [Postgrex.Error, DBConnection.ConnectionError] -> {:error, :storage_unavailable}
   end
 
-  defp interruption(%{"delivery_adapter" => "email"}, "channel_deleted"),
-    do: {"email", "alert_delivery_channel_deleted", "alert channel was deleted before delivery completed"}
-
-  defp interruption(_metadata, "channel_deleted"),
-    do: {"webhook", "alert_delivery_channel_deleted", "alert channel was deleted before delivery completed"}
+  defp channel_deleted_transition(current, now) do
+    adapter = current.response_metadata["delivery_adapter"] || current.channel_type || "webhook"
+    metadata = current.response_metadata |> Map.put("delivery_outcome", "unknown") |> Map.put("delivery_recovery", %{"state" => "recovered", "reason" => "channel_deleted", "checked_at" => DateTime.to_iso8601(now)})
+    AttemptLifecycle.channel_deleted_attributes(adapter, now) |> Map.put(:response_metadata, metadata)
+  end
 
   defp interruption(%{"delivery_adapter" => "email"}, _reason),
     do: {"email", "alert_email_execution_interrupted", "email execution ended; delivery outcome unknown"}
@@ -96,14 +100,19 @@ defmodule CodexPooler.Alerts.Delivery.PendingRecovery do
     do: {"webhook", "alert_webhook_execution_interrupted", "webhook execution ended; delivery outcome unknown"}
 
   defp disposition(job, attempt) do
-    if is_nil(attempt.channel_id) do
-      {:revoked, false, "channel_deleted"}
-    else
-      case Execution.decode(attempt.response_metadata) do
-        :unlinked -> {:unresolved, "legacy_unlinked"}
-        :invalid -> {:unresolved, "invalid_execution"}
-        {:ok, binding} -> linked_disposition(job, binding, attempt)
-      end
+    cond do
+      is_nil(attempt.channel_id) ->
+        {:revoked, false, "channel_deleted"}
+
+      attempt.status == "retryable" ->
+        :current
+
+      true ->
+        case Execution.decode(attempt.response_metadata) do
+          :unlinked -> {:unresolved, "legacy_unlinked"}
+          :invalid -> {:unresolved, "invalid_execution"}
+          {:ok, binding} -> linked_disposition(job, binding, attempt)
+        end
     end
   end
 

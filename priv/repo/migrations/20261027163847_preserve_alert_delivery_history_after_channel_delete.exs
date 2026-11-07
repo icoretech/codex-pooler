@@ -28,6 +28,9 @@ defmodule CodexPooler.Repo.Migrations.PreserveAlertDeliveryHistoryAfterChannelDe
     execute "DROP INDEX alert_delivery_attempts_deleted_channel_scope_idx"
     execute "ALTER TABLE alert_delivery_attempts DROP CONSTRAINT alert_delivery_attempts_channel_id_fkey"
 
+    # Deleted channels cannot satisfy the old NOT NULL foreign key. Only a downgrade discards their detached history.
+    execute "DELETE FROM alert_delivery_attempts WHERE channel_id IS NULL"
+
     alter table(:alert_delivery_attempts) do
       remove :channel_created_by_user_id
       remove :channel_display_name

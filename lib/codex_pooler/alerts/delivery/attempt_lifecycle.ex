@@ -93,26 +93,23 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
         execution
       )
       when is_integer(attempt_number) and is_map(response_metadata) do
-    Execution.storage(execution, fn -> Repo.transaction(fn -> insert_pending_locked(incident, channel, attempt_number, timestamp, response_metadata, execution) end) end)
-  end
-
-  defp insert_pending_locked(incident, channel, number, timestamp, response_metadata, execution) do
     metadata = Map.delete(response_metadata, "delivery_execution")
     metadata = if execution, do: Execution.metadata(execution, metadata), else: metadata
 
+    attrs = %{incident_id: incident.id, channel_id: channel.id, attempt_number: attempt_number, status: "pending", scheduled_at: timestamp, attempted_at: timestamp, retryable: false, response_metadata: metadata, failure_metadata: %{}, created_at: timestamp, updated_at: timestamp}
+
+    Execution.storage(execution, fn -> insert_attempt(attrs) end)
+  end
+
+  defp authorize_insert(%{status: "pending", incident_id: incident_id, channel_id: channel_id, response_metadata: metadata}) do
     case Execution.decode(metadata) do
       :unlinked -> :ok
-      {:ok, binding} -> authorize_current!(Execution.lock_job(binding), binding, incident.id, channel.id)
+      {:ok, binding} -> authorize_current!(Execution.lock_job(binding), binding, incident_id, channel_id)
       :invalid -> Repo.rollback(execution_error())
     end
-
-    attrs = %{incident_id: incident.id, channel_id: channel.id, channel_created_by_user_id: channel.created_by_user_id, channel_display_name: channel.display_name, channel_type: channel.channel_type, attempt_number: number, status: "pending", scheduled_at: timestamp, attempted_at: timestamp, retryable: false, response_metadata: metadata, failure_metadata: %{}, created_at: timestamp, updated_at: timestamp}
-
-    case insert_attempt(attrs) do
-      {:ok, attempt} -> attempt
-      {:error, reason} -> Repo.rollback(reason)
-    end
   end
+
+  defp authorize_insert(_attrs), do: :ok
 
   defp authorize_current!(job, binding, incident_id, channel_id) do
     unless Execution.matches?(job, binding, incident_id, channel_id), do: Repo.rollback(execution_error())
@@ -125,7 +122,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
           pos_integer(),
           DateTime.t(),
           map()
-        ) :: {:ok, AlertDeliveryAttempt.t()} | {:error, Ecto.Changeset.t()}
+        ) :: lifecycle_result()
   def insert_sent_attempt(
         %AlertIncident{} = incident,
         %AlertChannel{} = channel,
@@ -137,9 +134,6 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     insert_attempt(%{
       incident_id: incident.id,
       channel_id: channel.id,
-      channel_created_by_user_id: channel.created_by_user_id,
-      channel_display_name: channel.display_name,
-      channel_type: channel.channel_type,
       attempt_number: attempt_number,
       status: AlertDeliveryAttempt.sent_status(),
       scheduled_at: timestamp,
@@ -161,7 +155,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
           delivery_adapter(),
           failure_code(),
           failure_message()
-        ) :: {:ok, AlertDeliveryAttempt.t()} | {:error, Ecto.Changeset.t()}
+        ) :: lifecycle_result()
   def record_discarded_attempt(
         incident_id,
         channel_id,
@@ -240,7 +234,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
   end
 
   @spec mark_sent_attempt(AlertDeliveryAttempt.t(), DateTime.t(), map(), integer() | nil) ::
-          {:ok, AlertDeliveryAttempt.t()} | {:error, Ecto.Changeset.t()}
+          lifecycle_result()
   def mark_sent_attempt(
         %AlertDeliveryAttempt{} = attempt,
         %DateTime{} = timestamp,
@@ -296,6 +290,28 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     |> retryable_result(code, retryable)
   end
 
+  @doc false
+  @spec channel_deleted_error() :: %{code: String.t(), retryable: false}
+  def channel_deleted_error, do: %{code: "alert_delivery_channel_deleted", retryable: false}
+
+  @doc false
+  @spec channel_deleted_attributes(delivery_adapter(), DateTime.t()) :: map()
+  def channel_deleted_attributes(adapter, timestamp) do
+    code = "alert_delivery_channel_deleted"
+    message = "alert channel was deleted before delivery completed"
+
+    %{status: "failed", completed_at: timestamp, retryable: false, next_retry_at: nil, failure_code: code, failure_message: message, failure_metadata: failure_metadata(adapter, code, message, false), updated_at: timestamp}
+  end
+
+  @doc false
+  @spec terminalize_channel_attempts(AlertChannel.t(), DateTime.t()) :: :ok
+  def terminalize_channel_attempts(%AlertChannel{} = channel, timestamp) do
+    from(attempt in AlertDeliveryAttempt, where: attempt.channel_id == ^channel.id and attempt.status in ~w(pending retryable))
+    |> Repo.update_all(set: Map.to_list(channel_deleted_attributes(channel.channel_type, timestamp)))
+
+    :ok
+  end
+
   defp recent_sent_attempt?(incident_id, channel_id, since) do
     Repo.exists?(
       from attempt in AlertDeliveryAttempt,
@@ -327,13 +343,27 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
   end
 
   defp insert_attempt(attrs) do
-    %AlertDeliveryAttempt{}
-    |> AlertDeliveryAttempt.changeset(sanitize_attempt_attrs(attrs))
-    |> Repo.insert()
+    Repo.transact(fn ->
+      # Deletion locks channel -> queued jobs -> receipts. Take the channel
+      # before the execution job so registration cannot deadlock with deletion.
+      case Repo.one(from channel in AlertChannel, where: channel.id == ^attrs.channel_id, lock: "FOR KEY SHARE") do
+        %AlertChannel{} = channel ->
+          :ok = authorize_insert(attrs)
+
+          attrs = Map.merge(attrs, %{channel_created_by_user_id: channel.created_by_user_id, channel_display_name: channel.display_name, channel_type: channel.channel_type})
+
+          %AlertDeliveryAttempt{}
+          |> AlertDeliveryAttempt.changeset(sanitize_attempt_attrs(attrs))
+          |> Repo.insert()
+
+        nil ->
+          {:error, channel_deleted_error()}
+      end
+    end)
   end
 
   defp update_attempt(%AlertDeliveryAttempt{} = attempt, attrs) do
-    transition_pending(attempt, fn job, current -> authorized_attributes(job, current, attrs) end, on_terminal: :error)
+    transition_attempt(attempt, fn job, current -> authorized_attributes(job, current, attrs) end, on_terminal: :error)
   end
 
   defp authorized_attributes(job, current, attrs) do
@@ -351,8 +381,8 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
   end
 
   @doc false
-  @spec transition_pending(AlertDeliveryAttempt.t(), (Oban.Job.t() | nil, AlertDeliveryAttempt.t() -> map() | :unchanged), keyword()) :: lifecycle_result() | {:ok, :unchanged}
-  def transition_pending(%AlertDeliveryAttempt{} = expected, transition, opts \\ []) do
+  @spec transition_attempt(AlertDeliveryAttempt.t(), (Oban.Job.t() | nil, AlertDeliveryAttempt.t() -> map() | :unchanged), keyword()) :: lifecycle_result() | {:ok, :unchanged}
+  def transition_attempt(%AlertDeliveryAttempt{} = expected, transition, opts \\ []) do
     Repo.transaction(fn -> transition_locked(expected, transition, opts) end)
   end
 
@@ -367,14 +397,14 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
 
     cond do
       is_nil(current) -> terminal_result(:unchanged, opts)
-      current.status != "pending" -> terminal_result(current, opts)
+      current.status not in Keyword.get(opts, :statuses, ["pending"]) -> terminal_result(current, opts)
       Map.get(current.response_metadata, "delivery_execution") != Map.get(expected.response_metadata, "delivery_execution") -> Repo.rollback(execution_error())
       true -> apply_transition(current, transition.(job, current), opts)
     end
   end
 
   defp apply_transition(current, :unchanged, opts), do: if(Keyword.get(opts, :report_unchanged), do: :unchanged, else: current)
-  defp apply_transition(current, attrs, _opts), do: update_pending_locked(current, attrs)
+  defp apply_transition(current, attrs, _opts), do: update_attempt_locked(current, attrs)
 
   defp terminal_result(current, opts) do
     case Keyword.get(opts, :on_terminal) do
@@ -384,7 +414,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     end
   end
 
-  defp update_pending_locked(current, attrs) do
+  defp update_attempt_locked(current, attrs) do
     metadata = Map.get(attrs, :response_metadata, current.response_metadata)
 
     metadata =
@@ -396,7 +426,7 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     attrs = sanitize_attempt_attrs(Map.put(attrs, :response_metadata, metadata))
     changeset = AlertDeliveryAttempt.changeset(current, attrs)
     unless changeset.valid?, do: Repo.rollback(changeset)
-    query = from a in AlertDeliveryAttempt, where: a.id == ^current.id and a.status == "pending" and a.response_metadata == ^current.response_metadata, select: a
+    query = from a in AlertDeliveryAttempt, where: a.id == ^current.id and a.status == ^current.status and a.response_metadata == ^current.response_metadata, select: a
 
     case Repo.update_all(query, set: Map.to_list(changeset.changes)) do
       {1, [updated]} -> updated
