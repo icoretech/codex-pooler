@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
       register_unboxed_pool_cleanup!: 1,
       start_public_endpoint_with_server!: 0,
       gateway_setup: 1,
+      gateway_setup: 2,
       gateway_upstream: 4,
       native_text_input: 1,
       prime_routing_quota!: 1,
@@ -33,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Runtime.Finalization.SettlementRetry
   alias CodexPooler.Jobs.AccountReconciliationWorker
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -388,33 +390,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
     )
   end
 
-  test "backend SSE upstream 403 invalid_authentication refreshes and retries", %{conn: conn} do
-    refreshed_token = "refreshed-access-403-#{System.unique_integer([:positive])}-do-not-leak"
-
-    upstream =
-      start_upstream(
-        FakeUpstream.strict_sequence([
-          expect_dispatch(
-            @initial_token,
-            unauthorized_response(403, "invalid_authentication", "provider-403-sentinel")
-          ),
-          oauth_refresh(refreshed_token_response(refreshed_token)),
-          expect_dispatch(refreshed_token, stream_success_sse())
-        ])
-      )
-
-    setup = gateway_setup(upstream)
-    store_refresh_token!(setup.identity, "refresh-token-http-403-do-not-leak")
-
-    conn = conn |> auth(setup) |> post(@endpoint_path, stream_payload(setup, "403 refresh"))
-
-    assert conn.status == 200
-    assert conn.resp_body =~ "resp_stream_retry_success"
-    assert :ok = FakeUpstream.verify!(upstream)
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.status == "succeeded"
-    assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
+  for code <- ~w(invalid_api_key invalid_authentication) do
+    test "backend SSE upstream 403 #{code} refreshes and retries", %{conn: conn} do
+      assert_credential_403_refresh(conn, unquote(code))
+    end
   end
 
   test "backend SSE upstream 403 without an auth code does not refresh", %{conn: conn} do
@@ -445,6 +424,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
     refute Map.has_key?(request.request_metadata || %{}, "auth_refresh")
+  end
+
+  for status <- [401, 403], surface <- [:body, :header, :model_conflict], route <- [@endpoint_path, "/v1/responses"], stream? <- [false, true], mode <- ["full", "lite"] do
+    @tag :runtime_auth_denial
+    test "#{route} #{mode} stream=#{stream?} terminal #{status} #{surface} denial skips refresh and replay", %{conn: conn} do
+      assert_runtime_auth_denial(conn, unquote(status), unquote(surface), unquote(route), unquote(stream?), unquote(mode))
+    end
   end
 
   test "refresh that is not retryable fails over to the next candidate", %{conn: conn} do
@@ -620,6 +606,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
     assert request.last_error_code == "upstream_unauthorized"
     assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
     assert [_job] = reconciliation_jobs(setup.identity.id)
+  end
+
+  test "a terminal runtime denial after successful refresh stops without failing over", %{conn: conn} do
+    refreshed_token = "synthetic-runtime-refreshed-access"
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial — a repairable 401 followed by a terminal runtime denial.
+        FakeUpstream.strict_sequence([
+          expect_dispatch(@initial_token, unauthorized_response(401, "invalid_api_key", "synthetic credential refusal")),
+          oauth_refresh(refreshed_token_response(refreshed_token)),
+          expect_dispatch(refreshed_token, unauthorized_response(401, "runtime_instance_paused", "synthetic runtime refusal"))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    store_refresh_token!(setup.identity, "synthetic-runtime-refresh")
+    fallback = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_fail_over"}))
+    {setup, second} = second_candidate!(setup, fallback)
+    conn = conn |> put_req_header("x-request-id", prefer_first_candidate(setup, second)) |> auth(setup) |> post(@endpoint_path, stream_payload(setup, "runtime after refresh"))
+
+    assert conn.status == 401
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert length(FakeUpstream.requests(upstream)) == 3
+    assert FakeUpstream.count(fallback) == 0
+    assert [first, terminal] = Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+    assert first.status == "retryable_failed"
+    assert first.network_error_code == "upstream_unauthorized"
+    assert terminal.status == "failed"
+    assert terminal.network_error_code == "upstream_status"
+    assert terminal.response_metadata["rejection_error_code"] == "runtime_instance_paused"
+    assert terminal.upstream_identity_id == setup.identity.id
+    request = Repo.get!(Request, terminal.request_id)
+    assert request.status == "failed"
+    assert request.retry_count == 1
+    assert request.last_error_code == "upstream_status"
+    assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
   end
 
   test "a refreshed identity with a pre-visible SSE failure still tries the next candidate", %{
@@ -971,6 +994,107 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
 
     Repo.query!("CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN #{body} END $$")
     Repo.query!("CREATE TRIGGER #{name} #{timing} ON #{table} FOR EACH ROW WHEN (#{condition}) EXECUTE FUNCTION #{name}()")
+  end
+
+  defp assert_credential_403_refresh(conn, code) do
+    refreshed_token = "refreshed-access-403-#{System.unique_integer([:positive])}-do-not-leak"
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial — ordinary credential denials remain repairable.
+        FakeUpstream.strict_sequence([
+          expect_dispatch(@initial_token, unauthorized_response(403, code, "provider-403-sentinel")),
+          oauth_refresh(refreshed_token_response(refreshed_token)),
+          expect_dispatch(refreshed_token, stream_success_sse())
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    store_refresh_token!(setup.identity, "refresh-token-http-403-do-not-leak")
+    conn = conn |> auth(setup) |> post(@endpoint_path, stream_payload(setup, "403 refresh"))
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "resp_stream_retry_success"
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
+  end
+
+  defp assert_runtime_auth_denial(conn, status, surface, route, stream?, mode) do
+    terminal_code = "runtime_instance_revoked"
+
+    body_code =
+      case surface do
+        :body -> terminal_code
+        :header -> "invalid_api_key"
+        :model_conflict -> "model_not_found"
+      end
+
+    error = %{"error" => %{"code" => body_code, "type" => "invalid_request_error", "message" => "synthetic runtime refusal"}}
+    identity_header = Base.encode64(CodexPooler.JSON.encode!(%{"error" => %{"code" => terminal_code}}))
+    headers = if surface == :body, do: [], else: [{"x-error-json", identity_header}]
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial — pinned Codex denial codes over real HTTP; no refresh or replay is scripted.
+        FakeUpstream.strict_sequence([expect_dispatch(@initial_token, FakeUpstream.json_response_with_headers(error, headers, status))])
+      )
+
+    setup = gateway_setup(upstream, model_metadata: %{"use_responses_lite" => mode == "lite"})
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    Repo.insert!(%ModelServingOverride{pool_id: setup.pool.id, exposed_model_id: setup.model.exposed_model_id, mode: mode, created_at: timestamp, updated_at: timestamp})
+    store_refresh_token!(setup.identity, "synthetic-runtime-denial-refresh")
+    fallback = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_fail_over"}))
+    {setup, second} = second_candidate!(setup, fallback)
+
+    conn = conn |> put_req_header("x-request-id", prefer_first_candidate(setup, second)) |> auth(setup) |> post(route, stream_payload(setup, "terminal runtime denial") |> Map.put("stream", stream?))
+    expected_status = if route == @endpoint_path and status == 403, do: 400, else: status
+    assert conn.status == expected_status
+    assert_runtime_denial_projection(conn, route, status, stream?, mode, body_code)
+    assert get_resp_header(conn, "x-error-json") == []
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert [%{path: @endpoint_path}] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.count(fallback) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == status
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_status"
+    refute Map.has_key?(request.request_metadata || %{}, "auth_refresh")
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == status
+    assert attempt.upstream_identity_id == setup.identity.id
+    assert attempt.response_metadata["rejection_error_code"] == body_code
+    assert attempt.response_metadata["routing"]["model_serving_mode"] == mode
+    refute Map.has_key?(attempt.response_metadata, "auth_refresh_trigger")
+    refute inspect({request.request_metadata, attempt.response_metadata}) =~ identity_header
+  end
+
+  # Native Lite streaming 401 keeps the existing drained-body result; this
+  # classifier does not add a new renderer or project the identity header.
+  defp assert_runtime_denial_projection(conn, @endpoint_path, 401, true, "lite", _body_code) do
+    assert conn.resp_body == ""
+  end
+
+  defp assert_runtime_denial_projection(conn, route, status, _stream?, mode, body_code) do
+    assert %{"error" => error} = json_response(conn, conn.status)
+
+    {expected_code, expected_type} =
+      case {route, mode} do
+        {"/v1/responses", "lite"} -> {"upstream_status", "server_error"}
+        _other -> {body_code, "invalid_request_error"}
+      end
+
+    assert error["code"] == expected_code
+    assert error["type"] == expected_type
+
+    if route == "/v1/responses" or mode == "full" or status == 403 do
+      refute error["message"] == "synthetic runtime refusal"
+    end
   end
 
   defp unauthorized_response(status, code, message) do

@@ -3,11 +3,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
 
   # HTTP counterpart of the websocket terminal auth refresh: a provider 401
   # (or an auth-coded 403) on an HTTP attempt is not yet visible to the client,
-  # so the attempt refreshes the identity's access token once through the
-  # shared fenced helper and retries the same identity. Exhausted auth fails
+  # so a repairable credential failure refreshes the access token once through
+  # the shared fenced helper and retries the same identity. Runtime assertion
+  # denials cannot be repaired by refreshing the account token. Exhausted auth fails
   # over to the next eligible candidate under the ordinary retry policy and
-  # only the last candidate finalizes a retryable public 503; a client-facing
-  # 401 stays reserved for the Pooler's own API-key rejection.
+  # only the last candidate finalizes a retryable public 503. Runtime denials
+  # bypass refresh and keep the existing non-refresh failure projection.
 
   import Ecto.Query
 
@@ -39,16 +40,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
   end
 
   @spec auth_failure?(Req.Response.t()) :: boolean()
-  def auth_failure?(%Req.Response{status: 401}), do: true
-
-  def auth_failure?(%Req.Response{status: 403} = response) do
-    response
-    |> Metadata.rejection_error()
-    |> Map.get(:code)
-    |> ErrorCodes.websocket_auth_refresh_event_code?()
-  end
-
-  def auth_failure?(%Req.Response{}), do: false
+  def auth_failure?(%Req.Response{} = response), do: Metadata.http_auth_failure_kind(response) == :credential
 
   @spec handle(PreparedContext.t(), Req.Response.t(), redispatch()) :: dispatch_result()
   def handle(

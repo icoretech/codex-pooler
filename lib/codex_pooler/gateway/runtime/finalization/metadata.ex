@@ -22,6 +22,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @rejection_body_max_bytes 65_536
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @runtime_auth_denial_codes ~w(runtime_assertion_invalid runtime_instance_paused runtime_instance_revoked invalid_agent_instance_assertion)
+  @identity_error_header_max_bytes 8_192
   @rejection_detail_classes %{"Stream must be set to true" => "stream_must_be_true"}
   @unsupported_parameter_code "unsupported_parameter"
   @invalid_request_error_type "invalid_request_error"
@@ -195,6 +197,37 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     response
     |> rejection_body()
     |> decode_rejection_error()
+  end
+
+  @spec http_auth_failure_kind(Req.Response.t()) :: :runtime_denial | :credential | :other
+  def http_auth_failure_kind(%Req.Response{status: status} = response) when status in [401, 403] do
+    if terminal_identity_error?(response) do
+      :runtime_denial
+    else
+      code = response |> rejection_error() |> Map.get(:code)
+
+      cond do
+        code in @runtime_auth_denial_codes -> :runtime_denial
+        status == 401 or ErrorCodes.websocket_auth_refresh_event_code?(code) -> :credential
+        true -> :other
+      end
+    end
+  end
+
+  def http_auth_failure_kind(%Req.Response{}), do: :other
+
+  # Codex's identity error header is canonical standard-base64 JSON, not a
+  # plain error token. Bound it before decoding and inspect only error.code;
+  # malformed, unknown and unavailable-verification errors keep normal handling.
+  defp terminal_identity_error?(response) do
+    with [encoded | _rest] when is_binary(encoded) and byte_size(encoded) <= @identity_error_header_max_bytes <- Req.Response.get_header(response, "x-error-json"),
+         {:ok, body} <- Base.decode64(encoded),
+         true <- Base.encode64(body) == encoded,
+         {:ok, %{"error" => %{"code" => code}}} <- CodexPooler.JSON.decode(body) do
+      code in @runtime_auth_denial_codes
+    else
+      _other -> false
+    end
   end
 
   @doc """

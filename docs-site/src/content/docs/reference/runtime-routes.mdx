@@ -842,11 +842,27 @@ each retry would reach the provider again: a single refused turn would cost six
 provider requests. The request and its attempt keep the provider status.
 
 Over HTTP, every other upstream failure gets its own answer instead of that
-`400`: a `401` and a `403` with a credential code (refreshed, then a retryable
-`503`), `408`, `429`, `5xx`, misalignment and model-unavailability refusals, and
-compact routes. The request is a non-retried failure recorded as
-`upstream_status`, and a `4xx` rejection other than `401` and `429` does not
-demote the upstream or affect its circuit.
+`400`: an ordinary `401` and a `403` with a credential code (refreshed, then a
+retryable `503` if refresh is exhausted), `408`, `429`, `5xx`, misalignment and
+model-unavailability refusals, and compact routes. A failure that does not take
+the refresh or retry path is recorded as `upstream_status`, and a `4xx` rejection
+other than `401` and `429` does not demote the upstream or affect its circuit.
+
+An upstream HTTP `401` or `403` with the exact code `runtime_assertion_invalid`,
+`runtime_instance_paused`, `runtime_instance_revoked`, or
+`invalid_agent_instance_assertion` skips credential refresh and request replay.
+Codex Pooler recognizes the code in a bounded JSON `error.code` body or in the
+canonical standard-base64 JSON `error.code` carried by `x-error-json`. A terminal
+signal wins even when the other surface names a credential or model error.
+These runtime denials cannot be repaired by refreshing the account token. They
+follow the existing non-refresh failure response: native `401` keeps its status,
+a native ordinary Responses `403` becomes the terminal `400` described above,
+and `/v1` keeps the upstream status under its existing error projection. The
+request and attempt retain the upstream status; the denial adds no refresh
+attempt, replay or candidate failover, including after an earlier token refresh.
+Unknown codes, unavailable-verification errors and malformed signals keep
+ordinary credential handling. This exception applies to HTTP, not websocket
+authentication failures.
 
 On `/v1`, such a failure keeps the redacted error (`upstream request failed`,
 code `upstream_status` or the upstream code, no param) on HTTP and in the

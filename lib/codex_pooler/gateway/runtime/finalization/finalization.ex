@@ -168,7 +168,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       public_ineligible_misalignment_policy_violation?(status, body, context) ->
         finalize_upstream_status_failure(response, context, body, failure_projection: :canonical_full)
 
-      assignment_model_unavailable?(status, body, context) ->
+      assignment_model_unavailable?(status, body, context) and Metadata.http_auth_failure_kind(response) != :runtime_denial ->
         finalize_assignment_model_unavailable(response, context, body)
 
       true ->
