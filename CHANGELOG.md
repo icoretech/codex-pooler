@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.5...codex-pooler-v0.14.6) (2026-11-08)
+
+
+### Bug Fixes
+
+* fence native retries and settle deleted-channel deliveries ([f63ec65](https://github.com/icoretech/codex-pooler/commit/f63ec6502008afc62c360dbe72196221473bf7cf))
+* **gateway:** skip HTTP refresh for terminal runtime auth denials ([eac7908](https://github.com/icoretech/codex-pooler/commit/eac7908546d10d1148e05118e11900f90f3fe04a))
+
+
+### Dependencies
+
+* refresh frontend and SDK contract dependencies ([2e478c1](https://github.com/icoretech/codex-pooler/commit/2e478c1127b1a228b138a13e43346390654858fc))
+* update dependency @astrojs/starlight to v0.42.10 ([#614](https://github.com/icoretech/codex-pooler/issues/614)) ([e7f73b2](https://github.com/icoretech/codex-pooler/commit/e7f73b205ebfd86d698f3aa5ebea3fb82c908cac))
+* update dependency tailwindlabs/tailwindcss to v4.3.5 ([#613](https://github.com/icoretech/codex-pooler/issues/613)) ([ff7042b](https://github.com/icoretech/codex-pooler/commit/ff7042bc056a9f01baf0ebba0f6511e4c34fa757))
+* update helm release codex-pooler to v0.15.4 ([#615](https://github.com/icoretech/codex-pooler/issues/615)) ([6310947](https://github.com/icoretech/codex-pooler/commit/6310947c3c63365855c151a4474a7f14821fe5c8))
+* update helm release codex-pooler to v0.15.5 ([9183bea](https://github.com/icoretech/codex-pooler/commit/9183bea77b7490f044e9de694515c9683d405a13))
+
 ## [0.14.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.4...codex-pooler-v0.14.5) (2026-11-07)
 
 
