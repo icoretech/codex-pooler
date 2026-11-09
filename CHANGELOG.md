@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.6...codex-pooler-v0.14.7) (2026-11-09)
+
+
+### Bug Fixes
+
+* **responses:** restore unambiguous function call namespaces ([73bb7e8](https://github.com/icoretech/codex-pooler/commit/73bb7e8a4d7a4c74877b6d794e5967cbd0dea29e))
+
 ## [0.14.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.5...codex-pooler-v0.14.6) (2026-11-08)
 
 
