@@ -6284,8 +6284,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.get(:public_response_stream_id)
         |> Adapter.public_responses_turn_state()
         |> Map.put(
-          :custom_tool_namespaces,
-          prepared.request_options.openai_compatibility.custom_tool_namespaces
+          :tool_namespaces,
+          prepared.request_options.openai_compatibility.tool_namespaces
         )
 
       state

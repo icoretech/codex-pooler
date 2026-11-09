@@ -38,7 +38,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         state
         |> Map.put(
           :public_openai_responses,
-          StreamProtocol.public_openai_responses_stream_state(opts.openai_compatibility.custom_tool_namespaces)
+          StreamProtocol.public_openai_responses_stream_state(opts.openai_compatibility.tool_namespaces)
         )
 
       true ->

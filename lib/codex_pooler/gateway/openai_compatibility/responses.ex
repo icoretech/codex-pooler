@@ -103,7 +103,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
         opts
         |> drop_surface()
         |> RequestOptions.build(@endpoint, payload)
-        |> RequestOptions.put_openai_compatibility(custom_tool_namespaces: custom_tool_namespaces(payload))
+        |> RequestOptions.put_openai_compatibility(tool_namespaces: tool_namespaces(payload))
         |> preserve_client_input_coordinates(original_input, Map.get(payload, "input"))
 
       {:ok, %{endpoint: @endpoint, payload: payload, request_options: request_options}}
@@ -209,17 +209,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   @spec response_from_sse(binary(), RequestOptions.t() | map()) ::
           {:ok, map()} | {:error, Error.reason()}
   def response_from_sse(body, request_options \\ %{}) when is_binary(body) do
-    SSE.response_from_sse(body, custom_tool_namespaces(request_options))
+    SSE.response_from_sse(body, tool_namespaces(request_options))
   end
 
-  @spec restore_custom_tool_call_namespaces(map(), map()) :: map()
-  def restore_custom_tool_call_namespaces(%{} = value, custom_tool_namespaces)
-      when is_map(custom_tool_namespaces) do
+  @spec restore_tool_call_namespaces(map(), map()) :: map()
+  def restore_tool_call_namespaces(%{} = value, tool_namespaces)
+      when is_map(tool_namespaces) do
     value
-    |> restore_nested_response(custom_tool_namespaces)
-    |> restore_nested_item(custom_tool_namespaces)
-    |> restore_output_items(custom_tool_namespaces)
-    |> restore_custom_tool_call_namespace(custom_tool_namespaces)
+    |> restore_nested_response(tool_namespaces)
+    |> restore_nested_item(tool_namespaces)
+    |> restore_output_items(tool_namespaces)
+    |> restore_tool_call_namespace(tool_namespaces)
   end
 
   defp maybe_force_backend_streaming(payload, opts) do
@@ -251,45 +251,49 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp backend_streaming_required?(opts) when is_list(opts),
     do: backend_streaming_required?(Map.new(opts))
 
-  defp custom_tool_namespaces(%RequestOptions{
-         openai_compatibility: %{custom_tool_namespaces: custom_tool_namespaces}
+  defp tool_namespaces(%RequestOptions{
+         openai_compatibility: %{tool_namespaces: tool_namespaces}
        })
-       when is_map(custom_tool_namespaces),
-       do: custom_tool_namespaces
+       when is_map(tool_namespaces),
+       do: tool_namespaces
 
-  defp custom_tool_namespaces(%{"tools" => tools}) when is_list(tools),
-    do: custom_tool_namespaces_from_tools(tools)
+  defp tool_namespaces(%{"tools" => tools}) when is_list(tools),
+    do: tool_namespaces_from_tools(tools)
 
-  defp custom_tool_namespaces(%{tools: tools}) when is_list(tools),
-    do: custom_tool_namespaces_from_tools(tools)
+  defp tool_namespaces(%{tools: tools}) when is_list(tools),
+    do: tool_namespaces_from_tools(tools)
 
-  defp custom_tool_namespaces(_value), do: %{}
+  defp tool_namespaces(_value), do: %{}
 
-  defp custom_tool_namespaces_from_tools(tools) do
-    Enum.reduce(tools, %{}, fn
+  # A function name may exist at the top level or in several namespaces. Only
+  # a unique declaration can identify a missing namespace; never guess by order.
+  defp tool_namespaces_from_tools(tools) do
+    tools
+    |> Enum.reduce(%{}, fn
       %{"type" => "namespace", "name" => namespace, "tools" => children}, acc
       when is_binary(namespace) and is_list(children) ->
-        Enum.reduce(children, acc, fn
-          %{"type" => "custom", "name" => name}, child_acc when is_binary(name) ->
-            Map.put(child_acc, name, namespace)
+        Enum.reduce(children, acc, &put_tool_namespace(&1, namespace, &2))
 
-          _child, child_acc ->
-            child_acc
-        end)
-
-      _tool, acc ->
-        acc
+      tool, acc ->
+        put_tool_namespace(tool, nil, acc)
     end)
+    |> Map.reject(fn {_name, namespace} -> is_nil(namespace) end)
   end
 
+  defp put_tool_namespace(%{"type" => type, "name" => name}, namespace, namespaces)
+       when type in ["function", "custom"] and is_binary(name),
+       do: Map.update(namespaces, name, namespace, fn _existing -> nil end)
+
+  defp put_tool_namespace(_tool, _namespace, namespaces), do: namespaces
+
   defp restore_nested_response(%{"response" => %{} = response} = value, namespaces) do
-    Map.put(value, "response", restore_custom_tool_call_namespaces(response, namespaces))
+    Map.put(value, "response", restore_tool_call_namespaces(response, namespaces))
   end
 
   defp restore_nested_response(value, _namespaces), do: value
 
   defp restore_nested_item(%{"item" => %{} = item} = value, namespaces) do
-    Map.put(value, "item", restore_custom_tool_call_namespaces(item, namespaces))
+    Map.put(value, "item", restore_tool_call_namespaces(item, namespaces))
   end
 
   defp restore_nested_item(value, _namespaces), do: value
@@ -297,7 +301,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp restore_output_items(%{"output" => output} = value, namespaces) when is_list(output) do
     output =
       Enum.map(output, fn
-        %{} = item -> restore_custom_tool_call_namespaces(item, namespaces)
+        %{} = item -> restore_tool_call_namespaces(item, namespaces)
         item -> item
       end)
 
@@ -306,18 +310,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp restore_output_items(value, _namespaces), do: value
 
-  defp restore_custom_tool_call_namespace(
-         %{"type" => "custom_tool_call", "name" => name} = item,
+  defp restore_tool_call_namespace(
+         %{"type" => type, "name" => name} = item,
          namespaces
        )
-       when is_binary(name) do
+       when type in ["function_call", "custom_tool_call"] and is_binary(name) do
     case {Map.get(item, "namespace"), Map.fetch(namespaces, name)} do
       {nil, {:ok, namespace}} -> Map.put(item, "namespace", namespace)
       {_provider_namespace, _mapping} -> item
     end
   end
 
-  defp restore_custom_tool_call_namespace(value, _namespaces), do: value
+  defp restore_tool_call_namespace(value, _namespaces), do: value
 
   defp normalize_optional_function_tool_booleans(%{"tools" => tools} = payload)
        when is_list(tools) do

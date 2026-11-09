@@ -301,6 +301,10 @@ named standalone item requires a nonblank `name` and an `output` field, permits
 reject before dispatch. Classification and debug summaries remain metadata-only.
 This does not expand general Responses parity or prove provider-live acceptance.
 
+### Namespaced tool calls
+
+Responses JSON, SSE item events and terminal output, and websocket events preserve an explicit provider `namespace` on `function_call` and `custom_tool_call` items. If it is absent or `null`, Codex Pooler restores it from the request's declared namespace only when the tool name identifies one declaration. A function name shared with a top-level function or another namespace stays unchanged rather than guessing. Names, argument strings and custom input remain unchanged in Full and Lite serving modes.
+
 ### Asynchronous tool flags
 
 Direct Responses requests accept optional boolean `async` on otherwise-valid

@@ -4486,10 +4486,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         assert result.payload["tools"] == [namespace_tool]
         assert result.payload["tool_choice"] == tool_choice
 
-        assert result.request_options.openai_compatibility.custom_tool_namespaces == %{
-                 custom_tool["name"] => namespace_name
-               }
-
         assert RequestOptions.openai_compatibility_metadata(result.request_options) == %{}
       end)
     end

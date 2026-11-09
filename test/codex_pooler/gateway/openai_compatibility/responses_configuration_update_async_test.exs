@@ -227,7 +227,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ResponsesConfigurationUpdateAs
     body = request([user("synthetic request")], %{"tools" => [namespace(value)]})
     assert {:ok, %{request_options: options}} = Responses.coerce(body)
     response = %{"id" => "resp_configuration_async_output", "status" => "completed", "output" => items}
-    expected = [List.first(items), Map.put(List.last(items), "namespace", "synthetic")]
+    expected = Enum.map(items, &Map.put(&1, "namespace", "synthetic"))
 
     assert {:ok, json} = Responses.response_from_sse(CodexPooler.JSON.encode!(response), options)
     assert json["output"] == expected
@@ -244,7 +244,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ResponsesConfigurationUpdateAs
     assert {:ok, collected} = Responses.response_from_sse(sse, options)
     assert collected["output"] == expected
 
-    {normalized, _state} = PublicResponses.normalize_data(sse, PublicResponses.new_state(%{"synthetic_member_patch" => "synthetic"}))
+    {normalized, _state} = PublicResponses.normalize_data(sse, PublicResponses.new_state(options.openai_compatibility.tool_namespaces))
     normalized_events = for block <- String.split(normalized, "\n\n", trim: true), "data: " <> data <- String.split(block, "\n"), data != "[DONE]", do: CodexPooler.JSON.decode!(data)
     assert for(%{"type" => "response.output_item.done", "item" => item} <- normalized_events, do: item) == expected
     assert List.last(normalized_events)["response"]["output"] == expected

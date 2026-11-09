@@ -14,11 +14,14 @@ defmodule CodexPoolerWeb.V1.ResponsesNamespaceFunctionTest do
   @top_arguments ~s({ "count": 1.00 })
   @top_tool %{"type" => "function", "name" => "lookup_item", "strict" => true, "parameters" => %{"type" => "object", "properties" => %{"count" => %{"type" => "number"}}, "required" => ["count"], "additionalProperties" => false}}
   @nested_tool %{"type" => "function", "name" => "lookup_item", "strict" => true, "parameters" => %{"type" => "object", "properties" => %{"item_id" => %{"type" => "string"}}, "required" => ["item_id"], "additionalProperties" => false}}
-  @tools [@top_tool, %{"type" => "namespace", "name" => "catalog", "description" => "Synthetic catalog functions", "tools" => [@nested_tool]}]
+  @tools [@top_tool, %{"type" => "namespace", "name" => "catalog", "description" => "Synthetic catalog functions", "tools" => [@nested_tool, %{@nested_tool | "name" => "find_item"}, %{@nested_tool | "name" => "inspect_item"}]}]
   @calls [
     %{"type" => "function_call", "id" => "fc_synthetic_nested", "call_id" => "call_synthetic_nested", "name" => "lookup_item", "namespace" => "catalog", "arguments" => @nested_arguments, "status" => "completed"},
-    %{"type" => "function_call", "id" => "fc_synthetic_top", "call_id" => "call_synthetic_top", "name" => "lookup_item", "arguments" => @top_arguments, "status" => "completed"}
+    %{"type" => "function_call", "id" => "fc_synthetic_top", "call_id" => "call_synthetic_top", "name" => "lookup_item", "arguments" => @top_arguments, "status" => "completed"},
+    %{"type" => "function_call", "id" => "fc_synthetic_restored", "call_id" => "call_synthetic_restored", "name" => "find_item", "namespace" => "catalog", "arguments" => @nested_arguments, "status" => "completed"},
+    %{"type" => "function_call", "id" => "fc_synthetic_provider", "call_id" => "call_synthetic_provider", "name" => "inspect_item", "namespace" => "provider_catalog", "arguments" => @nested_arguments, "status" => "completed"}
   ]
+  @upstream_calls Enum.map(@calls, fn item -> if item["name"] == "find_item", do: Map.delete(item, "namespace"), else: item end)
   @input [
     %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic namespace lookup"}]},
     %{"type" => "function_call", "call_id" => "call_synthetic_prior", "name" => "lookup_item", "namespace" => "catalog", "arguments" => @nested_arguments},
@@ -33,7 +36,7 @@ defmodule CodexPoolerWeb.V1.ResponsesNamespaceFunctionTest do
 
   for mode <- ~w(full lite), transport <- [:json, :sse, :websocket] do
     @tag serving_mode: mode, transport: transport
-    test "#{mode} #{transport}: same-named top-level and namespace functions preserve declarations, replay and returned calls", %{serving_mode: mode, transport: transport} do
+    test "#{mode} #{transport}: restores unique function namespaces without overwriting provider namespaces or guessing ambiguous calls", %{serving_mode: mode, transport: transport} do
       assert_namespace_relay!(mode, transport)
     end
   end
@@ -82,15 +85,16 @@ defmodule CodexPoolerWeb.V1.ResponsesNamespaceFunctionTest do
     assert List.last(events)["response"]["output"] == @calls
     assert for(%{"type" => "response.output_item.added", "item" => item} <- events, do: item) == Enum.map(@calls, &%{&1 | "arguments" => "", "status" => "in_progress"})
     assert for(%{"type" => "response.output_item.done", "item" => item} <- events, do: item) == @calls
-    assert for(%{"type" => "response.function_call_arguments.delta", "delta" => delta} <- events, do: delta) == [@nested_arguments, @top_arguments]
-    assert for(%{"type" => "response.function_call_arguments.done", "arguments" => arguments} <- events, do: arguments) == [@nested_arguments, @top_arguments]
+    arguments = Enum.map(@calls, & &1["arguments"])
+    assert for(%{"type" => "response.function_call_arguments.delta", "delta" => delta} <- events, do: delta) == arguments
+    assert for(%{"type" => "response.function_call_arguments.done", "arguments" => arguments} <- events, do: arguments) == arguments
   end
 
   defp events do
-    response = %{"id" => "resp_synthetic_namespace", "object" => "response", "created_at" => 1_790_000_000, "model" => "provider-gpt-test-model", "status" => "completed", "output" => @calls, "usage" => %{"input_tokens" => 5, "output_tokens" => 3, "total_tokens" => 8}}
+    response = %{"id" => "resp_synthetic_namespace", "object" => "response", "created_at" => 1_790_000_000, "model" => "provider-gpt-test-model", "status" => "completed", "output" => @upstream_calls, "usage" => %{"input_tokens" => 5, "output_tokens" => 3, "total_tokens" => 8}}
 
     item_events =
-      @calls
+      @upstream_calls
       |> Enum.with_index()
       |> Enum.flat_map(fn {item, index} ->
         [

@@ -39,7 +39,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:items_relayed?) => boolean(),
           required(:terminal_kind) => atom() | nil,
           required(:terminal_failure) => StreamProtocol.terminal_failure() | nil,
-          required(:custom_tool_namespaces) => map(),
+          required(:tool_namespaces) => map(),
           required(:sequence) => PublicResponsesSequence.state(),
           required(:tool_completion) => PublicResponsesToolCompletion.state(),
           required(:terminal_output) => PublicResponsesTerminalOutput.state(),
@@ -54,7 +54,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @websocket_retry_error_codes ~w(websocket_connection_limit_reached previous_response_not_found)
 
   @spec new_state(map()) :: state()
-  def new_state(custom_tool_namespaces \\ %{}) when is_map(custom_tool_namespaces) do
+  def new_state(tool_namespaces \\ %{}) when is_map(tool_namespaces) do
     %{
       buffer: "",
       sse_block_state: StreamProtocol.new_sse_block_state(),
@@ -64,7 +64,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       items_relayed?: false,
       terminal_kind: nil,
       terminal_failure: nil,
-      custom_tool_namespaces: custom_tool_namespaces,
+      tool_namespaces: tool_namespaces,
       sequence: PublicResponsesSequence.new_state(),
       tool_completion: PublicResponsesToolCompletion.new_state(),
       terminal_output: PublicResponsesTerminalOutput.new_state(),
@@ -427,7 +427,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     decoded =
       decoded
       |> drop_provider_event_headers()
-      |> Responses.restore_custom_tool_call_namespaces(state.custom_tool_namespaces)
+      |> Responses.restore_tool_call_namespaces(state.tool_namespaces)
 
     source_type = effective_source_public_type(event_type, decoded)
     source_terminal_outcome = source_terminal_outcome(source_type, decoded)

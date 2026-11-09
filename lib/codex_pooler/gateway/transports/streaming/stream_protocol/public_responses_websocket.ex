@@ -20,7 +20,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:tool_completion) => PublicResponsesToolCompletion.state(),
           optional(:terminal_output) => PublicResponsesTerminalOutput.state(),
           optional(:stream_id) => String.t(),
-          optional(:custom_tool_namespaces) => map()
+          optional(:tool_namespaces) => map()
         }
   @type result ::
           {:push, binary(), state()}
@@ -82,7 +82,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         normalized =
           type
           |> PublicResponses.normalize_terminal_errors(normalized)
-          |> Responses.restore_custom_tool_call_namespaces(Map.get(state, :custom_tool_namespaces, %{}))
+          |> Responses.restore_tool_call_namespaces(Map.get(state, :tool_namespaces, %{}))
           |> then(&PublicResponsesTerminalOutput.fill(type, &1, terminal_output(state)))
           |> maybe_put_stream_id(stream_id)
 
