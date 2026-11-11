@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.7...codex-pooler-v0.14.8) (2026-11-11)
+
+
+### Dependencies
+
+* refresh dependencies and qualify Codex 0.167.1 ([5c546a3](https://github.com/icoretech/codex-pooler/commit/5c546a3c1d519d367b638c6f15af065d7439f911))
+* update dependency astro to v7.4.8 ([#620](https://github.com/icoretech/codex-pooler/issues/620)) ([10eebe4](https://github.com/icoretech/codex-pooler/commit/10eebe4815d3575a4908422bcf21c48b26fc08ef))
+* update helm release codex-pooler to v0.15.6 ([#618](https://github.com/icoretech/codex-pooler/issues/618)) ([bf77101](https://github.com/icoretech/codex-pooler/commit/bf771018723d115c8167b5f01bc2405458da6702))
+* update helm release codex-pooler to v0.15.7 ([#623](https://github.com/icoretech/codex-pooler/issues/623)) ([d21137d](https://github.com/icoretech/codex-pooler/commit/d21137d4855206452dc48ba8b502c8b6c9a7edbc))
+
+
+### Tests
+
+* synchronize upstream snapshot refresh assertions ([8ac7dc7](https://github.com/icoretech/codex-pooler/commit/8ac7dc7cc4942029270fed914475566922c2656c))
+
 ## [0.14.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.6...codex-pooler-v0.14.7) (2026-11-09)
 
 
