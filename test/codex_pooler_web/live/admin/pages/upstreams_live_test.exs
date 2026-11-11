@@ -6485,24 +6485,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> UpstreamIdentity.changeset(%{account_label: "Async account after"})
     |> Repo.update!()
 
+    barrier = block_next_upstream_snapshot_read!(view.pid)
+
     assert {:ok, _event} =
              Events.broadcast_upstreams(pool.id, "quota_windows_updated", %{
                "upstream_identity_id" => identity.id
              })
 
-    {_result, live_view_queries} =
-      capture_repo_queries(view.pid, fn ->
-        execute_scheduled_upstreams_reload(view, await?: false)
-      end)
+    execute_scheduled_upstreams_reload(view, await?: false)
+    assert_receive {^barrier, :read_blocked, worker}
+    monitor = Process.monitor(worker)
+    on_exit(fn -> send(worker, {barrier, :release}) end)
 
-    # Rendering the loading state still asks the shared admin shell whether the
-    # operator is an owner. The upstream account snapshot itself must not run
-    # in the LiveView process.
-    assert live_view_queries != []
-    assert Enum.all?(live_view_queries, &(&1 == "memberships"))
-    assert :sys.get_state(view.pid).socket.assigns[:upstreams_reload_running?]
+    try do
+      assert worker != view.pid
+      assert has_element?(view, "#upstream-account-#{identity.id}", "Async account before")
+      refute has_element?(view, "#upstream-account-#{identity.id}", "Async account after")
+    after
+      send(worker, {barrier, :release})
+    end
 
     _ = render_async(view)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
 
     assert has_element?(view, "#upstream-account-#{identity.id}", "Async account after")
   end
@@ -9985,6 +9989,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         {"provider_extra", "ignored"},
         {"state", state}
       ])
+  end
+
+  defp block_next_upstream_snapshot_read!(view_pid) do
+    ref = make_ref()
+    parent = self()
+    once = :atomics.new(1, [])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    :ok =
+      :telemetry.attach(
+        ref,
+        [:codex_pooler, :repo, :query],
+        fn _, _, metadata, _ ->
+          if metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and view_pid in Process.get(:"$callers", []) and :atomics.compare_exchange(once, 1, 0, 1) == :ok do
+            owner = Process.monitor(parent)
+            send(parent, {ref, :read_blocked, self()})
+
+            receive do
+              {^ref, :release} -> :ok
+              {:DOWN, ^owner, :process, ^parent, _reason} -> exit(:shutdown)
+            after
+              15_000 -> raise "upstream snapshot read barrier was not released"
+            end
+
+            Process.demonitor(owner, [:flush])
+          end
+        end,
+        nil
+      )
+
+    ref
   end
 
   defp execute_scheduled_upstreams_reload(view, opts \\ []) do
