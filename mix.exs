@@ -96,7 +96,7 @@ defmodule CodexPooler.MixProject do
       {:credo, "== 1.7.19", only: [:dev, :test], runtime: false},
       {:dialyxir, "== 1.4.8", only: [:dev, :test], runtime: false},
       {:sobelow, "== 0.18.1", only: [:dev, :test], runtime: false},
-      {:six, "== 0.4.2", only: :test},
+      {:six, "== 0.4.3", only: :test},
       {:gettext, "== 1.0.2"},
       {:dns_cluster, "== 0.3.1"},
       {:websock, "== 0.5.3"},
