@@ -39,6 +39,21 @@ defmodule CodexPooler.Accounts.OperatorAssignments do
   def normalize_pool_ids(pool_id) when is_binary(pool_id), do: normalize_pool_ids([pool_id])
   def normalize_pool_ids(_pool_ids), do: {:error, :invalid_pool_assignment}
 
+  @doc """
+  The Pool list an edit asks for when it was made against `base_pool_ids`, the list its editor
+  was opened on: the Pools assigned now, minus the ones the edit removed from that base, plus the
+  ones it added. A Pool revoked or granted since the base therefore stays as it is. Without a base
+  the posted list replaces the assignments.
+  """
+  @spec rebase_pool_ids([Ecto.UUID.t()], term(), [Ecto.UUID.t()]) :: {:ok, [Ecto.UUID.t()]} | {:error, :invalid_pool_assignment}
+  def rebase_pool_ids(pool_ids, nil, _current_pool_ids), do: {:ok, pool_ids}
+
+  def rebase_pool_ids(pool_ids, base_pool_ids, current_pool_ids) do
+    with {:ok, base_pool_ids} <- normalize_pool_ids(base_pool_ids) do
+      {:ok, Enum.uniq((current_pool_ids -- (base_pool_ids -- pool_ids)) ++ (pool_ids -- base_pool_ids))}
+    end
+  end
+
   @spec role_pool_ids(String.t(), [Ecto.UUID.t()]) :: [Ecto.UUID.t()]
   def role_pool_ids(role, pool_ids) do
     if role == Pools.role(:instance_admin), do: pool_ids, else: []

@@ -65,6 +65,23 @@ defmodule CodexPooler.Accounts.OperatorLifecycleTest do
     end
   end
 
+  test "a Pool list sent with the list it was edited from changes only the Pools it ticked or unticked" do
+    %{user: owner} = bootstrap_owner_fixture()
+    [kept, removed, added, granted_since] = for name <- ~w(kept removed added granted), do: pool_fixture(%{slug: "rebase-#{name}", name: "Rebase #{name}"})
+    %{user: admin} = operator_fixture(owner, %{"role" => "instance_admin", "pool_ids" => [kept.id, removed.id, granted_since.id]})
+    base = [kept.id, removed.id]
+
+    assert {:ok, _admin} = Accounts.update_operator(owner, admin, %{"pool_ids" => [kept.id, added.id], "pool_ids_base" => base})
+    assert Enum.sort(Accounts.operator_lifecycle(admin).assigned_pool_ids) == Enum.sort([kept.id, added.id, granted_since.id])
+
+    assert {:error, _reason} = Accounts.update_operator(owner, admin, %{"pool_ids" => [kept.id], "pool_ids_base" => ["not-a-uuid"]})
+    assert Enum.sort(Accounts.operator_lifecycle(admin).assigned_pool_ids) == Enum.sort([kept.id, added.id, granted_since.id])
+
+    # Control: without a base the posted list replaces the assignments.
+    assert {:ok, _admin} = Accounts.update_operator(owner, admin, %{"pool_ids" => [kept.id]})
+    assert Accounts.operator_lifecycle(admin).assigned_pool_ids == [kept.id]
+  end
+
   describe "operator lifecycle contract" do
     @tag :operator_lifecycle
     test "exports the expected public operator lifecycle APIs" do

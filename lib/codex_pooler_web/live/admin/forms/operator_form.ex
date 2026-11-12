@@ -138,7 +138,9 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   The attributes of an operator edit. The editor posts the role, every Pool checkbox and the
   password requirement with any save, so with the snapshot the editor was opened on, a value still
   equal to it was not edited and is left out: the operator keeps what is stored now, including a
-  Pool assignment revoked or a role changed since the editor was opened.
+  Pool assignment revoked or a role changed since the editor was opened. An edited Pool list is
+  sent with the snapshot's list as `pool_ids_base`, which `Accounts.update_operator/4` uses to
+  apply only the Pools ticked or unticked in the editor.
   """
   @spec edit_attrs(map(), map() | nil) :: map()
   def edit_attrs(params, base \\ nil) do
@@ -150,10 +152,17 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   end
 
   defp drop_unedited_lifecycle(attrs, %{} = base) do
-    Map.reject(attrs, fn {field, value} -> field in @lifecycle_fields and Map.has_key?(base, field) and comparable(value) == Map.fetch!(base, field) end)
+    attrs
+    |> Map.reject(fn {field, value} -> field in @lifecycle_fields and Map.has_key?(base, field) and comparable(value) == Map.fetch!(base, field) end)
+    |> put_pool_ids_base(base)
   end
 
   defp drop_unedited_lifecycle(attrs, _base), do: attrs
+
+  # An edited Pool list travels with the list it was edited from, so the update applies the ticks
+  # and unticks to the operator's current assignments instead of replacing them.
+  defp put_pool_ids_base(%{"pool_ids" => _edited} = attrs, %{"pool_ids" => base_pool_ids}), do: Map.put(attrs, "pool_ids_base", base_pool_ids)
+  defp put_pool_ids_base(attrs, _base), do: attrs
 
   defp comparable(pool_ids) when is_list(pool_ids), do: Enum.sort(pool_ids)
   defp comparable(value), do: value

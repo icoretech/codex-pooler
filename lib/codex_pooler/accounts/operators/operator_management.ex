@@ -530,6 +530,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
     with {:ok, role} <- OperatorRoles.normalize(map_value(attrs, :role) || current_lifecycle.role),
          {:ok, pool_ids} <-
            OperatorAssignments.normalize_pool_ids(map_value(attrs, :pool_ids, current_lifecycle.assigned_pool_ids)),
+         {:ok, pool_ids} <- OperatorAssignments.rebase_pool_ids(pool_ids, map_value(attrs, :pool_ids_base), current_lifecycle.assigned_pool_ids),
          :ok <- OperatorAssignments.ensure_pool_ids_exist(pool_ids) do
       {:ok, %{role: role, pool_ids: OperatorAssignments.role_pool_ids(role, pool_ids)}}
     end

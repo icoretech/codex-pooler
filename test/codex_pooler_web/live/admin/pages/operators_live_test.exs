@@ -660,6 +660,26 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
       assert Accounts.operator_lifecycle(operator).role == "instance_admin"
     end
 
+    test "a Pool list edited there applies its ticks and unticks to the current assignments", %{conn: conn, scope: scope} do
+      revoked_since = pool_fixture(%{slug: "stale-delta-revoked", name: "Stale Delta Revoked"})
+      removed_here = pool_fixture(%{slug: "stale-delta-removed", name: "Stale Delta Removed"})
+      added_here = pool_fixture(%{slug: "stale-delta-added", name: "Stale Delta Added"})
+      granted_since = pool_fixture(%{slug: "stale-delta-granted", name: "Stale Delta Granted"})
+      %{user: operator} = operator_fixture(scope, %{"role" => "instance_admin", "pool_ids" => [revoked_since.id, removed_here.id]})
+      {:ok, stale, _html} = live(conn, ~p"/admin/operators")
+      stale |> element("#edit-operator-#{operator.id}") |> render_click()
+
+      assert {:ok, _operator} = Accounts.update_operator(scope, operator, %{"pool_ids" => [removed_here.id, granted_since.id]})
+      _ = :sys.get_state(stale.pid)
+      assert has_element?(stale, "#operator_edit_pool_id_#{revoked_since.id}[checked]")
+
+      stale |> form("#operator-edit-form", operator_edit: %{pool_ids: [revoked_since.id, added_here.id]}) |> render_submit()
+
+      assert Enum.sort(Accounts.operator_lifecycle(operator).assigned_pool_ids) == Enum.sort([added_here.id, granted_since.id])
+      refute Repo.get_by(OperatorPoolAssignment, user_id: operator.id, pool_id: revoked_since.id, status: "active")
+      refute Repo.get_by(OperatorPoolAssignment, user_id: operator.id, pool_id: removed_here.id, status: "active")
+    end
+
     test "control: a deliberate change in that editor is still written", %{conn: conn, scope: scope} do
       kept = pool_fixture(%{slug: "stale-edit-kept", name: "Stale Edit Kept"})
       added = pool_fixture(%{slug: "stale-edit-added", name: "Stale Edit Added"})
