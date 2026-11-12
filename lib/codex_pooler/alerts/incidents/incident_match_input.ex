@@ -28,6 +28,7 @@ defmodule CodexPooler.Alerts.Incidents.IncidentMatchInput do
         }
   @type clear_attrs :: %{
           required(:dedupe_key) => String.t(),
+          optional(:rule_id) => Ecto.UUID.t(),
           optional(:cleared_at) => DateTime.t()
         }
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
@@ -62,7 +63,12 @@ defmodule CodexPooler.Alerts.Incidents.IncidentMatchInput do
     attrs = atomized_attrs(attrs)
 
     with {:ok, dedupe_key} <- required_string(attrs, :dedupe_key, "dedupe key is required") do
-      {:ok, %{dedupe_key: dedupe_key, cleared_at: timestamp_attr(attrs, :cleared_at) || now()}}
+      clear = %{dedupe_key: dedupe_key, cleared_at: timestamp_attr(attrs, :cleared_at) || now()}
+
+      case Map.get(attrs, :rule_id) do
+        rule_id when is_binary(rule_id) and rule_id != "" -> {:ok, Map.put(clear, :rule_id, rule_id)}
+        _absent -> {:ok, clear}
+      end
     end
   end
 

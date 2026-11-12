@@ -74,6 +74,9 @@ defmodule CodexPooler.Alerts.Delivery.DeliveryScheduling do
 
   def next_delivery_attempt_number(_incident_id, _channel_id, _oban_attempt), do: 1
 
+  # Deliveries are scheduled when a rule matches, so only the rules whose condition still holds
+  # for the incident notify: a rule whose own clear retired its target while a sibling rule keeps
+  # the incident open has an already resolved target and its channels stay quiet.
   defp linked_active_delivery_channels(incident_id) do
     Repo.all(
       from target in AlertIncidentTarget,
@@ -84,7 +87,7 @@ defmodule CodexPooler.Alerts.Delivery.DeliveryScheduling do
         join: channel in AlertChannel,
         on: channel.id == link.alert_channel_id,
         where:
-          target.incident_id == ^incident_id and rule.state == "active" and
+          target.incident_id == ^incident_id and is_nil(target.resolved_at) and rule.state == "active" and
             channel.state == "active",
         group_by: [channel.id, channel.created_at],
         order_by: [asc: channel.created_at, asc: channel.id],

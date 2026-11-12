@@ -100,7 +100,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
       dedupe_key: dedupe_key,
       rule_id: rule.id,
       rule_kind: rule.rule_kind,
-      clear_attrs: %{dedupe_key: dedupe_key, cleared_at: timestamp}
+      clear_attrs: %{dedupe_key: dedupe_key, rule_id: rule.id, cleared_at: timestamp}
     }
   end
 

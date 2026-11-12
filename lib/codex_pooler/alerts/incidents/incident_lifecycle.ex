@@ -198,9 +198,32 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycle do
 
   defp clear_incident_condition_in_transaction(clear) do
     case unresolved_incident_for_update(clear.dedupe_key) do
-      %AlertIncident{} = incident -> resolve_incident(incident, clear.cleared_at)
+      %AlertIncident{} = incident -> clear_incident(incident, Map.get(clear, :rule_id), clear.cleared_at)
       nil -> nil
     end
+  end
+
+  # An evaluator clear speaks for one rule only. Incidents aggregate the targets of every rule
+  # sharing a dedupe key, so a rule whose own condition no longer holds retires just its targets;
+  # the incident resolves once no active rule still owns an unresolved target. A clear without a
+  # rule (manual or whole-condition callers) resolves the incident outright.
+  defp clear_incident(incident, nil, timestamp), do: resolve_incident(incident, timestamp)
+
+  defp clear_incident(incident, rule_id, timestamp) do
+    {retired, _rows} =
+      AlertIncidentTarget
+      |> where([target], target.incident_id == ^incident.id and target.rule_id == ^rule_id and is_nil(target.resolved_at))
+      |> Repo.update_all(set: [resolved_at: timestamp, updated_at: timestamp])
+
+    cond do
+      active_target?(incident.id) -> nil
+      retired > 0 or not unresolved_target?(incident.id) -> resolve_incident(incident, timestamp)
+      true -> nil
+    end
+  end
+
+  defp unresolved_target?(incident_id) do
+    Repo.exists?(from target in AlertIncidentTarget, where: target.incident_id == ^incident_id and is_nil(target.resolved_at))
   end
 
   defp rollback_on_error({:ok, result}), do: result
