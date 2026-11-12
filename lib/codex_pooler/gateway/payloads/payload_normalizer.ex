@@ -41,6 +41,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     "/backend-api/codex/responses/compact"
   ]
   @prompt_cache_breakpoint_types ~w(input_text input_image input_file)
+  @prompt_cache_opaque_schema_keys ~w(output_schema parameters schema)
   @schema_definition_keys ~w(properties $defs definitions)
   @schema_list_keys ~w(anyOf oneOf allOf)
 
@@ -528,19 +529,36 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp remove_supported_prompt_cache_breakpoints(%{} = value) do
-    remove_here? =
-      Map.get(value, "type") in @prompt_cache_breakpoint_types and
-        Map.has_key?(value, "prompt_cache_breakpoint")
-
-    value = if remove_here?, do: Map.delete(value, "prompt_cache_breakpoint"), else: value
+    {value, remove_here?} = remove_own_prompt_cache_breakpoint(value)
+    tool_result? = ToolResultShape.tool_result?(value)
 
     Enum.reduce(value, {%{}, remove_here?}, fn {key, nested}, {result, removed?} ->
-      {nested, nested_removed?} = remove_supported_prompt_cache_breakpoints(nested)
+      {nested, nested_removed?} = remove_nested_prompt_cache_breakpoints(key, nested, tool_result?)
       {Map.put(result, key, nested), removed? or nested_removed?}
     end)
   end
 
   defp remove_supported_prompt_cache_breakpoints(value), do: {value, false}
+
+  defp remove_own_prompt_cache_breakpoint(%{"type" => type, "prompt_cache_breakpoint" => _breakpoint} = value)
+       when type in @prompt_cache_breakpoint_types,
+       do: {Map.delete(value, "prompt_cache_breakpoint"), true}
+
+  defp remove_own_prompt_cache_breakpoint(value), do: {value, false}
+
+  # A tool result is the caller's data and a schema is opaque JSON: only the direct typed content
+  # parts of an output list are protocol content, everything else below them is left as received.
+  defp remove_nested_prompt_cache_breakpoints(key, nested, _tool_result?) when key in @prompt_cache_opaque_schema_keys, do: {nested, false}
+
+  defp remove_nested_prompt_cache_breakpoints("output", parts, true) when is_list(parts) do
+    Enum.map_reduce(parts, false, fn part, removed? ->
+      {part, part_removed?} = if is_map(part), do: remove_own_prompt_cache_breakpoint(part), else: {part, false}
+      {part, removed? or part_removed?}
+    end)
+  end
+
+  defp remove_nested_prompt_cache_breakpoints(key, nested, true) when key in ["output", "result"], do: {nested, false}
+  defp remove_nested_prompt_cache_breakpoints(_key, nested, _tool_result?), do: remove_supported_prompt_cache_breakpoints(nested)
 
   defp transcription_array_fields(
          payload,
