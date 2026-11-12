@@ -94,6 +94,14 @@ defmodule CodexPooler.Status.SyncTest do
              OpenAIStatus.active_incidents()
   end
 
+  test "a named unreadable reappearance clears accrued omissions without changing incident content" do
+    assert_reappearance_clears_omissions(:unreadable)
+  end
+
+  test "a readable reappearance clears accrued omissions without changing incident content" do
+    assert_reappearance_clears_omissions(:readable)
+  end
+
   test "non-feed XML polls preserve active incidents and record the failure" do
     now = ~U[2026-09-10 10:00:00.000000Z]
     seed = fn _state, _opts -> {:ok, %{items: [item("preserved")], content_hash: "feed"}} end
@@ -343,6 +351,93 @@ defmodule CodexPooler.Status.SyncTest do
     refute Repo.get(CodexPooler.Status.Schemas.Incident, resolved.id)
   end
 
+  defp assert_reappearance_clears_omissions(readability) do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    suffix = System.unique_integer([:positive])
+    a = "reappeared-#{suffix}"
+    b = "departed-#{suffix}"
+    c = "readable-sibling-#{suffix}"
+    description = "<b>Status: Investigating</b><br/><br/>Bounded original summary."
+    readable_a = status_feed_item(a, description)
+    seed = status_feed_fetcher([readable_a, status_feed_item(b, description)])
+    empty = status_feed_fetcher([])
+    reappeared_at = DateTime.add(now, 900, :second)
+
+    reappearing_a =
+      case readability do
+        :readable -> readable_a
+        :unreadable -> status_feed_item(a, "Recovery continues without further details.")
+      end
+
+    reappearance = status_feed_fetcher([reappearing_a, status_feed_item(c, description)])
+    assert {:ok, parsed} = reappearance.(%{}, now: reappeared_at)
+    assert parsed.complete?
+    expected_skipped = if readability == :unreadable, do: [a], else: []
+    expected_readable = if readability == :unreadable, do: [c], else: [a, c]
+    assert parsed.skipped_guids == expected_skipped
+    assert Enum.sort(Enum.map(parsed.items, & &1.guid)) == Enum.sort(expected_readable)
+
+    with_committed_status([a, b, c], fn _listener ->
+      assert {:ok, %{active_count: 2}} = Sync.sync(fetcher: seed, now: now)
+      original = Repo.get_by!(Incident, guid: a)
+
+      for seconds <- [300, 600] do
+        assert {:ok, %{active_count: 2}} =
+                 Sync.sync(fetcher: empty, now: DateTime.add(now, seconds, :second))
+      end
+
+      assert Repo.get_by!(Incident, guid: a).omission_count == 2
+      assert Repo.get_by!(Incident, guid: b).omission_count == 2
+      before_not_modified = OpenAIStatus.list_incidents()
+
+      assert {:not_modified, %{changed_count: 0, active_count: 2}} =
+               Sync.sync(
+                 fetcher: fn _, _ -> {:not_modified, %{}} end,
+                 now: DateTime.add(now, 750, :second)
+               )
+
+      assert OpenAIStatus.list_incidents() == before_not_modified
+      assert {:ok, %{active_count: 2}} = Sync.sync(fetcher: reappearance, now: reappeared_at)
+      reappeared = Repo.get_by!(Incident, guid: a)
+      departed = Repo.get_by!(Incident, guid: b)
+
+      # Read the next committed absence too, so the red retains the premature
+      # retirement evidence rather than stopping at the stale counter alone.
+      assert {:ok, next_poll} =
+               Sync.sync(fetcher: empty, now: DateTime.add(now, 1200, :second))
+
+      after_next_absence = Repo.get_by!(Incident, guid: a)
+      assert departed.omission_count == 3
+      assert departed.retired_at == reappeared_at
+      assert reappeared.omission_count == 0
+      assert reappeared.retired_at == nil
+      assert after_next_absence.omission_count == 1
+      assert after_next_absence.retired_at == nil
+
+      preserved_fields = ~w(title status summary component link published_at first_seen_at last_seen_at revision content_hash resolved_at retired_at)a
+      assert Map.take(reappeared, preserved_fields) == Map.take(original, preserved_fields)
+      assert Map.take(after_next_absence, preserved_fields) == Map.take(original, preserved_fields)
+      assert next_poll.active_count == 2
+      assert OpenAIStatus.feed_state().active_count == 2
+      assert OpenAIStatus.aggregate().active_count == 2
+      assert MapSet.new(Enum.map(OpenAIStatus.active_incidents(), & &1.guid)) == MapSet.new([a, c])
+    end)
+  end
+
+  defp status_feed_fetcher(items) do
+    xml = "<rss><channel>" <> Enum.join(items) <> "</channel></rss>"
+    fn _state, opts -> FeedParser.parse(xml, opts) end
+  end
+
+  defp status_feed_item(guid, description) do
+    """
+    <item><guid>#{guid}</guid><title>Incident #{guid}</title>
+    <link>https://status.openai.com/incidents/#{guid}</link>
+    <pubDate>2026-09-10T10:00:00.000000Z</pubDate>
+    <description><![CDATA[#{description}]]></description></item>
+    """
+  end
+
   # Registered, never scoped. `openai_status_feed_states` is a committed singleton and the
   # incident rows are committed too, so losing this teardown makes the very first assertion of
   # every later `with_committed_status/2` -- and of any other file that expects no feed state
@@ -350,7 +445,8 @@ defmodule CodexPooler.Status.SyncTest do
   # is alive: an ExUnit timeout kill or an exit signal from the notification listener skips it,
   # and the old block also ended in assertions, so a failing check there aborted the rest of
   # the teardown instead of just reporting it.
-  defp with_committed_status(guid, fun) do
+  defp with_committed_status(guids, fun) do
+    guids = List.wrap(guids)
     :ok = OpenAIStatus.subscribe()
     assert %{status_listen_ref: bridge_ref} = :sys.get_state(CodexPooler.Events.PostgresBridge)
     assert is_reference(bridge_ref)
@@ -360,7 +456,7 @@ defmodule CodexPooler.Status.SyncTest do
 
     channel = Events.postgres_channel()
     assert {:ok, ref} = Postgrex.Notifications.listen(notifications, channel)
-    register_unboxed_cleanup!(fn -> delete_committed_status!(guid) end)
+    register_unboxed_cleanup!(fn -> delete_committed_status!(guids) end)
 
     Sandbox.unboxed_run(Repo, fn ->
       assert OpenAIStatus.feed_state() == nil
@@ -371,11 +467,11 @@ defmodule CodexPooler.Status.SyncTest do
   end
 
   # Both deletes run before either check, so a check that fails still leaves the table clean.
-  defp delete_committed_status!(guid) do
-    Repo.delete_all(from(i in Incident, where: i.guid == ^guid))
+  defp delete_committed_status!(guids) do
+    Repo.delete_all(from(i in Incident, where: i.guid in ^guids))
     Repo.delete_all(from(s in FeedState, where: s.singleton == true))
 
-    assert Repo.get_by(Incident, guid: guid) == nil
+    refute Repo.exists?(from(i in Incident, where: i.guid in ^guids))
     assert OpenAIStatus.feed_state() == nil
     :ok
   end

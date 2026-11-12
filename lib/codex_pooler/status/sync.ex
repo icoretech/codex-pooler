@@ -70,6 +70,7 @@ defmodule CodexPooler.Status.Sync do
       |> MapSet.union(MapSet.new(Map.get(parsed, :skipped_guids) || []))
 
     changed_count = upsert_items(items, by_guid, now)
+    reset_skipped_omissions(existing, Map.get(parsed, :skipped_guids) || [], now)
 
     omission_count =
       if Map.get(parsed, :complete?, true), do: retire_omitted(existing, seen, now), else: 0
@@ -278,6 +279,21 @@ defmodule CodexPooler.Status.Sync do
   defp stale_result?(nil, _), do: false
   defp stale_result?(%FeedState{last_attempt_at: nil}, _), do: false
   defp stale_result?(%FeedState{last_attempt_at: at}, now), do: DateTime.compare(at, now) != :lt
+
+  # A named-but-unreadable item is still published, so its accrued omissions end exactly as they
+  # do for a readable one. Its content is not trusted, so nothing else about the row changes.
+  defp reset_skipped_omissions(existing, skipped_guids, now) do
+    skipped = MapSet.new(skipped_guids)
+
+    existing
+    |> Enum.filter(&(&1.omission_count > 0 and is_nil(&1.retired_at) and is_nil(&1.resolved_at) and MapSet.member?(skipped, &1.guid)))
+    |> Enum.each(fn incident ->
+      case incident |> Incident.changeset(%{omission_count: 0, updated_at: now}) |> Repo.update() do
+        {:ok, _} -> :ok
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
 
   defp retire_omitted(existing, seen, now) do
     existing
