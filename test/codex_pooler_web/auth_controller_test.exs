@@ -355,11 +355,55 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert get_session(conn, :user_token)
 
     reused =
-      post(build_conn() |> init_test_session(%{pending_mfa_user_id: user.id}), ~p"/login", %{
+      post(build_conn() |> init_test_session(%{pending_mfa_user_id: user.id, pending_mfa_password_version: Accounts.password_credential_version(Accounts.get_user!(user.id))}), ~p"/login", %{
         "user" => %{"recovery_code" => recovery_code}
       })
 
     assert redirected_to(reused) == ~p"/login?mfa=1"
+  end
+
+  test "a pending second-factor session without a password version cannot complete the login" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+    %{user: operator, temporary_password: temporary_password} = operator_fixture(owner)
+    {:ok, %{recovery_codes: [recovery_code | _]}} = Accounts.enable_totp_for_user(operator)
+
+    for session <- [%{pending_mfa_user_id: operator.id}, %{pending_mfa_user_id: operator.id, pending_mfa_password_version: ""}] do
+      unbound = post(build_conn() |> init_test_session(session), ~p"/login", %{"user" => %{"recovery_code" => recovery_code}})
+      refute get_session(unbound, :user_token)
+      refute get_session(unbound, :pending_mfa_user_id)
+      assert redirected_to(unbound) =~ "/login"
+    end
+
+    # Control: the same recovery code still completes a login that verified the password first.
+    pending = post(build_conn(), ~p"/login", %{"user" => %{"email" => operator.email, "password" => temporary_password}})
+    assert get_session(pending, :pending_mfa_password_version) == Accounts.password_credential_version(Accounts.get_user!(operator.id))
+    completed = post(recycle(pending), ~p"/login", %{"user" => %{"recovery_code" => recovery_code}})
+    assert get_session(completed, :user_token)
+    refute get_session(completed, :pending_mfa_password_version)
+  end
+
+  test "a pending second-factor login ends when the operator's password is reset", %{conn: conn} do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+    %{user: operator, temporary_password: temporary_password} = operator_fixture(owner)
+    {:ok, %{recovery_codes: [recovery_code | _]}} = Accounts.enable_totp_for_user(operator)
+
+    pending = post(conn, ~p"/login", %{"user" => %{"email" => operator.email, "password" => temporary_password}})
+    assert redirected_to(pending) == ~p"/login?mfa=1"
+    assert get_session(pending, :pending_mfa_user_id) == operator.id
+
+    assert {:ok, _result} =
+             Accounts.reset_operator_password(owner, operator, %{"new_password" => "manual-reset-pass-123", "password_change_required" => false}, %{request_id: "pending-mfa-reset"})
+
+    stale = post(recycle(pending), ~p"/login", %{"user" => %{"recovery_code" => recovery_code}})
+    refute get_session(stale, :user_token)
+    refute get_session(stale, :pending_mfa_user_id)
+    assert redirected_to(stale) =~ "/login"
+
+    # The recovery code was not consumed by the rejected continuation.
+    fresh = post(build_conn(), ~p"/login", %{"user" => %{"email" => operator.email, "password" => "manual-reset-pass-123"}})
+    assert redirected_to(fresh) == ~p"/login?mfa=1"
+    completed = post(recycle(fresh), ~p"/login", %{"user" => %{"recovery_code" => recovery_code}})
+    assert get_session(completed, :user_token)
   end
 
   test "password change API requires current password, preserves the current session, revokes parallel sessions, and accepts the new password",

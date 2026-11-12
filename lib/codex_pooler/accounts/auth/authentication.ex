@@ -65,17 +65,29 @@ defmodule CodexPooler.Accounts.Authentication do
     |> normalize_transaction_error()
   end
 
-  @spec complete_second_factor_login(term(), map(), map()) :: auth_result() | auth_error()
-  def complete_second_factor_login(user_id, attrs, metadata \\ %{})
+  @doc """
+  A non-secret fingerprint of the password verified at the first login factor. A pending
+  second-factor login carries it and `complete_second_factor_login/4` rejects the login when the
+  operator's password changed in between, so a password reset ends a half-finished sign-in.
+  """
+  @spec password_credential_version(User.t()) :: String.t()
+  def password_credential_version(%User{password_hash: password_hash}) when is_binary(password_hash) do
+    :sha256 |> :crypto.hash(password_hash) |> binary_part(0, 16) |> Base.url_encode64(padding: false)
+  end
 
-  def complete_second_factor_login(user_id, attrs, metadata) when is_binary(user_id) do
+  def password_credential_version(%User{}), do: ""
+
+  @spec complete_second_factor_login(term(), map(), map(), keyword()) :: auth_result() | auth_error()
+  def complete_second_factor_login(user_id, attrs, metadata \\ %{}, opts \\ [])
+
+  def complete_second_factor_login(user_id, attrs, metadata, opts) when is_binary(user_id) do
     totp_code = Map.get(attrs, "totp_code") || Map.get(attrs, :totp_code) || ""
     recovery_code = Map.get(attrs, "recovery_code") || Map.get(attrs, :recovery_code) || ""
 
     Repo.transaction(fn ->
       user = Repo.get(User, user_id)
 
-      if active_login_user?(user) do
+      if active_login_user?(user) and current_password_version?(user, opts) do
         complete_second_factor_checked_login_transaction(user, totp_code, recovery_code, metadata)
       else
         Repo.rollback(:invalid_credentials)
@@ -84,8 +96,15 @@ defmodule CodexPooler.Accounts.Authentication do
     |> normalize_transaction_error()
   end
 
-  def complete_second_factor_login(_user_id, _attrs, _metadata),
+  def complete_second_factor_login(_user_id, _attrs, _metadata, _opts),
     do: {:error, :invalid_credentials}
+
+  defp current_password_version?(user, opts) do
+    case Keyword.fetch(opts, :password_version) do
+      {:ok, version} -> is_binary(version) and Plug.Crypto.secure_compare(version, password_credential_version(user))
+      :error -> true
+    end
+  end
 
   @spec get_user_by_session_token(term()) :: {User.t(), DateTime.t()} | nil
   def get_user_by_session_token(token) when is_binary(token) do

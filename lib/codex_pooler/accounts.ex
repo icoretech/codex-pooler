@@ -108,8 +108,11 @@ defmodule CodexPooler.Accounts do
   @spec login_user(map(), map()) :: auth_result() | auth_error()
   defdelegate login_user(attrs, metadata \\ %{}), to: Authentication
 
-  @spec complete_second_factor_login(term(), map(), map()) :: auth_result() | auth_error()
-  defdelegate complete_second_factor_login(user_id, attrs, metadata \\ %{}), to: Authentication
+  @spec complete_second_factor_login(term(), map(), map(), keyword()) :: auth_result() | auth_error()
+  defdelegate complete_second_factor_login(user_id, attrs, metadata \\ %{}, opts \\ []), to: Authentication
+
+  @spec password_credential_version(User.t()) :: String.t()
+  defdelegate password_credential_version(user), to: Authentication
 
   @spec get_user_by_session_token(term()) :: {User.t(), DateTime.t()} | nil
   defdelegate get_user_by_session_token(token), to: Authentication

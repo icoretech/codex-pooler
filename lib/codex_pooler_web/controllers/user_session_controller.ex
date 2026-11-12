@@ -37,6 +37,7 @@ defmodule CodexPoolerWeb.UserSessionController do
       conn
       |> delete_session(:pending_mfa_user_id)
       |> delete_session(:pending_mfa_email)
+      |> delete_session(:pending_mfa_password_version)
       |> start_login(user_params)
     end
   end
@@ -54,6 +55,7 @@ defmodule CodexPoolerWeb.UserSessionController do
         conn
         |> put_session(:pending_mfa_user_id, user.id)
         |> put_session(:pending_mfa_email, user.email)
+        |> put_session(:pending_mfa_password_version, Accounts.password_credential_version(user))
         |> put_flash(:info, gettext("Enter your authenticator code to finish signing in."))
         |> redirect(to: ~p"/login?mfa=1")
 
@@ -72,12 +74,14 @@ defmodule CodexPoolerWeb.UserSessionController do
     case Accounts.complete_second_factor_login(
            user_id,
            user_params,
-           UserAuth.request_metadata(conn)
+           UserAuth.request_metadata(conn),
+           password_version: get_session(conn, :pending_mfa_password_version)
          ) do
       {:ok, %{user: user, token: token}} ->
         conn
         |> delete_session(:pending_mfa_user_id)
         |> delete_session(:pending_mfa_email)
+        |> delete_session(:pending_mfa_password_version)
         |> put_flash(:info, gettext("Welcome back."))
         |> UserAuth.log_in_user(user, token)
 
@@ -94,6 +98,7 @@ defmodule CodexPoolerWeb.UserSessionController do
         conn
         |> delete_session(:pending_mfa_user_id)
         |> delete_session(:pending_mfa_email)
+        |> delete_session(:pending_mfa_password_version)
         |> redirect_login_failure(%{}, gettext("Invalid email or password."), false)
     end
   end
