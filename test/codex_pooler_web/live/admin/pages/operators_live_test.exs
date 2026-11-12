@@ -623,6 +623,59 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator-row-#{operator.id}", "Role Edited Operator")
   end
 
+  describe "an operator editor opened before another owner changed the operator" do
+    test "a rename does not restore a revoked Pool assignment", %{conn: conn, scope: scope} do
+      pool = pool_fixture(%{slug: "stale-edit-revoked", name: "Stale Edit Revoked"})
+      %{user: operator} = operator_fixture(scope, %{"role" => "instance_admin", "pool_ids" => [pool.id], "password_change_required" => "false"})
+      {:ok, stale, _html} = live(conn, ~p"/admin/operators")
+      stale |> element("#edit-operator-#{operator.id}") |> render_click()
+      assert has_element?(stale, "#operator_edit_pool_id_#{pool.id}[checked]")
+
+      assert {:ok, _operator} = Accounts.update_operator(scope, operator, %{"pool_ids" => [], "password_change_required" => "true"})
+      assert Accounts.operator_lifecycle(operator).assigned_pool_ids == []
+      _ = :sys.get_state(stale.pid)
+      assert has_element?(stale, "#operator_edit_pool_id_#{pool.id}[checked]")
+
+      html = stale |> form("#operator-edit-form", operator_edit: %{display_name: "Renamed After Revoke"}) |> render_submit()
+
+      assert html =~ "Operator updated"
+      edited = Repo.get!(User, operator.id)
+      assert edited.display_name == "Renamed After Revoke"
+      assert edited.password_change_required
+      assert Accounts.operator_lifecycle(operator) == %{role: "instance_admin", assigned_pool_ids: []}
+      refute Repo.get_by(OperatorPoolAssignment, user_id: operator.id, pool_id: pool.id, status: "active")
+    end
+
+    test "a rename does not restore the owner role of a demoted operator", %{conn: conn, scope: scope} do
+      %{user: operator} = operator_fixture(scope, %{"role" => "instance_owner"})
+      {:ok, stale, _html} = live(conn, ~p"/admin/operators")
+      stale |> element("#edit-operator-#{operator.id}") |> render_click()
+
+      assert {:ok, _operator} = Accounts.update_operator(scope, operator, %{"role" => "instance_admin", "pool_ids" => []})
+      _ = :sys.get_state(stale.pid)
+
+      stale |> form("#operator-edit-form", operator_edit: %{display_name: "Renamed After Demotion"}) |> render_submit()
+
+      assert Repo.get!(User, operator.id).display_name == "Renamed After Demotion"
+      assert Accounts.operator_lifecycle(operator).role == "instance_admin"
+    end
+
+    test "control: a deliberate change in that editor is still written", %{conn: conn, scope: scope} do
+      kept = pool_fixture(%{slug: "stale-edit-kept", name: "Stale Edit Kept"})
+      added = pool_fixture(%{slug: "stale-edit-added", name: "Stale Edit Added"})
+      %{user: operator} = operator_fixture(scope, %{"role" => "instance_admin", "pool_ids" => [kept.id]})
+      {:ok, view, _html} = live(conn, ~p"/admin/operators")
+      view |> element("#edit-operator-#{operator.id}") |> render_click()
+
+      view |> form("#operator-edit-form", operator_edit: %{pool_ids: [kept.id, added.id]}) |> render_submit()
+      assert Enum.sort(Accounts.operator_lifecycle(operator).assigned_pool_ids) == Enum.sort([kept.id, added.id])
+
+      view |> element("#edit-operator-#{operator.id}") |> render_click()
+      view |> form("#operator-edit-form", operator_edit: %{role: "instance_owner"}) |> render_submit()
+      assert Accounts.operator_lifecycle(operator) == %{role: "instance_owner", assigned_pool_ids: []}
+    end
+  end
+
   test "edits operator email, display name, and password-change requirement", %{
     conn: conn,
     scope: scope

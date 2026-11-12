@@ -119,13 +119,44 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
     }
   end
 
-  @spec edit_attrs(map()) :: map()
-  def edit_attrs(params) do
+  @lifecycle_fields ~w(role pool_ids password_change_required)
+
+  @doc """
+  The role, Pool assignments and password requirement of an edit form built from stored state,
+  kept by the page as the snapshot its editor was opened on (see `edit_attrs/2`).
+  """
+  @spec lifecycle_base(Phoenix.HTML.Form.t()) :: map()
+  def lifecycle_base(%Phoenix.HTML.Form{params: params}) do
+    %{
+      "role" => params["role"],
+      "pool_ids" => params |> pool_ids_value() |> Enum.sort(),
+      "password_change_required" => checkbox_value(params["password_change_required"])
+    }
+  end
+
+  @doc """
+  The attributes of an operator edit. The editor posts the role, every Pool checkbox and the
+  password requirement with any save, so with the snapshot the editor was opened on, a value still
+  equal to it was not edited and is left out: the operator keeps what is stored now, including a
+  Pool assignment revoked or a role changed since the editor was opened.
+  """
+  @spec edit_attrs(map(), map() | nil) :: map()
+  def edit_attrs(params, base \\ nil) do
     params
     |> profile_attrs()
     |> Map.put("password_change_required", checkbox_value(params["password_change_required"]))
     |> Map.merge(lifecycle_attrs(params))
+    |> drop_unedited_lifecycle(base)
   end
+
+  defp drop_unedited_lifecycle(attrs, %{} = base) do
+    Map.reject(attrs, fn {field, value} -> field in @lifecycle_fields and Map.has_key?(base, field) and comparable(value) == Map.fetch!(base, field) end)
+  end
+
+  defp drop_unedited_lifecycle(attrs, _base), do: attrs
+
+  defp comparable(pool_ids) when is_list(pool_ids), do: Enum.sort(pool_ids)
+  defp comparable(value), do: value
 
   @spec create_attrs(map()) :: map()
   def create_attrs(params) do

@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
        create_form: OperatorForm.create_form(),
        editing_operator: nil,
        edit_form: nil,
+       edit_lifecycle_base: nil,
        pool_options: [],
        pool_options_stale?: false,
        resetting_operator: nil,
@@ -139,7 +140,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
          socket
          |> close_create_dialog()
          |> assign(:editing_operator, operator)
-         |> assign(:edit_form, OperatorForm.edit_form(operator))
+         |> assign_stored_edit_form(operator)
          |> clear_resetting()
          |> assign(:temporary_password_receipt, nil)}
 
@@ -158,7 +159,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
     case Accounts.update_operator(
            socket.assigns.current_scope,
            operator_id,
-           OperatorForm.edit_attrs(operator_params),
+           OperatorForm.edit_attrs(operator_params, editor_lifecycle_base(socket, operator_id)),
            operator_metadata()
          ) do
       {:ok, _operator} ->
@@ -463,9 +464,19 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   defp clear_editing(socket) do
     socket
-    |> assign(editing_operator: nil, edit_form: nil)
+    |> assign(editing_operator: nil, edit_form: nil, edit_lifecycle_base: nil)
     |> flush_stale_pool_options()
   end
+
+  # The form as stored, and with it the role, Pools and password requirement the editor works
+  # from. A form rebuilt from a rejected submission never replaces that snapshot.
+  defp assign_stored_edit_form(socket, operator) do
+    form = OperatorForm.edit_form(operator)
+    assign(socket, edit_form: form, edit_lifecycle_base: OperatorForm.lifecycle_base(form))
+  end
+
+  defp editor_lifecycle_base(%{assigns: %{editing_operator: %{id: operator_id}, edit_lifecycle_base: base}}, operator_id), do: base
+  defp editor_lifecycle_base(_socket, _operator_id), do: nil
 
   defp close_create_dialog(socket) do
     socket
