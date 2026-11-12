@@ -5655,6 +5655,125 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     reset_status_evidence!("task-8-revoked", %{revoked: true, inaccessible_cockpit_removed: true, late_completion_invalidated: true, paused: true}, nil)
   end
 
+  for outcome <- [:release, :fail] do
+    @tag capture_log: true
+    @tag outcome: outcome
+    test "a revoked Pool's request data leaves the cockpit at once when the replacement read ends in #{outcome}", %{scope: scope, outcome: outcome} do
+      %{view: view, kept: kept, operator: operator, revoked_request: revoked_request, kept_request: kept_request} = shared_cockpit_with_requests!(scope)
+      assert has_element?(view, "#request-health-chart-plot[data-chart-total='2']")
+      assert render(view) =~ revoked_request.id
+
+      handler = block_cockpit_metrics!(view)
+      assert {:ok, _operator} = CodexPooler.Accounts.update_operator(scope, operator, %{"pool_ids" => [kept.id]})
+      assert_receive {^handler, task}, @detection_timeout_ms
+      on_exit(fn -> send(task, {handler, :release}) end)
+
+      narrowed = render(view)
+      refute narrowed =~ revoked_request.id
+      refute has_element?(view, "#request-health-chart-plot")
+      assert has_element?(view, "#request-health-loading-state")
+      assert has_element?(view, "#upstream-event-summary-loading-state")
+
+      :telemetry.detach(handler)
+      send(task, {handler, outcome})
+      await_cockpit_metrics!(view)
+      settled = render(view)
+      refute settled =~ revoked_request.id
+
+      case outcome do
+        :release ->
+          assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
+          assert settled =~ kept_request.id
+
+        :fail ->
+          refute has_element?(view, "#request-health-chart-plot[data-chart-total='2']")
+          assert settled =~ "Could not refresh request metrics"
+      end
+    end
+  end
+
+  test "control: an access change that keeps every Pool of the account keeps the request snapshot while it reloads", %{scope: scope} do
+    %{view: view, kept: kept, revoked: revoked, operator: operator, revoked_request: revoked_request} = shared_cockpit_with_requests!(scope)
+    {:ok, other} = Pools.create_pool(scope, %{slug: "cockpit-scope-other-#{System.unique_integer([:positive])}", name: "Sample other Pool"})
+
+    handler = block_cockpit_metrics!(view)
+    assert {:ok, _operator} = CodexPooler.Accounts.update_operator(scope, operator, %{"pool_ids" => [kept.id, revoked.id, other.id]})
+    assert_receive {^handler, task}, @detection_timeout_ms
+    on_exit(fn -> send(task, {handler, :release}) end)
+
+    assert has_element?(view, "#request-health-chart-plot[data-chart-total='2']")
+    assert render(view) =~ revoked_request.id
+    :telemetry.detach(handler)
+    send(task, {handler, :release})
+    await_cockpit_metrics!(view)
+    assert has_element?(view, "#request-health-chart-plot[data-chart-total='2']")
+  end
+
+  defp shared_cockpit_with_requests!(scope) do
+    unique = System.unique_integer([:positive])
+    {:ok, kept} = Pools.create_pool(scope, %{slug: "cockpit-scope-kept-#{unique}", name: "Sample kept Pool"})
+    {:ok, revoked} = Pools.create_pool(scope, %{slug: "cockpit-scope-revoked-#{unique}", name: "Sample revoked Pool"})
+    %{identity: identity, assignment: kept_assignment} = upstream_assignment_fixture(kept)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    revoked_assignment =
+      Repo.insert!(%CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment{pool_id: revoked.id, upstream_identity_id: identity.id, assignment_label: "Second assignment", status: "active", health_status: "active", eligibility_status: "eligible", created_at: now, updated_at: now})
+
+    %{request: kept_request} = request_health_request_fixture(kept, kept_assignment, %{status: "failed", admitted_at: DateTime.add(now, -2, :minute)})
+    %{request: revoked_request} = request_health_request_fixture(revoked, revoked_assignment, %{status: "failed", admitted_at: DateTime.add(now, -1, :minute)})
+
+    %{user: operator} = operator_fixture(scope, %{"role" => "instance_admin", "password_change_required" => "false"})
+    operator_pool_assignment_fixture(operator, kept, created_by_user_id: scope.user.id)
+    operator_pool_assignment_fixture(operator, revoked, created_by_user_id: scope.user.id)
+    {:ok, %{token: token}} = CodexPooler.Accounts.login_user(%{"email" => operator.email, "password" => valid_user_password()})
+    {:ok, view, _html} = build_conn() |> log_in_user(operator, token) |> live(~p"/admin/upstreams/#{identity.id}")
+    await_cockpit_metrics!(view)
+
+    %{view: view, kept: kept, revoked: revoked, operator: operator, kept_request: kept_request, revoked_request: revoked_request}
+  end
+
+  # Holds every request-metrics read started by this view until the test answers it.
+  defp block_cockpit_metrics!(view) do
+    handler = {__MODULE__, :cockpit_scope_metrics, make_ref()}
+    test_pid = self()
+    view_pid = view.pid
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and String.contains?(to_string(metadata[:query]), "percentile_disc") and view_pid in Process.get(:"$callers", []) and is_nil(Process.get(handler)) do
+            Process.put(handler, true)
+            send(test_pid, {handler, self()})
+
+            receive do
+              {^handler, :release} -> :ok
+              # Dynamic Repo is process-local: only this task's next real query fails.
+              {^handler, :fail} -> Repo.put_dynamic_repo(:cockpit_unavailable_test_repo)
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    handler
+  end
+
+  defp await_cockpit_metrics!(view, attempts \\ 500) do
+    _ = render_async(view, 5_000)
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    cond do
+      not assigns.cockpit_metrics_running? and not assigns.cockpit_metrics_rerun? -> :ok
+      attempts == 0 -> flunk("cockpit request metrics did not settle")
+      true -> await_cockpit_metrics!(view, attempts - 1)
+    end
+  end
+
   test "manual refresh computes request metrics outside the LiveView process", %{
     conn: conn,
     scope: scope

@@ -131,7 +131,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
         socket =
           socket
-          |> assign_cockpit(preserve_request_metrics(socket, cockpit))
+          |> assign_visibility_cockpit(cockpit)
           |> request_cockpit_metrics()
 
         {:noreply, if(closed?, do: put_flash(socket, :info, gettext("Your Pool access changed")), else: socket)}
@@ -729,6 +729,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       :cockpit,
       UpstreamCockpitReadModel.merge_deferred_request_data(socket.assigns.cockpit, data)
     )
+  end
+
+  # The request totals and recent requests on screen were read over the Pools the viewer could see
+  # then. They stay as the last known snapshot only while every one of those Pool assignments is
+  # still visible; once one is gone they are dropped at once and the page shows its loading state
+  # until the read over the remaining Pools arrives, whether or not that read succeeds.
+  defp assign_visibility_cockpit(socket, cockpit) do
+    visible = MapSet.new(cockpit.assignments.items, & &1.id)
+
+    if Enum.all?(socket.assigns.cockpit.assignments.items, &MapSet.member?(visible, &1.id)) do
+      assign_cockpit(socket, preserve_request_metrics(socket, cockpit))
+    else
+      socket |> assign(cockpit_metrics_loaded?: false) |> assign_cockpit(cockpit)
+    end
   end
 
   defp preserve_request_metrics(socket, cockpit) do
