@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.8...codex-pooler-v0.14.9) (2026-11-12)
+
+
+### Dependencies
+
+* refresh dependencies and qualify Codex 0.167.2 ([91a9abf](https://github.com/icoretech/codex-pooler/commit/91a9abf61ec4fe646e1224cc628ae82fa637a779))
+* update helm release codex-pooler to v0.15.8 ([18293e1](https://github.com/icoretech/codex-pooler/commit/18293e1aea4f45d0471fb5798c0e88d01935dc20))
+
 ## [0.14.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.7...codex-pooler-v0.14.8) (2026-11-11)
 
 
