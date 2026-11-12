@@ -51,16 +51,21 @@ defmodule CodexPooler.Admin.PoolWorkflow do
   def create_pool_with_related_settings(_scope, _attrs),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec update_pool_with_related_settings(
-          Scope.t(),
-          Pool.t() | Ecto.UUID.t(),
-          map()
-        ) ::
-          pool_result()
-  def update_pool_with_related_settings(%Scope{} = scope, pool_or_id, attrs) when is_map(attrs) do
+  @doc """
+  Saves the whole Pool editor. `routing_base:` is the routing snapshot the editor was opened on
+  (`PoolForm.routing_base/1`): the editor posts every routing control, so a control still equal to
+  that snapshot was not edited and is left at its current stored value instead of being written
+  back over a newer change, such as a media permission switched off from the Pool list.
+  """
+  @spec update_pool_with_related_settings(Scope.t(), Pool.t() | Ecto.UUID.t(), map(), keyword()) :: pool_result()
+  def update_pool_with_related_settings(scope, pool_or_id, attrs, opts \\ [])
+
+  def update_pool_with_related_settings(%Scope{} = scope, pool_or_id, attrs, opts) when is_map(attrs) and is_list(opts) do
+    routing_attrs = edited_routing_attrs(attrs, Keyword.get(opts, :routing_base))
+
     Repo.transaction(fn ->
       previous_status = committed_pool_status(pool_or_id)
-      {update_pool_with_related_settings_transaction(scope, pool_or_id, attrs), previous_status}
+      {update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs), previous_status}
     end)
     |> normalize_transaction_result()
     |> invalidate_notifications_after_status_change()
@@ -68,18 +73,18 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     |> maybe_enqueue_assignment_catalog_sync(attrs)
   end
 
-  def update_pool_with_related_settings(_scope, _pool_or_id, _attrs),
+  def update_pool_with_related_settings(_scope, _pool_or_id, _attrs, _opts),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  defp update_pool_with_related_settings_transaction(scope, pool_or_id, attrs) do
+  defp update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs) do
     case validate_pool_edit_attrs(attrs) do
       :ok ->
         api_key_ids = selected_api_key_ids_from_attrs(attrs)
 
         if Map.get(attrs, "status") == "active" do
-          update_active_pool_with_related_settings(scope, pool_or_id, attrs, api_key_ids)
+          update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids)
         else
-          update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, api_key_ids)
+          update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids)
         end
 
       {:error, reason} ->
@@ -87,13 +92,13 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end
   end
 
-  defp update_active_pool_with_related_settings(scope, pool_or_id, attrs, api_key_ids) do
+  defp update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids) do
     {assignment_ids, select_by} = selected_pool_assignment_targets(attrs)
 
     with {:ok, pool} <-
            Pools.update_pool(scope, pool_or_id, pool_edit_attrs(attrs), broadcast?: false),
          {:ok, _settings} <-
-           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
+           PoolRouting.update_routing_settings(scope, pool, routing_attrs, broadcast?: false),
          :ok <-
            sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
@@ -106,13 +111,13 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end
   end
 
-  defp update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, api_key_ids) do
+  defp update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids) do
     {assignment_ids, select_by} = selected_pool_assignment_targets(attrs)
 
     with %Pool{} = pool <- admin_pool_for_assignment(pool_or_id),
          :ok <- Access.assign_api_keys_to_pool(scope, pool, api_key_ids),
          {:ok, _settings} <-
-           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
+           PoolRouting.update_routing_settings(scope, pool, routing_attrs, broadcast?: false),
          :ok <-
            sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
@@ -221,6 +226,14 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       "allow_audio_transcription" => Map.get(attrs, "allow_audio_transcription", true)
     }
   end
+
+  defp edited_routing_attrs(attrs, %{} = base) do
+    attrs
+    |> routing_attrs()
+    |> Map.reject(fn {field, value} -> Map.has_key?(base, field) and to_string(value) == to_string(Map.fetch!(base, field)) end)
+  end
+
+  defp edited_routing_attrs(attrs, _base), do: routing_attrs(attrs)
 
   defp selected_upstream_identity_ids(attrs), do: selected_ids(attrs, "upstream_identity_ids")
   defp selected_assignment_ids(attrs), do: selected_ids(attrs, "upstream_assignment_ids")

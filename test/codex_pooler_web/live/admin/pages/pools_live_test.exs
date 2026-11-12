@@ -985,6 +985,40 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = await_pool_traffic(view)
   end
 
+  test "a rename from an editor opened earlier keeps a media permission switched off since", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-editor-media", name: "Stale Editor Media"})
+    {:ok, editor, _html} = live(conn, ~p"/admin/pools")
+    {:ok, list, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(editor)
+    _ = await_pool_traffic(list)
+
+    editor |> element("#edit-pool-#{pool.id}") |> render_click()
+    assert has_element?(editor, "#pool-edit-form #pool_edit_allow_image_generation[checked]")
+
+    list |> element("#pool-row-#{pool.id}-compat-image-generation") |> render_click()
+    list |> element("#pool-row-#{pool.id}-compat-image-generation-toggle") |> render_click()
+    refute PoolRouting.get_routing_settings(pool.id).allow_image_generation
+    _ = :sys.get_state(editor.pid)
+    assert has_element?(editor, "#pool-edit-form #pool_edit_allow_image_generation[checked]")
+
+    html = editor |> form("#pool-edit-form", pool_edit: %{name: "Renamed Only"}) |> render_submit()
+
+    assert html =~ "Pool updated"
+    assert Pools.get_pool(pool.id).name == "Renamed Only"
+    settings = PoolRouting.get_routing_settings(pool.id)
+    refute settings.allow_image_generation
+    assert settings.allow_audio_transcription
+    refute has_element?(editor, "#pool-edit-form #pool_edit_allow_image_generation[checked]")
+
+    # Control: the reopened state is the new snapshot, so a deliberate change in the editor is written.
+    editor |> form("#pool-edit-form", pool_edit: %{allow_image_generation: "true", allow_audio_transcription: "false"}) |> render_submit()
+    settings = PoolRouting.get_routing_settings(pool.id)
+    assert settings.allow_image_generation
+    refute settings.allow_audio_transcription
+    _ = await_pool_traffic(editor)
+    _ = await_pool_traffic(list)
+  end
+
   test "ignores compat toggles outside the whitelist", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "compat-guard", name: "Compat Guard Pool"})
 

@@ -254,7 +254,7 @@ keeps a disabled Pool from accepting image payloads at the parser boundary.
 
 `Allow Audio Transcription` controls `POST /backend-api/transcribe` and `POST /v1/audio/transcriptions`. It is on by default for new and existing Pools. Turning it off returns `403 audio_transcription_disabled` after authentication and before the audio upload is parsed, work is reserved, or an upstream is called. It applies to both JSON and plain-text transcription output. The setting is independent of image generation and does not enable speech synthesis, audio translation, or Realtime audio.
 
-Change either media permission in the Pool wizard or editor under Compatibility, or use its icon beside the Pool name for a quick toggle. Saved changes apply to subsequent requests across the deployment.
+Change either media permission in the Pool wizard or editor under Compatibility, or use its icon beside the Pool name for a quick toggle. Saved changes apply to subsequent requests across the deployment. Saving the editor writes only the routing and compatibility controls changed in that editor; a control left as it was when the editor opened keeps its current saved value, including a permission changed from the Pool list in the meantime.
 
 ## Upstreams Step
 

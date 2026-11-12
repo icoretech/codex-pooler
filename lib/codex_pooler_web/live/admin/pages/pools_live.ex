@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        delete_form_version: 0,
        create_form: PoolForm.create_form(),
        edit_form: nil,
+       edit_routing_base: nil,
        model_serving_form: nil,
        model_serving_snapshot: nil,
        model_serving_models: [],
@@ -181,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
              |> close_create_dialog()
              |> assign(:editing_pool, pool)
              |> assign(:pool_editor_mode, :models)
-             |> assign(:edit_form, PoolForm.edit_form(pool))
+             |> assign_stored_edit_form(pool)
              |> assign(:pool_wizard_step, "models")
              |> clear_deleting()
              |> begin_model_serving_load(pool)
@@ -245,13 +246,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
            PoolWorkflow.update_pool_with_related_settings(
              socket.assigns.current_scope,
              pool_id,
-             pool_params
+             pool_params,
+             routing_base: editor_routing_base(socket, pool_id)
            ) do
       {:noreply,
        socket
        |> put_flash(:info, gettext("Pool updated"))
        |> clear_pool_traffic_refresh()
-       |> assign(editing_pool: pool, edit_form: PoolForm.edit_form(pool))
+       |> assign(:editing_pool, pool)
+       |> assign_stored_edit_form(pool)
        |> load_structural()
        |> start_pool_traffic_load()}
     else
@@ -1118,7 +1121,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       |> close_create_dialog()
       |> assign(:editing_pool, pool)
       |> assign(:pool_editor_mode, :edit)
-      |> assign(:edit_form, PoolForm.edit_form(pool))
+      |> assign_stored_edit_form(pool)
       |> assign(:pool_wizard_step, step)
       |> clear_deleting()
       |> maybe_begin_model_serving_load(pool)
@@ -1277,11 +1280,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     )
   end
 
+  # The form as stored, and with it the routing snapshot the editor works from. A draft form
+  # rebuilt from submitted values never replaces that snapshot.
+  defp assign_stored_edit_form(socket, pool) do
+    form = PoolForm.edit_form(pool)
+    assign(socket, edit_form: form, edit_routing_base: PoolForm.routing_base(form))
+  end
+
+  defp editor_routing_base(%{assigns: %{editing_pool: %{id: pool_id}, edit_routing_base: base}}, pool_id), do: base
+  defp editor_routing_base(_socket, _pool_id), do: nil
+
   defp clear_editing(socket) do
     assign(socket,
       editing_pool: nil,
       pool_editor_mode: nil,
       edit_form: nil,
+      edit_routing_base: nil,
       model_serving_form: nil,
       model_serving_snapshot: nil,
       model_serving_models: [],

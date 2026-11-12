@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
     %{
       editing_pool: nil,
       pool_edit_form: nil,
+      pool_edit_routing_base: nil,
       pool_editor_step: "details",
       pool_editor_upstream_options: [],
       pool_editor_api_key_options: [],
@@ -77,14 +78,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
       |> close()
       |> assign(
         editing_pool: pool,
-        pool_edit_form: PoolForm.edit_form(pool),
         pool_editor_step: step,
         pool_editor_upstream_options: PoolForm.edit_upstream_identity_options(pool, upstream_options),
         pool_editor_api_key_options: api_key_options,
         pool_editor_warnings: upstream_warnings ++ api_key_warnings
       )
+      |> assign_stored_edit_form(pool)
       |> maybe_begin_model_serving_load(pool)
     end
+  end
+
+  # The form as stored, and with it the routing snapshot the editor works from. A draft form
+  # rebuilt from submitted values never replaces that snapshot.
+  defp assign_stored_edit_form(socket, pool) do
+    form = PoolForm.edit_form(pool)
+    assign(socket, pool_edit_form: form, pool_edit_routing_base: PoolForm.routing_base(form))
   end
 
   @spec close(socket()) :: socket()
@@ -100,11 +108,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
            PoolWorkflow.update_pool_with_related_settings(
              socket.assigns.current_scope,
              pool_id,
-             pool_params
+             pool_params,
+             routing_base: socket.assigns.pool_edit_routing_base
            ) do
       socket
       |> put_flash(:info, gettext("Pool updated"))
-      |> assign(editing_pool: pool, pool_edit_form: PoolForm.edit_form(pool))
+      |> assign(:editing_pool, pool)
+      |> assign_stored_edit_form(pool)
       |> reload_fun.(pool)
     else
       nil ->
