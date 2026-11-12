@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
     %{
       editing_pool: nil,
       pool_edit_form: nil,
-      pool_edit_routing_base: nil,
+      pool_edit_base: nil,
       pool_editor_step: "details",
       pool_editor_upstream_options: [],
       pool_editor_api_key_options: [],
@@ -88,11 +88,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
     end
   end
 
-  # The form as stored, and with it the routing snapshot the editor works from. A draft form
+  # The form as stored, and with it the snapshot the editor works from. A draft form
   # rebuilt from submitted values never replaces that snapshot.
   defp assign_stored_edit_form(socket, pool) do
     form = PoolForm.edit_form(pool)
-    assign(socket, pool_edit_form: form, pool_edit_routing_base: PoolForm.routing_base(form))
+    assign(socket, pool_edit_form: form, pool_edit_base: PoolForm.edit_base(form))
   end
 
   @spec close(socket()) :: socket()
@@ -109,7 +109,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
              socket.assigns.current_scope,
              pool_id,
              pool_params,
-             routing_base: socket.assigns.pool_edit_routing_base
+             edit_base: socket.assigns.pool_edit_base
            ) do
       socket
       |> put_flash(:info, gettext("Pool updated"))

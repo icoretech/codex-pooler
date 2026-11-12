@@ -156,11 +156,12 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   @routing_fields ~w(routing_strategy bridge_ring_size v1_compatibility_enabled allow_image_generation allow_audio_transcription)
 
   @doc """
-  The routing values of an edit form built from stored state only, kept by the page as the
-  snapshot its editor was opened on (see `PoolWorkflow.update_pool_with_related_settings/4`).
+  The routing values and the upstream-account and API-key selections of an edit form built from
+  stored state only, kept by the page as the snapshot its editor was opened on (see
+  `PoolWorkflow.update_pool_with_related_settings/4`).
   """
-  @spec routing_base(Phoenix.HTML.Form.t()) :: %{String.t() => term()}
-  def routing_base(%Phoenix.HTML.Form{params: params}), do: Map.take(params, @routing_fields)
+  @spec edit_base(Phoenix.HTML.Form.t()) :: %{String.t() => term()}
+  def edit_base(%Phoenix.HTML.Form{params: params}), do: Map.take(params, @routing_fields ++ ~w(upstream_identity_ids api_key_ids))
 
   def edit_form(pool, attrs \\ %{}, errors \\ []) do
     attrs = Map.new(attrs)

@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -1017,6 +1018,66 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute settings.allow_audio_transcription
     _ = await_pool_traffic(editor)
     _ = await_pool_traffic(list)
+  end
+
+  test "a rename from an editor opened earlier keeps upstream accounts attached or removed since", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-editor-upstreams", name: "Stale Editor Upstreams"})
+    {:ok, other} = Pools.create_pool(scope, %{slug: "stale-editor-upstreams-other", name: "Stale Editor Upstreams Other"})
+    %{identity: removed_since, assignment: removed_assignment} = active_upstream_assignment_fixture(pool)
+    %{identity: kept} = active_upstream_assignment_fixture(pool)
+    %{identity: attached_since} = active_upstream_assignment_fixture(other)
+    %{identity: added_in_editor} = active_upstream_assignment_fixture(other)
+    {:ok, editor, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(editor)
+
+    editor |> element("#edit-pool-#{pool.id}") |> render_click()
+    assert has_element?(editor, "input[name='pool_edit[upstream_identity_ids][]'][value='#{removed_since.id}'][checked]")
+    refute has_element?(editor, "input[name='pool_edit[upstream_identity_ids][]'][value='#{attached_since.id}'][checked]")
+
+    assert {:ok, _removed} = PoolAssignments.delete_pool_assignment(pool.id, removed_assignment.id)
+    assert {:ok, attached} = PoolAssignments.create_pool_assignment(pool, attached_since)
+    assert {:ok, _active} = PoolAssignments.activate_pool_assignment(attached)
+    assert live_identity_ids(pool) == Enum.sort([kept.id, attached_since.id])
+
+    html = editor |> form("#pool-edit-form", pool_edit: %{name: "Renamed Upstreams Only"}) |> render_submit()
+    assert html =~ "Pool updated"
+    assert Pools.get_pool(pool.id).name == "Renamed Upstreams Only"
+    assert live_identity_ids(pool) == Enum.sort([kept.id, attached_since.id])
+
+    # Control: what is changed in the editor is written, on top of the current assignments.
+    editor |> form("#pool-edit-form", pool_edit: %{upstream_identity_ids: [attached_since.id, added_in_editor.id]}) |> render_submit()
+    assert live_identity_ids(pool) == Enum.sort([attached_since.id, added_in_editor.id])
+    _ = await_pool_traffic(editor)
+  end
+
+  test "a rename from an editor opened earlier does not take back an API key moved to another Pool since", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-editor-keys", name: "Stale Editor Keys"})
+    {:ok, other} = Pools.create_pool(scope, %{slug: "stale-editor-keys-other", name: "Stale Editor Keys Other"})
+    %{api_key: moved_since} = active_api_key_fixture(pool)
+    %{api_key: added_in_editor} = active_api_key_fixture(other)
+    {:ok, editor, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(editor)
+
+    editor |> element("#edit-pool-#{pool.id}") |> render_click()
+    assert has_element?(editor, "input[name='pool_edit[api_key_ids][]'][value='#{moved_since.id}'][checked]")
+
+    assert :ok = Access.assign_api_keys_to_pool(scope, other, [moved_since.id])
+    assert Access.api_key_ids_for_pool(pool) == []
+
+    html = editor |> form("#pool-edit-form", pool_edit: %{name: "Renamed Keys Only"}) |> render_submit()
+    assert html =~ "Pool updated"
+    assert Access.api_key_ids_for_pool(pool) == []
+    assert moved_since.id in Access.api_key_ids_for_pool(other)
+
+    # Control: a key ticked in the editor is still moved into the Pool.
+    editor |> form("#pool-edit-form", pool_edit: %{api_key_ids: [added_in_editor.id]}) |> render_submit()
+    assert Access.api_key_ids_for_pool(pool) == [added_in_editor.id]
+    assert moved_since.id in Access.api_key_ids_for_pool(other)
+    _ = await_pool_traffic(editor)
+  end
+
+  defp live_identity_ids(pool) do
+    pool |> PoolAssignments.list_pool_assignments() |> Enum.reject(&(&1.status == "deleted")) |> Enum.map(& &1.upstream_identity_id) |> Enum.sort()
   end
 
   test "ignores compat toggles outside the whitelist", %{conn: conn, scope: scope} do

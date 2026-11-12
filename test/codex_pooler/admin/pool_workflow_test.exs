@@ -30,13 +30,13 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
       scope = Scope.for_user(owner, ["instance_owner"])
       assert {:ok, pool} = PoolWorkflow.create_pool_with_related_settings(scope, %{"name" => "Snapshot Save", "routing_strategy" => "bridge_ring"})
-      base = PoolForm.routing_base(PoolForm.edit_form(pool))
+      base = PoolForm.edit_base(PoolForm.edit_form(pool))
       assert base["allow_image_generation"] and base["allow_audio_transcription"]
 
       assert {:ok, _settings} = Pools.update_routing_settings(scope, pool, %{"allow_image_generation" => false, "bridge_ring_size" => 5})
       posted = base |> Map.new(fn {field, value} -> {field, to_string(value)} end) |> Map.merge(%{"name" => "Snapshot Saved", "status" => "active", "allow_audio_transcription" => "false"})
 
-      assert {:ok, saved} = PoolWorkflow.update_pool_with_related_settings(scope, pool.id, posted, routing_base: base)
+      assert {:ok, saved} = PoolWorkflow.update_pool_with_related_settings(scope, pool.id, posted, edit_base: base)
       assert saved.name == "Snapshot Saved"
       settings = Pools.get_routing_settings(pool.id)
       refute settings.allow_image_generation

@@ -38,7 +38,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        delete_form_version: 0,
        create_form: PoolForm.create_form(),
        edit_form: nil,
-       edit_routing_base: nil,
+       edit_base: nil,
        model_serving_form: nil,
        model_serving_snapshot: nil,
        model_serving_models: [],
@@ -247,7 +247,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
              socket.assigns.current_scope,
              pool_id,
              pool_params,
-             routing_base: editor_routing_base(socket, pool_id)
+             edit_base: editor_base(socket, pool_id)
            ) do
       {:noreply,
        socket
@@ -1280,22 +1280,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     )
   end
 
-  # The form as stored, and with it the routing snapshot the editor works from. A draft form
+  # The form as stored, and with it the snapshot the editor works from. A draft form
   # rebuilt from submitted values never replaces that snapshot.
   defp assign_stored_edit_form(socket, pool) do
     form = PoolForm.edit_form(pool)
-    assign(socket, edit_form: form, edit_routing_base: PoolForm.routing_base(form))
+    assign(socket, edit_form: form, edit_base: PoolForm.edit_base(form))
   end
 
-  defp editor_routing_base(%{assigns: %{editing_pool: %{id: pool_id}, edit_routing_base: base}}, pool_id), do: base
-  defp editor_routing_base(_socket, _pool_id), do: nil
+  defp editor_base(%{assigns: %{editing_pool: %{id: pool_id}, edit_base: base}}, pool_id), do: base
+  defp editor_base(_socket, _pool_id), do: nil
 
   defp clear_editing(socket) do
     assign(socket,
       editing_pool: nil,
       pool_editor_mode: nil,
       edit_form: nil,
-      edit_routing_base: nil,
+      edit_base: nil,
       model_serving_form: nil,
       model_serving_snapshot: nil,
       model_serving_models: [],

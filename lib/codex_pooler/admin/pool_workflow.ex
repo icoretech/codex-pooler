@@ -52,20 +52,29 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
   @doc """
-  Saves the whole Pool editor. `routing_base:` is the routing snapshot the editor was opened on
-  (`PoolForm.routing_base/1`): the editor posts every routing control, so a control still equal to
-  that snapshot was not edited and is left at its current stored value instead of being written
-  back over a newer change, such as a media permission switched off from the Pool list.
+  Saves the whole Pool editor. `edit_base:` is the snapshot the editor was opened on
+  (`PoolForm.edit_base/1`). The editor posts every routing control and both selections with any
+  save, so only what differs from that snapshot is an edit:
+
+    * a routing control still equal to it keeps its current stored value, such as a media
+      permission switched off from the Pool list in the meantime;
+    * the upstream accounts ticked or unticked since the snapshot are added to or removed from the
+      accounts attached now, so an account attached or removed elsewhere stays as it is;
+    * only API keys ticked since the snapshot are moved into the Pool, so a key moved to another
+      Pool elsewhere is not taken back.
+
+  Without a snapshot the posted values are written as they are.
   """
   @spec update_pool_with_related_settings(Scope.t(), Pool.t() | Ecto.UUID.t(), map(), keyword()) :: pool_result()
   def update_pool_with_related_settings(scope, pool_or_id, attrs, opts \\ [])
 
   def update_pool_with_related_settings(%Scope{} = scope, pool_or_id, attrs, opts) when is_map(attrs) and is_list(opts) do
-    routing_attrs = edited_routing_attrs(attrs, Keyword.get(opts, :routing_base))
+    base = Keyword.get(opts, :edit_base)
+    routing_attrs = edited_routing_attrs(attrs, base)
 
     Repo.transaction(fn ->
       previous_status = committed_pool_status(pool_or_id)
-      {update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs), previous_status}
+      {update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs, base), previous_status}
     end)
     |> normalize_transaction_result()
     |> invalidate_notifications_after_status_change()
@@ -76,15 +85,16 @@ defmodule CodexPooler.Admin.PoolWorkflow do
   def update_pool_with_related_settings(_scope, _pool_or_id, _attrs, _opts),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  defp update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs) do
+  defp update_pool_with_related_settings_transaction(scope, pool_or_id, attrs, routing_attrs, base) do
     case validate_pool_edit_attrs(attrs) do
       :ok ->
-        api_key_ids = selected_api_key_ids_from_attrs(attrs)
+        api_key_ids = attrs |> selected_api_key_ids_from_attrs() |> newly_selected(base, "api_key_ids")
+        base_identity_ids = base_selection(base, "upstream_identity_ids")
 
         if Map.get(attrs, "status") == "active" do
-          update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids)
+          update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids, base_identity_ids)
         else
-          update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids)
+          update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids, base_identity_ids)
         end
 
       {:error, reason} ->
@@ -92,7 +102,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end
   end
 
-  defp update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids) do
+  defp update_active_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids, base_identity_ids) do
     {assignment_ids, select_by} = selected_pool_assignment_targets(attrs)
 
     with {:ok, pool} <-
@@ -102,7 +112,8 @@ defmodule CodexPooler.Admin.PoolWorkflow do
          :ok <-
            sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
-             skip_quota_priming: true
+             skip_quota_priming: true,
+             base_identity_ids: base_identity_ids
            ),
          :ok <- Access.assign_api_keys_to_pool(scope, pool, api_key_ids) do
       pool
@@ -111,7 +122,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end
   end
 
-  defp update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids) do
+  defp update_inactive_pool_with_related_settings(scope, pool_or_id, attrs, routing_attrs, api_key_ids, base_identity_ids) do
     {assignment_ids, select_by} = selected_pool_assignment_targets(attrs)
 
     with %Pool{} = pool <- admin_pool_for_assignment(pool_or_id),
@@ -121,7 +132,8 @@ defmodule CodexPooler.Admin.PoolWorkflow do
          :ok <-
            sync_pool_assignments_audited(scope, pool, assignment_ids,
              select_by: select_by,
-             skip_quota_priming: true
+             skip_quota_priming: true,
+             base_identity_ids: base_identity_ids
            ),
          {:ok, pool} <- Pools.update_pool(scope, pool, pool_edit_attrs(attrs), broadcast?: false) do
       pool
@@ -135,6 +147,8 @@ defmodule CodexPooler.Admin.PoolWorkflow do
   # changes the assignment, one event per account (findings#206 row 206-554).
   defp sync_pool_assignments_audited(scope, pool, selected_ids, opts) do
     live_before = live_pool_assignments(pool)
+    {base_identity_ids, opts} = Keyword.pop(opts, :base_identity_ids)
+    selected_ids = rebased_identity_selection(selected_ids, base_identity_ids, live_before, opts[:select_by])
 
     with :ok <- UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, selected_ids, opts) do
       live_after = live_pool_assignments(pool)
@@ -226,6 +240,31 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       "allow_audio_transcription" => Map.get(attrs, "allow_audio_transcription", true)
     }
   end
+
+  # The accounts attached now, minus the ones unticked since the editor's snapshot, plus the ones
+  # ticked since. An unchanged selection therefore asks for exactly what is attached.
+  defp rebased_identity_selection(selected_ids, base_ids, live_before, :upstream_identity_id) when is_list(base_ids) do
+    current_ids = Enum.map(live_before, fn {_id, assignment} -> assignment.upstream_identity_id end)
+    Enum.uniq((current_ids -- (base_ids -- selected_ids)) ++ (selected_ids -- base_ids))
+  end
+
+  defp rebased_identity_selection(selected_ids, _base_ids, _live_before, _select_by), do: selected_ids
+
+  defp newly_selected(selected_ids, base, field) do
+    case base_selection(base, field) do
+      base_ids when is_list(base_ids) -> selected_ids -- base_ids
+      nil -> selected_ids
+    end
+  end
+
+  defp base_selection(%{} = base, field) do
+    case Map.get(base, field) do
+      ids when is_list(ids) -> Enum.map(ids, &to_string/1)
+      _absent -> nil
+    end
+  end
+
+  defp base_selection(_base, _field), do: nil
 
   defp edited_routing_attrs(attrs, %{} = base) do
     attrs
