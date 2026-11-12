@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.15.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.9...codex-pooler-v0.15.0) (2026-11-12)
+
+
+### Bug Fixes
+
+* **accounts:** apply an edited operator Pool list as a delta on current assignments ([04ce547](https://github.com/icoretech/codex-pooler/commit/04ce5479a7c5ba565eb254f35e56b942b710c7aa))
+* **admin:** apply only the Pool editor's own account and API key changes on save ([823f07c](https://github.com/icoretech/codex-pooler/commit/823f07c7dc8d0c21a0e833e2c0baff19bdd893c1))
+* **admin:** drop a revoked Pool's request data from the upstream cockpit at once ([8d56628](https://github.com/icoretech/codex-pooler/commit/8d5662823614994f70c82353c96a5dab0b4407b1))
+* **admin:** keep a Lens filter load when an automatic refresh queues behind it ([1510f55](https://github.com/icoretech/codex-pooler/commit/1510f553ced4309675088b53e119c066001cbd5e))
+* **admin:** keep a newer role or Pool revocation when a stale operator editor saves ([a89e4c0](https://github.com/icoretech/codex-pooler/commit/a89e4c09d1cd8df503cf06e4763568bcb86270e1))
+* **admin:** keep newer routing permissions when a stale Pool editor saves ([cbdeea1](https://github.com/icoretech/codex-pooler/commit/cbdeea1d6011bfe5081d1f8d77fb18524ae5417a))
+* **alerts:** scope an evaluator clear to the evaluating rule's incident targets ([629ac30](https://github.com/icoretech/codex-pooler/commit/629ac305f20e67d9c52cf604133aebc12ba7102d))
+* **auth:** end a pending second-factor login when the operator password changes ([9c9c6e3](https://github.com/icoretech/codex-pooler/commit/9c9c6e3972b3f151d2eab2419c373648eaac67bc))
+* **gateway:** advertise renewed source deadlines to a peer owner before they lapse ([1e16c95](https://github.com/icoretech/codex-pooler/commit/1e16c95133d31efeab43f1eb393173108a579bc7))
+* **gateway:** keep tool and output schemas opaque to the media input guard ([d5d24fa](https://github.com/icoretech/codex-pooler/commit/d5d24fa51b85935794b1cb8a7a2737ac48c1f446))
+* **gateway:** leave structured tool results and schemas out of the prompt-cache downgrade ([7ee602a](https://github.com/icoretech/codex-pooler/commit/7ee602a6d3682778e1b49abbcf78f8c402691b5f))
+* **mcp:** mask email-valued upstream labels in request-log output ([df88a3a](https://github.com/icoretech/codex-pooler/commit/df88a3a2dfd904a8f42cc1e9d4e7a1cbcf7c7711))
+* **self-host:** fail generate-env on secret errors and never overwrite a concurrent target ([bbf9ff0](https://github.com/icoretech/codex-pooler/commit/bbf9ff0a0b09996677aa73921ef83ff0895ec67e))
+* **settings:** keep SMTP password bytes exactly and allow zero SMTP retries ([4d854fc](https://github.com/icoretech/codex-pooler/commit/4d854fc77c58a81628eb239111ee655916c5d92e))
+* **status:** reset accrued omissions when a named unreadable incident reappears ([beedfdc](https://github.com/icoretech/codex-pooler/commit/beedfdc3a294c319a1998f0bb65a954846edb9fe))
+* **upstreams:** re-authorize pause and reactivate under the identity lock ([9b737ad](https://github.com/icoretech/codex-pooler/commit/9b737add563aa74bffee1f4dd263aebc32c26335))
+
+
+### Miscellaneous Chores
+
+* **i18n:** refresh gettext source references ([25e0d58](https://github.com/icoretech/codex-pooler/commit/25e0d58f690fb70bb611be746b8a5a35e25d35c9))
+* release 0.15.0 ([512f706](https://github.com/icoretech/codex-pooler/commit/512f7062fd17f5a09eb582c0d0186a9289b3f887))
+
 ## [0.14.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.8...codex-pooler-v0.14.9) (2026-11-12)
 
 
