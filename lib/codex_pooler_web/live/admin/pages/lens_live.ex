@@ -108,11 +108,19 @@ defmodule CodexPoolerWeb.Admin.LensLive do
   end
 
   defp request_history(socket, reason) do
+    reason = pending_reason(socket, reason)
+
     socket
     |> cancel_reload()
     |> assign(history_generation: socket.assigns.history_generation + 1, history_load_reason: reason, history_loading?: true, history_error?: false, history_rerun?: true)
     |> maybe_start_history()
   end
+
+  # An automatic refresh that arrives while an operator-requested load has not been applied yet
+  # replaces that load, so it inherits its reason: pausing afterwards must not hold the load the
+  # operator asked for.
+  defp pending_reason(%{assigns: %{history_loading?: true, history_load_reason: pending}}, :event) when pending != :event, do: pending
+  defp pending_reason(_socket, reason), do: reason
 
   defp maybe_start_history(socket) do
     cond do

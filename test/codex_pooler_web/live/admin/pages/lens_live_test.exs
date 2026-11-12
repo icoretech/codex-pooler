@@ -317,6 +317,41 @@ defmodule CodexPoolerWeb.Admin.LensLiveTest do
     assert assigns.live_updates_paused?
   end
 
+  test "an automatic refresh queued behind a running filter load keeps the filter load through a pause", %{conn: conn, scope: scope} do
+    {pool, setup, assignment} = data_pool(scope, "lens-filter-then-event")
+    add_attempt(setup, assignment)
+    {:ok, view, _} = live_lens(conn, ~p"/admin/lens?pool_id=#{pool.id}")
+    initial = lens_assigns(view)
+    handler = block_loads(view)
+    view |> element("#lens-window-filter [data-value='1h']") |> render_click()
+    assert_receive {^handler, filter_task}, 5_000
+    on_exit(fn -> send(filter_task, {handler, :release}) end)
+
+    send(view.pid, {Events, %{pool_id: pool.id, topics: ["request_logs"]}})
+    queued = fire_reload(view)
+    assert queued.history_generation == initial.history_generation + 2
+    assert queued.history_running?
+
+    render_hook(view, "set_live_updates", %{"paused" => true})
+    :telemetry.detach(handler)
+    send(filter_task, {handler, :release})
+    assigns = await_lens(view)
+
+    assert assigns.live_updates_paused?
+    refute assigns.live_updates_page_held?
+    assert assigns.history.filters["window"] == "1h"
+    assert has_element?(view, "#lens-charts")
+    refute has_element?(view, "#lens-loading")
+
+    # Control: with the filter load applied, a later automatic refresh is held again.
+    send(view.pid, {Events, %{pool_id: pool.id, topics: ["request_logs"]}})
+    fire_reload(view)
+    held = lens_assigns(view)
+    assert held.history_generation == assigns.history_generation
+    assert held.live_updates_page_held?
+    assert held.history.filters["window"] == "1h"
+  end
+
   test "a newer filter replaces a blocked asynchronous load without publishing stale results", %{conn: conn, scope: scope} do
     {first, first_setup, first_assignment} = data_pool(scope, "lens-stale-first")
     {second, second_setup, second_assignment} = data_pool(scope, "lens-stale-second")
