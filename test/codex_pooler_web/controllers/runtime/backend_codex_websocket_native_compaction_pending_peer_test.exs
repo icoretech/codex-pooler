@@ -23,4 +23,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketNativeCompactionPendingPee
       assert :ok = NativeCompactionPendingScenario.run!(unquote(mode), :peer, unquote(form), peer_node: peer, outcome: :timeout)
     end
   end
+
+  @tag pending_source_progress: true, pending_cadence: :sparse, slow: "real collected source frames renew receive authority across the peer's 3.6 s forwarding budget"
+  test "full peer anchored: source progress between pending pulses preserves compact and same-socket continuation", %{peer_node: peer} do
+    assert :ok = NativeCompactionPendingScenario.run!("full", :peer, :anchored, peer_node: peer, outcome: :source_progress)
+  end
+
+  @tag pending_source_progress: true, pending_cadence: :fast, slow: "same real 4 s source stream controls for peer forwarding with frequent pending authority"
+  test "full peer anchored: fast pending pulses preserve the same progressing compact and continuation", %{peer_node: peer} do
+    assert :ok = NativeCompactionPendingScenario.run!("full", :peer, :anchored, peer_node: peer, outcome: :source_progress, pending_interval_ms: 100)
+  end
 end

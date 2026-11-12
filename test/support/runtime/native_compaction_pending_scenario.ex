@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
 
   import Ecto.Query
   import ExUnit.Assertions
-  import ExUnit.Callbacks, only: [on_exit: 1]
+  import ExUnit.Callbacks, only: [on_exit: 1, start_supervised!: 1]
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [model_serving_scope: 0, set_model_serving_mode!: 3]
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_shared_peer_window_owner!: 3]
@@ -27,8 +27,11 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     outcome = Keyword.get(opts, :outcome, :complete)
     peer = configure_environment!(outcome, topology, opts)
     hold = make_ref()
-    expectations = sequence(hold, form)
-    expectations = if outcome == :complete, do: expectations, else: Enum.take(expectations, 2)
+    pacer = if outcome == :source_progress, do: start_source_pacer!(hold)
+    pacer_monitor = if pacer, do: Process.monitor(pacer)
+    expectations = sequence(hold, form, pacer)
+    expectations = if outcome in [:complete, :source_progress], do: expectations, else: Enum.take(expectations, 2)
+    # provenance: synthetic_adversarial; the optional paced compact preserves the measured event order, not provider timing.
     upstream = start_upstream(FakeUpstream.strict_sequence(expectations))
     on_exit(fn -> release_on_exit(upstream, hold) end)
     setup = gateway_setup(upstream, compact?: true)
@@ -47,33 +50,43 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     {client, first_events} = client |> send!(first) |> terminal!()
     assert List.last(first_events)["type"] == "response.completed"
     await!(fn -> Enum.all?(requests(setup), &(&1.status == "succeeded")) end)
+    source_progress = if pacer, do: observe_source_progress!(client)
     compact = compact_payload(first, form)
     client = send!(client, compact)
-    assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^hold}, @budget
+
+    if pacer do
+      send(pacer, {:pace_source, upstream})
+      await_source_barrier!(pacer, 0)
+    else
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^hold}, @budget
+    end
+
     [request] = Enum.filter(requests(setup), &(&1.endpoint == @compact_path))
     [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    {client, control} = next_text!(client, @watchdog)
+    {client, control} = next_text!(client, if(pacer, do: @budget, else: @watchdog))
     assert control == %{"type" => pending_type()}
-    context = %{client: client, request: request, attempt: attempt, upstream: upstream, hold: hold, setup: setup, mode: mode, thread: thread, topology: topology, form: form}
+    context = %{client: client, request: request, attempt: attempt, upstream: upstream, hold: hold, setup: setup, mode: mode, thread: thread, topology: topology, form: form, pacer: pacer, pacer_monitor: pacer_monitor, source_progress: source_progress}
 
-    case outcome do
-      :complete -> complete!(context)
-      :timeout -> timeout!(context)
-      :client_close -> client_close!(context)
-      :frozen_source -> frozen_source!(context)
-      :drain -> drain!(context)
-      :ignore_pong -> no_pong!(context)
-    end
+    run_outcome!(outcome, context)
   end
+
+  defp run_outcome!(:complete, context), do: complete!(context)
+  defp run_outcome!(:source_progress, context), do: source_progress!(context)
+  defp run_outcome!(:timeout, context), do: timeout!(context)
+  defp run_outcome!(:client_close, context), do: client_close!(context)
+  defp run_outcome!(:frozen_source, context), do: frozen_source!(context)
+  defp run_outcome!(:drain, context), do: drain!(context)
+  defp run_outcome!(:ignore_pong, context), do: no_pong!(context)
 
   defp configure_environment!(outcome, topology, opts) do
     # The 4 s source receive deadline outlasts the remote 5 s budget's first
     # quarter-budget poll; 2 s receive / 10 s idle never exercised renewal.
     receive_timeout = if outcome == :timeout, do: 4_000, else: 10_000
     idle_timeout = if outcome in [:complete, :timeout, :ignore_pong], do: 2_000, else: 10_000
+    {receive_timeout, idle_timeout} = if outcome == :source_progress, do: {1_200, 2_600}, else: {receive_timeout, idle_timeout}
     DownstreamKeepaliveScenario.put_settings!([upstream_receive_timeout_ms: receive_timeout, websocket_idle_timeout_ms: idle_timeout], topology != :direct)
     previous = CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
-    interval = Keyword.get(opts, :pending_interval_ms, 100)
+    interval = Keyword.get(opts, :pending_interval_ms, if(outcome == :source_progress, do: 2_200, else: 100))
     Application.put_env(:codex_pooler, UpstreamWebsocketSession, Keyword.put(previous, :compaction_pending_interval_ms, interval))
     peer = Keyword.get(opts, :peer_node)
     if peer, do: configure_peer!(peer, interval)
@@ -81,10 +94,121 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     peer
   end
 
-  defp complete!(%{client: client, request: request, attempt: attempt, upstream: upstream, hold: hold, setup: setup, mode: mode, thread: thread}) do
+  defp complete!(%{client: client, upstream: upstream, hold: hold} = ctx) do
     began = System.monotonic_time(:millisecond)
     {client, count} = pending_until!(client, began + 2_100, 1)
     assert count > 1
+    assert_pending_collection!(ctx)
+
+    :ok = FakeUpstream.release_remaining_frames(upstream, hold)
+    {client, events} = terminal!(client)
+    assert_completed_collection!(ctx, client, events)
+  end
+
+  # Compressed ordering equivalent of legal 14 s receive / 60 s idle / 15 s
+  # pending, not a uniform clock scale: retain the real 1 s forwarding margin.
+  # With 1.2 s receive / 2.6 s idle / 2.2 s pending, text at 0/.8/1.6/2.4/3.2/
+  # 4.0 s renews the source. The 2.2 s pulse sees deadline 2.8 s; the next poll
+  # extends the original 3.6 s budget only to 3.8 s, before pulse 4.4/terminal 4.0.
+  # The 0.8 s gap keeps 0.4 s of slack under the receive timeout on a loaded host.
+  defp source_progress!(%{client: client, pacer: pacer, pacer_monitor: monitor, upstream: upstream, hold: hold} = ctx) do
+    assert_pending_collection!(ctx)
+    {client, events} = terminal!(client)
+    terminal = List.last(events)
+    last_source_at = assert_source_progress!(ctx, ~w(response.created response.in_progress response.output_item.added response.compaction.compacting response.output_item.done))
+    await!(fn -> Repo.reload!(ctx.request).status != "in_progress" end)
+
+    assert terminal["type"] == "response.completed",
+           "collected source text stayed inside its receive window, but the peer returned #{terminal["type"]} status=#{terminal["status"]} code=#{get_in(terminal, ["error", "code"])} request_code=#{Repo.reload!(ctx.request).last_error_code} attempt_code=#{Repo.reload!(ctx.attempt).network_error_code}"
+
+    assert_source_progress!(ctx, ["response.completed"], last_source_at)
+    await_source_barrier!(pacer, 6)
+    assert_receive {:DOWN, ^monitor, :process, ^pacer, :normal}, @budget
+    :ok = FakeUpstream.release_remaining_frames(upstream, hold)
+    assert_completed_collection!(ctx, client, events)
+  end
+
+  defp start_source_pacer!(hold) do
+    parent = self()
+
+    start_supervised!(
+      {Task,
+       fn ->
+         receive do
+           {:pace_source, upstream} -> pace_source!(upstream, hold, parent, 0)
+         after
+           @budget -> flunk("the source pacer was never given its fake upstream")
+         end
+       end}
+    )
+  end
+
+  defp pace_source!(upstream, hold, parent, ordinal) do
+    assert_receive {:fake_upstream_frame_barrier, ^ordinal, _handler, ^hold}, @budget
+    send(parent, {:source_progress_barrier, self(), ordinal})
+    # The real gap lets the source renew its 1.2 s receive deadline between
+    # fixed 2.2 s pulses; the frame barrier, not elapsed time, proves readiness.
+
+    if ordinal < 6 do
+      if ordinal > 0 do
+        receive do
+        after
+          800 -> :ok
+        end
+      end
+
+      :ok = FakeUpstream.release_frame(upstream, hold)
+      pace_source!(upstream, hold, parent, ordinal + 1)
+    end
+  end
+
+  defp await_source_barrier!(pacer, ordinal) do
+    assert_receive {:source_progress_barrier, ^pacer, ^ordinal}, @budget
+    :ok
+  end
+
+  defp observe_source_progress!(client) do
+    {_transport, handler} = :sys.get_state(client.socket)
+    owner = handler.connection.websock_state.websocket_owner_pid
+    parent = self()
+    ref = make_ref()
+
+    :sys.replace_state(owner, fn state ->
+      real = state.callbacks.upstream_sender
+      sender = fn upstream, request, writer -> real.(upstream, %{request | frame_observer: progress_observer(request, parent, ref)}, writer) end
+      put_in(state.callbacks.upstream_sender, sender)
+    end)
+
+    ref
+  end
+
+  defp progress_observer(request, parent, ref) do
+    fn text, decoded ->
+      forward_to_original_observer(request.frame_observer, text, decoded)
+      send(parent, {ref, request.request_id, request.attempt_id, decoded["type"], System.monotonic_time(:millisecond)})
+      :ok
+    end
+  end
+
+  defp forward_to_original_observer(original, text, decoded) when is_function(original, 2), do: original.(text, decoded)
+  defp forward_to_original_observer(original, text, _decoded) when is_function(original, 1), do: original.(text)
+  defp forward_to_original_observer(_original, _text, _decoded), do: :ok
+
+  defp assert_source_progress!(%{source_progress: ref, request: %{id: request_id}, attempt: %{id: attempt_id}}, types, previous_at \\ nil) do
+    received_at =
+      Enum.map(types, fn type ->
+        assert_receive {^ref, ^request_id, ^attempt_id, ^type, at}, @budget
+        at
+      end)
+
+    for [earlier, later] <- Enum.chunk_every(Enum.reject([previous_at | received_at], &is_nil/1), 2, 1, :discard) do
+      assert later - earlier < 1_200, "the synthetic source exceeded its real 1.2 s receive timeout"
+    end
+
+    List.last(received_at)
+  end
+
+  defp assert_pending_collection!(%{client: client, request: request, attempt: attempt, upstream: upstream}) do
     assert Repo.reload!(request).status == "in_progress"
     assert Repo.reload!(attempt).status == "in_progress"
     refute Map.has_key?(Repo.reload!(attempt).response_metadata || %{}, "downstream_delivery")
@@ -93,14 +217,19 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     {_transport, handler} = :sys.get_state(client.socket)
     state = handler.connection.websock_state
     assert Map.get(state, :native_turn_output_task_pids, MapSet.new()) == MapSet.new()
+    :ok
+  end
 
-    :ok = FakeUpstream.release_remaining_frames(upstream, hold)
-    {client, events} = terminal!(client)
+  defp assert_completed_collection!(%{request: request, attempt: attempt, upstream: upstream, setup: setup, mode: mode, thread: thread}, client, events) do
     output = Enum.filter(events, &(&1["type"] == "response.output_item.done"))
     assert length(output) == 1
     assert hd(output)["item"]["type"] == "compaction"
+    assert hd(output)["item"] == item()
+    visible_types = for event <- events, event["type"] != pending_type(), do: event["type"]
+    assert visible_types == ["response.output_item.done", "response.completed"]
     assert List.last(events)["type"] == "response.completed"
     await!(fn -> Repo.reload!(request).status == "succeeded" and is_map(Repo.reload!(attempt).response_metadata["downstream_delivery"]) end)
+    assert Repo.reload!(attempt).status == "succeeded"
     receipt = Repo.reload!(attempt).response_metadata["downstream_delivery"]
     assert receipt["outcome"] == "delivered"
     assert receipt["terminal_class"] == "response.completed"
@@ -268,17 +397,31 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
   end
 
   defp configure_peer!(peer, interval) do
-    previous = :erpc.call(peer, Application, :get_env, [:codex_pooler, UpstreamWebsocketSession, []])
-    on_exit(fn -> :erpc.call(peer, Application, :put_env, [:codex_pooler, UpstreamWebsocketSession, previous]) end)
+    original = :erpc.call(peer, Application, :fetch_env, [:codex_pooler, UpstreamWebsocketSession])
+
+    on_exit(fn ->
+      case original do
+        {:ok, value} -> :erpc.call(peer, Application, :put_env, [:codex_pooler, UpstreamWebsocketSession, value])
+        :error -> :erpc.call(peer, Application, :delete_env, [:codex_pooler, UpstreamWebsocketSession])
+      end
+    end)
+
+    previous =
+      case original do
+        {:ok, value} -> value
+        :error -> []
+      end
+
     :erpc.call(peer, Application, :put_env, [:codex_pooler, UpstreamWebsocketSession, Keyword.put(previous, :compaction_pending_interval_ms, interval)])
   end
 
-  defp sequence(hold, form) do
+  defp sequence(hold, form, pacer) do
     compact_json = if form == :anchored, do: [valid: true, equals: %{"previous_response_id" => @anchor}], else: [valid: true, forbidden: ["previous_response_id"]]
+    compact_events = if pacer, do: source_progress_events(), else: events(@compact, [item()])
 
     [
       FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames(events(@anchor, []))),
-      FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: compact_json, respond: FakeUpstream.barrier_websocket_frames(events(@compact, [item()]), notify: self(), release_ref: hold)),
+      FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: compact_json, respond: FakeUpstream.barrier_websocket_frames(compact_events, notify: pacer || self(), release_ref: hold)),
       FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames(events("resp_pending_resume000000001", [])))
     ]
   end
@@ -385,6 +528,22 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
 
   defp prompt, do: %{"type" => "message", "role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic pending scenario"}]}
   defp item, do: %{"type" => "compaction", "encrypted_content" => "synthetic-pending-compaction"}
+
+  # provenance: observed compaction_result_collector_test.exs's measured gpt-6-luna event order; identifiers, ciphertext, usage and cadence are synthetic.
+  defp source_progress_events do
+    response = %{"id" => @compact, "status" => "in_progress", "output" => []}
+    announced = %{item() | "encrypted_content" => "synthetic-pending-announcement"}
+
+    [
+      %{"type" => "response.created", "response" => response},
+      %{"type" => "response.in_progress", "response" => response},
+      %{"type" => "response.output_item.added", "output_index" => 0, "item" => announced},
+      %{"type" => "response.compaction.compacting", "output_index" => 0},
+      %{"type" => "response.output_item.done", "output_index" => 0, "item" => item()},
+      %{"type" => "response.completed", "response" => %{response | "status" => "completed", "output" => [item()]} |> Map.put("usage", %{"input_tokens" => 20, "output_tokens" => 10, "total_tokens" => 30})}
+    ]
+    |> Enum.map(&CodexPooler.JSON.encode!/1)
+  end
 
   defp events(id, output) do
     Enum.map(output, &CodexPooler.JSON.encode!(%{"type" => "response.output_item.done", "item" => &1})) ++

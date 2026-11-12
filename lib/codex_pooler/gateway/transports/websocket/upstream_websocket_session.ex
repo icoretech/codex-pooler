@@ -1931,34 +1931,70 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   # is no autonomous timer process and no provider-progress or writer call.
   # A paused/dead receive loop emits nothing; its original deadline still wins
   # when it resumes. Missed intervals are coalesced into one notification.
-  defp arm_compaction_pending(%ReceiveState{compaction_pending_observer: observer} = receive_state) when is_function(observer, 1),
-    do: %{receive_state | compaction_pending_token: make_ref(), compaction_pending_next_ms: System.monotonic_time(:millisecond) + compaction_pending_interval_ms()}
+  #
+  # The peer only learns the source deadline from a pulse, and provider text
+  # renews that deadline between pulses without telling it. The loop therefore
+  # wakes shortly before the deadline it last advertised: if provider text has
+  # renewed the deadline since, it advertises the new one in time, otherwise
+  # nothing is sent and the original deadline still wins.
+  defp arm_compaction_pending(%ReceiveState{compaction_pending_observer: observer} = receive_state) when is_function(observer, 1) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    %{receive_state | compaction_pending_token: make_ref(), compaction_pending_sent_ms: now_ms, compaction_pending_authority_ms: nil}
+    |> schedule_compaction_pending(now_ms)
+  end
 
   defp arm_compaction_pending(receive_state), do: receive_state
+
+  defp schedule_compaction_pending(%ReceiveState{} = receive_state, now_ms) do
+    receive_timeout_ms = receive_state.timeouts.receive_timeout_ms
+    interval_ms = compaction_pending_interval_ms()
+    margin_ms = min(1_000, div(receive_timeout_ms, 4))
+    floor_ms = min(interval_ms, max(div(receive_timeout_ms, 8), 50))
+    advertised_ms = receive_state.compaction_pending_authority_ms || receive_state.receive_deadline_ms
+    next_ms = min(receive_state.compaction_pending_sent_ms + interval_ms, max(advertised_ms - margin_ms, now_ms + floor_ms))
+    %{receive_state | compaction_pending_next_ms: next_ms}
+  end
 
   defp maybe_observe_compaction_pending(%ReceiveState{compaction_pending_next_ms: next_ms} = receive_state) when is_integer(next_ms) do
     now_ms = System.monotonic_time(:millisecond)
     remaining_ms = receive_state.receive_deadline_ms - now_ms
 
-    if now_ms >= next_ms and remaining_ms > 0 do
-      sequence = receive_state.compaction_pending_sequence + 1
+    cond do
+      now_ms < next_ms or remaining_ms <= 0 ->
+        receive_state
 
-      receive_state.compaction_pending_observer.(%{
-        request_id: receive_state.request_id,
-        attempt_id: receive_state.attempt_id,
-        upstream_pid: self(),
-        token: receive_state.compaction_pending_token,
-        sequence: sequence,
-        remaining_ms: remaining_ms
-      })
+      compaction_pending_due?(receive_state, now_ms) ->
+        sequence = receive_state.compaction_pending_sequence + 1
 
-      %{receive_state | compaction_pending_sequence: sequence, compaction_pending_next_ms: now_ms + compaction_pending_interval_ms()}
-    else
-      receive_state
+        receive_state.compaction_pending_observer.(%{
+          request_id: receive_state.request_id,
+          attempt_id: receive_state.attempt_id,
+          upstream_pid: self(),
+          token: receive_state.compaction_pending_token,
+          sequence: sequence,
+          remaining_ms: remaining_ms
+        })
+
+        schedule_compaction_pending(
+          %{receive_state | compaction_pending_sequence: sequence, compaction_pending_sent_ms: now_ms, compaction_pending_authority_ms: receive_state.receive_deadline_ms},
+          now_ms
+        )
+
+      true ->
+        schedule_compaction_pending(receive_state, now_ms)
     end
   end
 
   defp maybe_observe_compaction_pending(receive_state), do: receive_state
+
+  # A pulse is due on the fixed interval, or earlier when provider text has renewed the
+  # source deadline past the one the peer last heard and that deadline is about to lapse.
+  defp compaction_pending_due?(receive_state, now_ms) do
+    now_ms >= receive_state.compaction_pending_sent_ms + compaction_pending_interval_ms() or
+      is_nil(receive_state.compaction_pending_authority_ms) or
+      receive_state.receive_deadline_ms > receive_state.compaction_pending_authority_ms
+  end
 
   # The socket challenges the actual receive loop before using a notification.
   # A delayed pulse cannot keep a stalled owner alive. The token is unique per
