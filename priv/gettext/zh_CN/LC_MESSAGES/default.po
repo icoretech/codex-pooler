@@ -15,7 +15,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:832
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:846
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:257
 #, elixir-autogen, elixir-format
 msgid "%{action} is not available: %{reason}"
@@ -1078,11 +1078,11 @@ msgid "%{failed} of %{count} request failed in the last 24h (%{rate}); %{cancell
 msgid_plural "%{failed} of %{count} requests failed in the last 24h (%{rate}); %{cancelled} cancelled by the client not counted"
 msgstr[0] "最近 24h 的 %{count} 个请求中有 %{failed} 个失败（%{rate}）；%{cancelled} 个由客户端取消的请求未计入"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:210
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:215
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:38
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:425
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:608
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1586
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:619
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:445
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:11
 #: lib/codex_pooler_web/live/auth_live/force_password_change.ex:157
@@ -1110,7 +1110,7 @@ msgstr "%{field}的时区不可用；请在设置中更新时区"
 msgid "%{first}-%{last} of %{total}"
 msgstr "第 %{first}-%{last} 条，共 %{total} 条"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:376
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:379
 #, elixir-autogen, elixir-format
 msgid "%{flag} %{state} on %{pool}"
 msgstr "%{pool} 的%{flag}%{state}"
@@ -1230,7 +1230,7 @@ msgstr "%{models}（按保存值保留）"
 msgid "%{model} already has its own model override"
 msgstr "%{model} 已有独立的模型覆盖"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:399
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:409
 #, elixir-autogen, elixir-format
 msgid "%{model} is not available in the current routable catalog"
 msgstr "%{model} 不在当前可路由目录中"
@@ -1627,8 +1627,8 @@ msgid "/metrics exposure"
 msgstr "/metrics 暴露状态"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:785
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1249
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1620
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1252
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
 #, elixir-autogen, elixir-format
 msgid "/v1 compatibility"
 msgstr "/v1 兼容性"
@@ -1679,7 +1679,7 @@ msgstr "50+ 位活跃用户"
 msgid "7d requests"
 msgstr "7d 请求"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:719
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:722
 #, elixir-autogen, elixir-format
 msgid "A Pool groups upstream accounts behind shared API keys, routing, and serving modes."
 msgstr "Pool 将上游账号组织起来，共享 API 密钥、路由和服务模式。"
@@ -1734,7 +1734,7 @@ msgstr "API 密钥"
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:82
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:157
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:174
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:675
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:685
 #, elixir-autogen, elixir-format
 msgid "API key"
 msgstr "API 密钥"
@@ -1782,12 +1782,12 @@ msgstr "API 密钥已启用"
 msgid "API key not recorded"
 msgstr "未记录 API 密钥"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:651
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:661
 #, elixir-autogen, elixir-format
 msgid "API key options could not be loaded. Pool forms may be incomplete."
 msgstr "无法加载 API 密钥选项。Pool 表单可能不完整。"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:650
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:660
 #, elixir-autogen, elixir-format
 msgid "API key options unavailable"
 msgstr "API 密钥选项不可用"
@@ -1846,7 +1846,7 @@ msgstr "未找到 API 密钥"
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:32
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:23
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:346
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:765
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:768
 #, elixir-autogen, elixir-format
 msgid "API keys"
 msgstr "API 密钥"
@@ -2084,7 +2084,7 @@ msgstr "发送给 %{email} 的邀请操作"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:93
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:128
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:500
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #: lib/codex_pooler_web/live/admin/forms/upstream_filter_form.ex:91
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:23
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:502
@@ -2513,16 +2513,16 @@ msgstr "允许 /v1 兼容性"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:801
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:329
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1251
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1622
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1254
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
 #, elixir-autogen, elixir-format
 msgid "Allow Audio Transcription"
 msgstr "允许音频转录"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:793
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:324
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1250
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1621
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1253
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
 #, elixir-autogen, elixir-format
 msgid "Allow Image Generation"
 msgstr "允许图像生成"
@@ -2719,13 +2719,13 @@ msgstr "在打开的标签页中批准，然后将回调 URL 粘贴回这里。"
 msgid "Approve this invite with the OpenAI device page. Codex Pooler stores only the account connection metadata needed for the selected Pool."
 msgstr "请通过 OpenAI 设备页面批准此邀请。Codex Pooler 只存储所选 Pool 所需的账号连接元数据。"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:286
 #, elixir-autogen, elixir-format
 msgid "Archive the Pool before hard deletion"
 msgstr "永久删除前请先归档 Pool"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:288
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #, elixir-autogen, elixir-format
 msgid "Archived"
 msgstr "已归档"
@@ -2745,7 +2745,7 @@ msgstr "请先联系实例所有者分配一个有效 Pool，再创建告警规�
 msgid "Ask an instance owner to assign you to a Pool before managing Pool-scoped resources."
 msgstr "请先让实例所有者将您分配到 Pool，再管理 Pool 范围内的资源。"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:375
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:376
 #, elixir-autogen, elixir-format
 msgid "Ask an instance owner to create, update, deactivate, or reset local operator accounts."
 msgstr "请联系实例所有者创建、更新、停用或重置本地运营者账号。"
@@ -2776,7 +2776,7 @@ msgstr "重新关联前，请先将此账号分配到可见的 Pool。"
 msgid "Assigned Pools"
 msgstr "已分配的 Pool"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:598
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:609
 #, elixir-autogen, elixir-format
 msgid "Assigned Pools were not valid."
 msgstr "已分配的 Pool 无效。"
@@ -2837,8 +2837,8 @@ msgstr "分配已暂停"
 msgid "Assignments match an attention state"
 msgstr "分配匹配需关注状态"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:595
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:596
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:606
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:607
 #, elixir-autogen, elixir-format
 msgid "At least one active instance owner must remain."
 msgstr "必须保留至少一名有效的实例所有者。"
@@ -2968,8 +2968,8 @@ msgstr "身份验证器应用已注册"
 msgid "Authenticator code"
 msgstr "身份验证器代码"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:61
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:85
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:63
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:89
 #, elixir-autogen, elixir-format
 msgid "Authenticator code is invalid."
 msgstr "身份验证器代码无效。"
@@ -3004,7 +3004,7 @@ msgstr "自动"
 msgid "Auto - upstream chooses"
 msgstr "Auto - 由上游选择"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:579
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:589
 #, elixir-autogen, elixir-format
 msgid "Auto for %{model}"
 msgstr "%{model} 使用自动"
@@ -4328,7 +4328,7 @@ msgstr "创建 MCP 密钥"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:134
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:354
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:264
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:726
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:729
 #, elixir-autogen, elixir-format
 msgid "Create Pool"
 msgstr "创建 Pool"
@@ -4378,7 +4378,7 @@ msgstr "创建渠道"
 
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:101
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:435
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:358
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:359
 #, elixir-autogen, elixir-format
 msgid "Create operator"
 msgstr "创建运营者"
@@ -4644,7 +4644,7 @@ msgstr "删除 %{name}？"
 msgid "Delete account…"
 msgstr "删除账号…"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:275
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:285
 #, elixir-autogen, elixir-format
 msgid "Delete archived Pool"
 msgstr "删除已归档的 Pool"
@@ -4818,7 +4818,7 @@ msgid "Different from sent: %{rate} of %{count} attempt with both the sent and f
 msgid_plural "Different from sent: %{rate} of %{count} attempts with both the sent and first reported model names, including historical rows."
 msgstr[0] "与发送模型不同：同时包含发送模型名称和首次报告模型名称的 %{count} 次尝试中的 %{rate}，包含历史记录。"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:182
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:190
 #, elixir-autogen, elixir-format
 msgid "Different from sent: Pooler sent model A, but the provider first reported model B."
 msgstr "与发送模型不同：Pooler 发送了模型 A，但服务商最先报告的模型为 B。"
@@ -4856,7 +4856,7 @@ msgstr "出站访问受限时，请禁用轮询。现有事件历史记录会保
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:43
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:589
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:756
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #: lib/codex_pooler_web/live/admin/forms/upstream_filter_form.ex:97
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:503
 #, elixir-autogen, elixir-format
@@ -4904,7 +4904,7 @@ msgstr "忽略当前状态事件"
 msgid "Dismiss notification"
 msgstr "忽略通知"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:221
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:226
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:117
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:61
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/account.ex:47
@@ -5024,7 +5024,7 @@ msgid "Edit API key"
 msgstr "编辑 API 密钥"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:51
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:271
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:281
 #, elixir-autogen, elixir-format
 msgid "Edit Pool"
 msgstr "编辑 Pool"
@@ -5075,8 +5075,8 @@ msgstr "有效策略"
 msgid "Effective serving mode"
 msgstr "实际服务模式"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:429
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:450
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:439
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:460
 #, elixir-autogen, elixir-format
 msgid "Effective: %{mode}"
 msgstr "实际生效：%{mode}"
@@ -5091,7 +5091,7 @@ msgstr "上游尝试耗时 %{duration} ms"
 msgid "Eligible"
 msgstr "符合条件"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:220
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:225
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:239
 #: lib/codex_pooler_web/live/admin/components/pages/invites/page_components.ex:128
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/account.ex:40
@@ -5296,7 +5296,7 @@ msgstr "在服务商的验证页面输入此代码，以完成账号关联。"
 msgid "Enter valid email address"
 msgstr "请输入有效的电子邮箱地址"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:57
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:59
 #, elixir-autogen, elixir-format
 msgid "Enter your authenticator code to finish signing in."
 msgstr "请输入身份验证器代码以完成登录。"
@@ -5700,7 +5700,7 @@ msgstr "最终报告："
 msgid "Final response event"
 msgstr "最终响应事件"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:173
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Find responses where the provider reports a different model than the one sent, or changes the model name during the response."
 msgstr "查找服务商报告的模型与发送模型不同，或在响应期间模型名称发生变化的响应。"
@@ -5834,7 +5834,7 @@ msgstr "发件人"
 msgid "From address"
 msgstr "发件地址"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:581
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:591
 #, elixir-autogen, elixir-format
 msgid "Full for %{model}"
 msgstr "%{model} 使用 Full"
@@ -6364,13 +6364,13 @@ msgstr "下游 SSE 心跳事件的间隔；设为 0 可禁用心跳。"
 msgid "Invalid"
 msgstr "无效"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:216
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:221
 #, elixir-autogen, elixir-format
 msgid "Invalid bootstrap details."
 msgstr "引导信息无效。"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:67
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:97
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:69
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:102
 #, elixir-autogen, elixir-format
 msgid "Invalid email or password."
 msgstr "电子邮件或密码无效。"
@@ -6768,22 +6768,22 @@ msgstr "需要长度"
 
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:74
 #: lib/codex_pooler_web/live/admin/pages/lens_live.ex:25
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:173
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Lens"
 msgstr "Lens"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Lens could not be loaded"
 msgstr "无法加载 Lens"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:196
 #, elixir-autogen, elixir-format
 msgid "Lens could not update"
 msgstr "无法更新 Lens"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:175
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:183
 #, elixir-autogen, elixir-format
 msgid "Lens guide"
 msgstr "Lens 指南"
@@ -6841,7 +6841,7 @@ msgstr "关联账号"
 msgid "Linked keys"
 msgstr "关联密钥"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:580
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:590
 #, elixir-autogen, elixir-format
 msgid "Lite for %{model}"
 msgstr "%{model} 使用 Lite"
@@ -6924,7 +6924,7 @@ msgstr "实时更新：正在同步"
 msgid "Load older requests"
 msgstr "加载更早的请求"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Loading Lens"
 msgstr "正在加载 Lens"
@@ -6934,7 +6934,7 @@ msgstr "正在加载 Lens"
 msgid "Loading current usage"
 msgstr "正在加载当前用量"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Loading model declarations and charts for the selected filters."
 msgstr "正在加载所选筛选条件下的模型声明和图表。"
@@ -7020,7 +7020,7 @@ msgstr "退出登录"
 msgid "Log out other sessions"
 msgstr "退出其他会话"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:103
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:108
 #, elixir-autogen, elixir-format
 msgid "Logged out successfully."
 msgstr "已成功退出登录。"
@@ -7577,7 +7577,7 @@ msgstr "模型范围"
 msgid "Model secondary window"
 msgstr "模型次配额窗口"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:578
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:588
 #, elixir-autogen, elixir-format
 msgid "Model serving mode for %{model}"
 msgstr "%{model} 的模型服务模式"
@@ -7594,8 +7594,8 @@ msgstr "模型服务模式"
 msgid "Model serving modes loaded."
 msgstr "模型服务模式已加载。"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:316
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:179
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:319
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:189
 #, elixir-autogen, elixir-format
 msgid "Model serving modes updated"
 msgstr "模型服务模式已更新"
@@ -7673,7 +7673,7 @@ msgstr "名称变化"
 msgid "Name changed in response"
 msgstr "响应期间名称发生变化"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:183
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:191
 #, elixir-autogen, elixir-format
 msgid "Name changed in response: the provider reported model A, then model B during the same attempt. This can happen even if the first name matched what Pooler sent."
 msgstr "响应期间名称发生变化：在同一次尝试中，服务商先报告模型 A，随后报告模型 B。即使最初的名称与 Pooler 发送的一致，也可能出现这种情况。"
@@ -7807,7 +7807,7 @@ msgid "No active Pool assignments"
 msgstr "无已启用的 Pool 分配"
 
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:524
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:851
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:865
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1253
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1265
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:158
@@ -8440,7 +8440,7 @@ msgid "OAuth flow was superseded"
 msgstr "OAuth 流程已被替代"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:214
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:836
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:850
 #, elixir-autogen, elixir-format
 msgid "OAuth relink"
 msgstr "OAuth 重新关联"
@@ -8544,7 +8544,7 @@ msgstr "无法加载更早的请求。请重试。"
 msgid "Onboarding could not continue. Try again or ask for a fresh invite."
 msgstr "无法继续设置。请重试或索取新的邀请。"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:184
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
 #, elixir-autogen, elixir-format
 msgid "One request may have several attempts after a retry. These signals count attempts, and one attempt can have both. The goal is to spot a different model, regardless of its quality. The evidence is the model name reported by the provider."
 msgstr "重试后，一个请求可能包含多次尝试。这些信号按尝试次数统计，同一次尝试可能同时出现两种信号。目的是发现不同的模型，与其质量无关。证据来自服务商报告的模型名称。"
@@ -8584,8 +8584,8 @@ msgstr "只有实例所有者可以查看全局后台任务状态。"
 msgid "Only instance owners can inspect or change global system settings."
 msgstr "只有实例所有者可以查看或修改全局系统设置。"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:373
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:603
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:374
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:614
 #, elixir-autogen, elixir-format
 msgid "Only instance owners can manage operators."
 msgstr "只有实例所有者可以管理运营者。"
@@ -8817,13 +8817,13 @@ msgstr "运营者账号已重新启用"
 msgid "Operator account updated"
 msgstr "运营者账号已更新"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:616
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:627
 #, elixir-autogen, elixir-format
 msgid "Operator action failed"
 msgstr "运营者操作失败"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:51
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:58
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:52
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:59
 #, elixir-autogen, elixir-format
 msgid "Operator created"
 msgstr "运营者已创建"
@@ -8833,7 +8833,7 @@ msgstr "运营者已创建"
 msgid "Operator credential"
 msgstr "运营者凭据"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:278
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:279
 #, elixir-autogen, elixir-format
 msgid "Operator deactivated"
 msgstr "运营者已停用"
@@ -8854,7 +8854,7 @@ msgstr "无法发送运营者邮件。请立即复制临时密码。"
 msgid "Operator notes"
 msgstr "运营者备注"
 
-#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:166
+#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:206
 #, elixir-autogen, elixir-format
 msgid "Operator password reset"
 msgstr "运营者密码已重置"
@@ -8865,7 +8865,7 @@ msgstr "运营者密码已重置"
 msgid "Operator profile"
 msgstr "运营者资料"
 
-#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:165
+#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:205
 #, elixir-autogen, elixir-format
 msgid "Operator reactivated"
 msgstr "运营者已重新启用"
@@ -8890,19 +8890,19 @@ msgstr "运营者已登录"
 msgid "Operator signed out"
 msgstr "运营者已退出登录"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:167
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:168
 #, elixir-autogen, elixir-format
 msgid "Operator updated"
 msgstr "运营者已更新"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:147
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:452
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:599
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:148
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:453
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:610
 #, elixir-autogen, elixir-format
 msgid "Operator was not found"
 msgstr "找不到运营者"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:611
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:622
 #, elixir-autogen, elixir-format
 msgid "Operator was not saved"
 msgstr "未保存运营者"
@@ -8914,7 +8914,7 @@ msgstr "仅供运营者使用的备注；请勿填写机密"
 
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:46
 #: lib/codex_pooler_web/live/admin/pages/operators_live.ex:20
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:350
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "Operators"
 msgstr "运营者"
@@ -9062,7 +9062,7 @@ msgstr "页面指标"
 msgid "Partial"
 msgstr "部分完成"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:222
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:227
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:168
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:454
@@ -9300,10 +9300,10 @@ msgstr "未报告套餐和配额"
 
 #: lib/codex_pooler_web/live/admin/components/shared/badge_components.ex:175
 #: lib/codex_pooler_web/live/admin/components/shared/badge_components.ex:187
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:297
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:691
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:698
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:307
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:701
 #: lib/codex_pooler_web/live/admin/forms/pool_form.ex:708
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:718
 #, elixir-autogen, elixir-format
 msgid "Plan unknown"
 msgstr "未知套餐"
@@ -9348,7 +9348,7 @@ msgstr "轮询已禁用"
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:560
 #: lib/codex_pooler_web/live/admin/forms/job_filter_form.ex:364
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:300
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:283
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:126
 #, elixir-autogen, elixir-format
@@ -9361,10 +9361,10 @@ msgstr "Pool"
 msgid "Pool / upstream"
 msgstr "Pool / 上游"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1589
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1613
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:373
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:378
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1627
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:383
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:388
 #, elixir-autogen, elixir-format
 msgid "Pool action failed"
 msgstr "Pool 操作失败"
@@ -9376,13 +9376,13 @@ msgid "Pool authorization is required for this OAuth flow"
 msgstr "此 OAuth 流程需要 Pool 授权"
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:279
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:133
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:134
 #, elixir-autogen, elixir-format
 msgid "Pool created"
 msgstr "Pool 已创建"
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:287
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:419
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:422
 #, elixir-autogen, elixir-format
 msgid "Pool deleted"
 msgstr "Pool 已删除"
@@ -9392,7 +9392,7 @@ msgstr "Pool 已删除"
 msgid "Pool deletion requested"
 msgstr "已请求删除 Pool"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:420
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:423
 #, elixir-autogen, elixir-format
 msgid "Pool deletion started. The Pool disappears once its request history has been removed."
 msgstr "Pool 删除已开始。请求历史记录移除后，Pool 将消失。"
@@ -9462,7 +9462,7 @@ msgstr "Pool 邀请已重新生成，但邮件发送失败"
 msgid "Pool invite revoked"
 msgstr "Pool 邀请已撤销"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1631
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1645
 #, elixir-autogen, elixir-format
 msgid "Pool is already active"
 msgstr "Pool 已处于活跃状态"
@@ -9477,8 +9477,8 @@ msgstr "此运营者无法使用该 Pool"
 msgid "Pool is required"
 msgstr "Pool 为必填项"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1630
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:49
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1644
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:50
 #, elixir-autogen, elixir-format
 msgid "Pool management is not available for this session"
 msgstr "当前会话无法管理 Pool"
@@ -9499,7 +9499,7 @@ msgstr "Pool 名称"
 msgid "Pool not available"
 msgstr "Pool 不可用"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:451
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:454
 #, elixir-autogen, elixir-format
 msgid "Pool reactivated"
 msgstr "Pool 已重新启用"
@@ -9525,8 +9525,8 @@ msgid "Pool timeout (ms)"
 msgstr "Pool 超时（ms）"
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:280
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:252
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:106
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:254
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:115
 #, elixir-autogen, elixir-format
 msgid "Pool updated"
 msgstr "Pool 已更新"
@@ -9551,16 +9551,16 @@ msgstr "Pool 上游分配"
 msgid "Pool visibility"
 msgstr "Pool 可见性"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:174
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:322
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:390
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:457
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1629
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:50
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:55
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:111
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:114
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:184
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:175
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:325
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:393
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:460
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1643
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:51
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:56
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:121
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:124
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:194
 #, elixir-autogen, elixir-format
 msgid "Pool was not found"
 msgstr "未找到 Pool"
@@ -9582,7 +9582,7 @@ msgstr "池中的上游连接若空闲时间超过此值，会在下次使用时
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:337
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:340
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:31
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:718
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:721
 #, elixir-autogen, elixir-format
 msgid "Pools"
 msgstr "Pool"
@@ -10036,7 +10036,7 @@ msgstr "重新启用"
 msgid "Reactivate operator"
 msgstr "重新启用运营者"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:272
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:282
 #, elixir-autogen, elixir-format
 msgid "Reactivate the Pool before editing"
 msgstr "编辑前请重新启用 Pool"
@@ -10219,8 +10219,8 @@ msgstr "记录："
 msgid "Recovery code"
 msgstr "恢复码"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:64
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:88
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:66
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:92
 #, elixir-autogen, elixir-format
 msgid "Recovery code is invalid."
 msgstr "恢复码无效。"
@@ -10445,7 +10445,7 @@ msgstr "重命名上游账号"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:712
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:222
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:835
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:849
 #, elixir-autogen, elixir-format
 msgid "Replace auth.json"
 msgstr "替换 auth.json"
@@ -10651,7 +10651,7 @@ msgstr "正在请求..."
 msgid "Requests"
 msgstr "请求"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:772
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:775
 #, elixir-autogen, elixir-format
 msgid "Requests %{window}"
 msgstr "请求 %{window}"
@@ -10785,7 +10785,7 @@ msgstr "于 %{time} 停止跟踪"
 msgid "Retries"
 msgstr "重试次数"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:203
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:211
 #, elixir-autogen, elixir-format
 msgid "Retry"
 msgstr "重试"
@@ -10795,7 +10795,7 @@ msgstr "重试"
 msgid "Retry WebSocket"
 msgstr "重试 WebSocket"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Retry to load model declarations for the selected filters."
 msgstr "请重试以加载所选筛选条件下的模型声明。"
@@ -10883,7 +10883,7 @@ msgstr "环大小限制候选列表。服务商额度和已保存的重置恢复
 msgid "Role"
 msgstr "角色"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:597
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:608
 #, elixir-autogen, elixir-format
 msgid "Role must be instance owner or instance admin."
 msgstr "角色必须为实例所有者或实例管理员。"
@@ -10948,7 +10948,7 @@ msgstr "此上游账号的路由就绪状态不可用。"
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:249
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:97
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:239
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1619
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
 #, elixir-autogen, elixir-format
 msgid "Routing strategy"
 msgstr "路由策略"
@@ -11530,7 +11530,7 @@ msgstr "第二重验证方式"
 msgid "Second factor required"
 msgstr "需要第二重验证"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:91
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:95
 #, elixir-autogen, elixir-format
 msgid "Second factor required."
 msgstr "需要第二重验证。"
@@ -12356,7 +12356,7 @@ msgstr "尚未设置 TOTP"
 msgid "TOTP setup failed"
 msgstr "TOTP 设置失败"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:784
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:787
 #, elixir-autogen, elixir-format
 msgid "TPS %{window}"
 msgstr "TPS %{window}"
@@ -12436,7 +12436,7 @@ msgstr "文本帧数"
 msgid "The API key is invalid or unavailable."
 msgstr "API 密钥无效或不可用。"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:351
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:352
 #, elixir-autogen, elixir-format
 msgid "The accounts that can sign in to this admin area, with their roles and assigned Pools."
 msgstr "可登录此管理区域的账号，以及各自的角色和已分配的 Pool。"
@@ -12531,7 +12531,7 @@ msgstr "此链接仅保留在最初打开它的浏览器标签页中 — 无法�
 msgid "The pooler polls the provider until the code is confirmed."
 msgstr "Pooler 将轮询服务商，直到代码得到确认。"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:196
 #, elixir-autogen, elixir-format
 msgid "The previous snapshot is still displayed. Retry to load the current data."
 msgstr "仍显示上一次快照。请重试以加载当前数据。"
@@ -12921,7 +12921,7 @@ msgstr "总费用 %{cost}"
 msgid "Total cost unavailable"
 msgstr "总费用不可用"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:750
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:753
 #, elixir-autogen, elixir-format
 msgid "Total pools"
 msgstr "Pool 总数"
@@ -13206,7 +13206,7 @@ msgstr "随时间变化的流量的底层区间值"
 msgid "Unknown"
 msgstr "未知"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:677
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:687
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:529
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1258
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:201
@@ -13462,8 +13462,8 @@ msgstr "上游"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:582
 #: lib/codex_pooler_web/live/admin/components/shared/upstream_naming.ex:31
 #: lib/codex_pooler_web/live/admin/components/shared/upstream_naming.ex:34
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:657
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1624
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:667
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:302
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:531
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:582
@@ -13519,7 +13519,7 @@ msgstr "上游账号已通过浏览器 OAuth 关联"
 msgid "Upstream account linked via device code"
 msgstr "上游账号已通过设备码关联"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:232
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:242
 #, elixir-autogen, elixir-format
 msgid "Upstream account options could not be loaded. Pool forms may be incomplete."
 msgstr "无法加载上游账号选项。Pool 表单可能不完整。"
@@ -13603,12 +13603,12 @@ msgstr "未找到上游账号"
 msgid "Upstream account · %{label}"
 msgstr "上游账号 · %{label}"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:757
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:760
 #, elixir-autogen, elixir-format
 msgid "Upstream accounts"
 msgstr "上游账号"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:231
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:241
 #, elixir-autogen, elixir-format
 msgid "Upstream accounts unavailable"
 msgstr "上游账号不可用"
@@ -13790,8 +13790,8 @@ msgstr "为每个受信任的客户端使用独立且带标签的密钥。用量
 msgid "Use account settings for your own account"
 msgstr "请在账号设置中管理自己的账号"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:458
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:600
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:459
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:611
 #, elixir-autogen, elixir-format
 msgid "Use account settings to change your own password."
 msgstr "请在账号设置中更改您自己的密码。"
@@ -14048,13 +14048,13 @@ msgstr "仅每周"
 msgid "Weekly-only quota evidence"
 msgstr "仅有每周配额证据"
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:48
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:81
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:49
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:85
 #, elixir-autogen, elixir-format
 msgid "Welcome back."
 msgstr "欢迎回来。"
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:180
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
 #, elixir-autogen, elixir-format
 msgid "What do these model differences mean?"
 msgstr "这些模型差异意味着什么？"
@@ -14074,7 +14074,7 @@ msgstr "关闭后，现有的 MCP Token 将被拒绝。"
 msgid "Who did what on this instance, from sign-ins to settings changes."
 msgstr "查看此实例中谁执行了什么操作，从登录到设置更改。"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:413
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:423
 #, elixir-autogen, elixir-format
 msgid "Will be removed on save"
 msgstr "将在保存时移除"
@@ -14209,7 +14209,7 @@ msgstr "账号"
 msgid "account label"
 msgstr "账号标签"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:831
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:845
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
@@ -14221,7 +14221,7 @@ msgstr "操作不可用"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:147
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:38
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:695
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:725
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:735
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:406
 #, elixir-autogen, elixir-format
 msgid "active"
@@ -14263,14 +14263,14 @@ msgid "applied"
 msgstr "已应用"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:149
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:727
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:737
 #, elixir-autogen, elixir-format
 msgid "archived"
 msgstr "已归档"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:65
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:625
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1653
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:144
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
 #, elixir-autogen, elixir-format
@@ -14433,7 +14433,7 @@ msgstr "已配置"
 msgid "confirmation label"
 msgstr "确认标签"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1597
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1611
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
 #, elixir-autogen, elixir-format
 msgid "confirmation slug did not match pool slug"
@@ -14499,7 +14499,7 @@ msgstr "已降级"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:168
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:42
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:735
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:745
 #, elixir-autogen, elixir-format
 msgid "deleted"
 msgstr "已删除"
@@ -14535,8 +14535,8 @@ msgstr "设备设置"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:148
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:928
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:41
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:726
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:372
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:736
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:375
 #, elixir-autogen, elixir-format
 msgid "disabled"
 msgstr "已禁用"
@@ -14547,7 +14547,7 @@ msgstr "已禁用"
 msgid "discarded"
 msgstr "已丢弃"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:619
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:630
 #, elixir-autogen, elixir-format
 msgid "display_name"
 msgstr "显示名称"
@@ -14568,7 +14568,7 @@ msgstr "已到期"
 msgid "eligible"
 msgstr "符合条件"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:618
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:629
 #, elixir-autogen, elixir-format
 msgid "email"
 msgstr "邮箱"
@@ -14579,7 +14579,7 @@ msgid "email or id"
 msgstr "邮箱或 ID"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:928
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:372
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:375
 #, elixir-autogen, elixir-format
 msgid "enabled"
 msgstr "已启用"
@@ -14623,7 +14623,7 @@ msgstr "错误"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:169
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:44
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:736
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:746
 #, elixir-autogen, elixir-format
 msgid "errored"
 msgstr "出错"
@@ -14906,13 +14906,13 @@ msgstr "模型标识符不能为空"
 msgid "model identifier cannot contain whitespace or control characters"
 msgstr "模型标识符不能包含空白或控制字符"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1599
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1613
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
 #, elixir-autogen, elixir-format
 msgid "model identifier is invalid"
 msgstr "模型标识符无效"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1602
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1616
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
 #, elixir-autogen, elixir-format
 msgid "model identifier is not available for this Pool"
@@ -14923,7 +14923,7 @@ msgstr "此 Pool 无法使用该模型标识符"
 msgid "model identifier must be text"
 msgstr "模型标识符必须为文本"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1601
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1615
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
 #, elixir-autogen, elixir-format
 msgid "model identifier was submitted more than once"
@@ -14940,42 +14940,42 @@ msgid "model name changed · attempt %{attempts}"
 msgid_plural "model name changed · attempts %{attempts}"
 msgstr[0] "模型名称已变化 · 尝试 %{attempts}"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1604
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1618
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
 #, elixir-autogen, elixir-format
 msgid "model serving mode audit could not be recorded"
 msgstr "无法记录模型服务模式审计"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1605
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1619
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
 #, elixir-autogen, elixir-format
 msgid "model serving mode event could not be emitted"
 msgstr "无法发出模型服务模式事件"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1614
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
 #, elixir-autogen, elixir-format
 msgid "model serving mode is invalid"
 msgstr "模型服务模式无效"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1617
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
 #, elixir-autogen, elixir-format
 msgid "model serving modes changed since they were loaded"
 msgstr "模型服务模式自加载后已变化"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1606
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1620
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
 #, elixir-autogen, elixir-format
 msgid "model serving modes could not be saved because of a database conflict"
 msgstr "数据库冲突导致模型服务模式无法保存"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1641
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1655
 #, elixir-autogen, elixir-format
 msgid "model serving rows and revision are required"
 msgstr "需要模型服务行和版本"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1642
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1656
 #, elixir-autogen, elixir-format
 msgid "model serving rows are invalid"
 msgstr "模型服务行无效"
@@ -15000,12 +15000,12 @@ msgstr "model_policies[%{index}].binding_scope 必须为 model"
 msgid "model_policies[%{index}].model_identifier is required"
 msgstr "model_policies[%{index}].model_identifier 为必填项"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1615
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1629
 #, elixir-autogen, elixir-format
 msgid "name"
 msgstr "名称"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1647
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
 #, elixir-autogen, elixir-format
 msgid "name can't be blank"
@@ -15140,7 +15140,7 @@ msgstr "开 · 接近上限"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:60
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:621
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1648
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:140
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
 #, elixir-autogen, elixir-format
@@ -15149,7 +15149,7 @@ msgstr "只有节点管理员可执行此操作"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:64
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:624
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1652
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:143
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
 #, elixir-autogen, elixir-format
@@ -15179,7 +15179,7 @@ msgstr "p50 延迟"
 msgid "partial"
 msgstr "部分完成"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:620
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:631
 #, elixir-autogen, elixir-format
 msgid "password"
 msgstr "密码"
@@ -15189,7 +15189,7 @@ msgstr "密码"
 msgid "password update required"
 msgstr "需要更新密码"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:621
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:632
 #, elixir-autogen, elixir-format
 msgid "password_change_required"
 msgstr "必须更改密码"
@@ -15197,7 +15197,7 @@ msgstr "必须更改密码"
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:164
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:40
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:696
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:728
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:738
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:407
 #, elixir-autogen, elixir-format
 msgid "paused"
@@ -15205,13 +15205,13 @@ msgstr "已暂停"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:161
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:39
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:730
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:740
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:709
 #, elixir-autogen, elixir-format
 msgid "pending"
 msgstr "待处理"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:31
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
 #, elixir-autogen, elixir-format
@@ -15223,7 +15223,7 @@ msgstr "未找到 Pool 分配"
 msgid "pool filter is not available"
 msgstr "Pool 筛选条件不可用"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1595
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
 #, elixir-autogen, elixir-format
 msgid "pool must be archived before deletion"
@@ -15231,14 +15231,14 @@ msgstr "删除前必须先归档 Pool"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:43
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:616
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1594
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:138
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
 #, elixir-autogen, elixir-format
 msgid "pool was not found"
 msgstr "未找到 Pool"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:623
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:634
 #, elixir-autogen, elixir-format
 msgid "pool_ids"
 msgstr "已分配的 Pool"
@@ -15315,7 +15315,7 @@ msgstr "配额阈值百分比"
 msgid "reauth required"
 msgstr "需要重新认证"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:734
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:744
 #, elixir-autogen, elixir-format
 msgid "reauth_required"
 msgstr "需要重新认证"
@@ -15352,19 +15352,19 @@ msgstr "待刷新"
 msgid "refresh failed"
 msgstr "刷新失败"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:731
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:741
 #, elixir-autogen, elixir-format
 msgid "refresh_due"
 msgstr "待刷新"
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:733
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:743
 #, elixir-autogen, elixir-format
 msgid "refresh_failed"
 msgstr "刷新失败"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:163
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:50
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:732
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:742
 #, elixir-autogen, elixir-format
 msgid "refreshing"
 msgstr "刷新中"
@@ -15454,7 +15454,7 @@ msgstr "可重试"
 
 #: lib/codex_pooler_web/live/admin/components/pages/invites/page_components.ex:330
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:697
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:729
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:739
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:408
 #, elixir-autogen, elixir-format
 msgid "revoked"
@@ -15470,7 +15470,7 @@ msgstr "无法更改已撤销的 API 密钥"
 msgid "revoked api keys cannot be rotated"
 msgstr "无法轮换已撤销的 API 密钥"
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:622
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:633
 #, elixir-autogen, elixir-format
 msgid "role"
 msgstr "角色"
@@ -15502,7 +15502,7 @@ msgstr "已调度"
 msgid "seen %{date}"
 msgstr "观测于 %{date}"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1643
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1657
 #, elixir-autogen, elixir-format
 msgid "selected API keys are not available"
 msgstr "所选 API 密钥不可用"
@@ -15512,7 +15512,7 @@ msgstr "所选 API 密钥不可用"
 msgid "selected account"
 msgstr "选中的账号"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1607
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1621
 #, elixir-autogen, elixir-format
 msgid "selected assignments are not available for this Pool"
 msgstr "所选分配在此 Pool 中不可用"
@@ -15557,7 +15557,7 @@ msgstr "服务模型 %{model}"
 msgid "skipped"
 msgstr "已跳过"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1616
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1630
 #, elixir-autogen, elixir-format
 msgid "slug"
 msgstr "标识"
@@ -15575,12 +15575,12 @@ msgid "statistics could not be loaded"
 msgstr "无法加载统计数据"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:119
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1617
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1631
 #, elixir-autogen, elixir-format
 msgid "status"
 msgstr "状态"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1598
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1612
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
 #, elixir-autogen, elixir-format
 msgid "status must be active, disabled, or archived"
@@ -15611,7 +15611,7 @@ msgstr "系统"
 msgid "terminal %{class}"
 msgstr "终止类别 %{class}"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1596
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1610
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
 #, elixir-autogen, elixir-format
 msgid "the Pool is being deleted"
@@ -15619,7 +15619,7 @@ msgstr "Pool 正在删除"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:61
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:622
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1649
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:141
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
 #, elixir-autogen, elixir-format
@@ -15628,7 +15628,7 @@ msgstr "当前角色无法在请求的作用域执行此操作"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:66
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:626
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1654
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:145
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
 #, elixir-autogen, elixir-format
@@ -15643,7 +15643,7 @@ msgstr "已登录的运营者"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:63
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:623
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1651
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:142
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
 #, elixir-autogen, elixir-format
@@ -15743,7 +15743,7 @@ msgstr "未分类的失败"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:53
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:126
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex:415
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:737
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:747
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:710
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:294
 #, elixir-autogen, elixir-format
@@ -15786,12 +15786,12 @@ msgstr "未定价"
 msgid "unreported onboarding"
 msgstr "未报告接入方式"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1644
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1658
 #, elixir-autogen, elixir-format
 msgid "unsupported pool assignment selection mode"
 msgstr "不支持的 Pool 分配选择模式"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1632
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1646
 #, elixir-autogen, elixir-format
 msgid "unsupported pool option"
 msgstr "不支持的 Pool 选项"
@@ -15816,7 +15816,7 @@ msgstr "上游访问 Token 已存在"
 msgid "upstream account"
 msgstr "上游账号"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1610
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1624
 #, elixir-autogen, elixir-format
 msgid "upstream account is being deleted"
 msgstr "上游账号正在删除"
@@ -15843,7 +15843,7 @@ msgstr "上游删除正在等待数据库操作完成"
 msgid "upstream identity is not in a locally reactivatable state"
 msgstr "上游身份并非可在本地重新激活的状态"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1622
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
 #, elixir-autogen, elixir-format
 msgid "upstream identity was not found"
@@ -15871,7 +15871,7 @@ msgstr "用户或 ID"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:62
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:619
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1650
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:139
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
 #, elixir-autogen, elixir-format
@@ -16190,7 +16190,7 @@ msgstr "正在处理。"
 msgid "Binding scope"
 msgstr "绑定范围"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1618
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1632
 #, elixir-autogen, elixir-format
 msgid "Bridge ring size"
 msgstr "环大小"
@@ -16582,7 +16582,7 @@ msgstr "初始化受阻"
 msgid "Priming pending"
 msgstr "初始化待处理"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1626
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
 #, elixir-autogen, elixir-format
 msgid "Priority"
 msgstr "优先级"
@@ -17120,7 +17120,7 @@ msgstr "每周配额探测"
 msgid "Weekly-only probe"
 msgstr "仅每周配额探测"
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1625
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
 #, elixir-autogen, elixir-format
 msgid "Weight"
 msgstr "权重"

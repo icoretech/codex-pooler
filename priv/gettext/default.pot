@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:832
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:846
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:257
 #, elixir-autogen, elixir-format
 msgid "%{action} is not available: %{reason}"
@@ -1139,11 +1139,11 @@ msgid_plural "%{failed} of %{count} requests failed in the last 24h (%{rate}); %
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:210
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:215
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:38
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:425
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:608
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1586
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:619
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:445
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:11
 #: lib/codex_pooler_web/live/auth_live/force_password_change.ex:157
@@ -1171,7 +1171,7 @@ msgstr ""
 msgid "%{first}-%{last} of %{total}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:376
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:379
 #, elixir-autogen, elixir-format
 msgid "%{flag} %{state} on %{pool}"
 msgstr ""
@@ -1294,7 +1294,7 @@ msgstr ""
 msgid "%{model} already has its own model override"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:399
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:409
 #, elixir-autogen, elixir-format
 msgid "%{model} is not available in the current routable catalog"
 msgstr ""
@@ -1717,8 +1717,8 @@ msgid "/metrics exposure"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:785
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1249
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1620
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1252
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
 #, elixir-autogen, elixir-format
 msgid "/v1 compatibility"
 msgstr ""
@@ -1769,7 +1769,7 @@ msgstr ""
 msgid "7d requests"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:719
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:722
 #, elixir-autogen, elixir-format
 msgid "A Pool groups upstream accounts behind shared API keys, routing, and serving modes."
 msgstr ""
@@ -1824,7 +1824,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:82
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:157
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:174
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:675
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:685
 #, elixir-autogen, elixir-format
 msgid "API key"
 msgstr ""
@@ -1872,12 +1872,12 @@ msgstr ""
 msgid "API key not recorded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:651
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:661
 #, elixir-autogen, elixir-format
 msgid "API key options could not be loaded. Pool forms may be incomplete."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:650
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:660
 #, elixir-autogen, elixir-format
 msgid "API key options unavailable"
 msgstr ""
@@ -1936,7 +1936,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:32
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:23
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:346
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:765
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:768
 #, elixir-autogen, elixir-format
 msgid "API keys"
 msgstr ""
@@ -2174,7 +2174,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:93
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:128
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:500
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #: lib/codex_pooler_web/live/admin/forms/upstream_filter_form.ex:91
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:23
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:502
@@ -2604,16 +2604,16 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:801
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:329
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1251
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1622
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1254
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
 #, elixir-autogen, elixir-format
 msgid "Allow Audio Transcription"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:793
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:324
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1250
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1621
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1253
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
 #, elixir-autogen, elixir-format
 msgid "Allow Image Generation"
 msgstr ""
@@ -2811,13 +2811,13 @@ msgstr ""
 msgid "Approve this invite with the OpenAI device page. Codex Pooler stores only the account connection metadata needed for the selected Pool."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:286
 #, elixir-autogen, elixir-format
 msgid "Archive the Pool before hard deletion"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:288
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #, elixir-autogen, elixir-format
 msgid "Archived"
 msgstr ""
@@ -2837,7 +2837,7 @@ msgstr ""
 msgid "Ask an instance owner to assign you to a Pool before managing Pool-scoped resources."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:375
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:376
 #, elixir-autogen, elixir-format
 msgid "Ask an instance owner to create, update, deactivate, or reset local operator accounts."
 msgstr ""
@@ -2868,7 +2868,7 @@ msgstr ""
 msgid "Assigned Pools"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:598
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:609
 #, elixir-autogen, elixir-format
 msgid "Assigned Pools were not valid."
 msgstr ""
@@ -2929,8 +2929,8 @@ msgstr ""
 msgid "Assignments match an attention state"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:595
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:596
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:606
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:607
 #, elixir-autogen, elixir-format
 msgid "At least one active instance owner must remain."
 msgstr ""
@@ -3062,8 +3062,8 @@ msgstr ""
 msgid "Authenticator code"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:61
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:85
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:63
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:89
 #, elixir-autogen, elixir-format
 msgid "Authenticator code is invalid."
 msgstr ""
@@ -3098,7 +3098,7 @@ msgstr ""
 msgid "Auto - upstream chooses"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:579
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:589
 #, elixir-autogen, elixir-format
 msgid "Auto for %{model}"
 msgstr ""
@@ -4422,7 +4422,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:134
 #: lib/codex_pooler_web/live/admin/pages/api_keys_live.ex:354
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:264
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:726
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:729
 #, elixir-autogen, elixir-format
 msgid "Create Pool"
 msgstr ""
@@ -4472,7 +4472,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:101
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:435
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:358
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:359
 #, elixir-autogen, elixir-format
 msgid "Create operator"
 msgstr ""
@@ -4738,7 +4738,7 @@ msgstr ""
 msgid "Delete account…"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:275
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:285
 #, elixir-autogen, elixir-format
 msgid "Delete archived Pool"
 msgstr ""
@@ -4914,7 +4914,7 @@ msgid_plural "Different from sent: %{rate} of %{count} attempts with both the se
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:182
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:190
 #, elixir-autogen, elixir-format
 msgid "Different from sent: Pooler sent model A, but the provider first reported model B."
 msgstr ""
@@ -4952,7 +4952,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:43
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:589
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:756
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:266
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:276
 #: lib/codex_pooler_web/live/admin/forms/upstream_filter_form.ex:97
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:503
 #, elixir-autogen, elixir-format
@@ -5000,7 +5000,7 @@ msgstr ""
 msgid "Dismiss notification"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:221
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:226
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:117
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:61
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/account.ex:47
@@ -5120,7 +5120,7 @@ msgid "Edit API key"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:51
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:271
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:281
 #, elixir-autogen, elixir-format
 msgid "Edit Pool"
 msgstr ""
@@ -5171,8 +5171,8 @@ msgstr ""
 msgid "Effective serving mode"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:429
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:450
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:439
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:460
 #, elixir-autogen, elixir-format
 msgid "Effective: %{mode}"
 msgstr ""
@@ -5187,7 +5187,7 @@ msgstr ""
 msgid "Eligible"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:220
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:225
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:239
 #: lib/codex_pooler_web/live/admin/components/pages/invites/page_components.ex:128
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/account.ex:40
@@ -5392,7 +5392,7 @@ msgstr ""
 msgid "Enter valid email address"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:57
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:59
 #, elixir-autogen, elixir-format
 msgid "Enter your authenticator code to finish signing in."
 msgstr ""
@@ -5800,7 +5800,7 @@ msgstr ""
 msgid "Final response event"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:173
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Find responses where the provider reports a different model than the one sent, or changes the model name during the response."
 msgstr ""
@@ -5934,7 +5934,7 @@ msgstr ""
 msgid "From address"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:581
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:591
 #, elixir-autogen, elixir-format
 msgid "Full for %{model}"
 msgstr ""
@@ -6464,13 +6464,13 @@ msgstr ""
 msgid "Invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:216
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:221
 #, elixir-autogen, elixir-format
 msgid "Invalid bootstrap details."
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:67
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:97
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:69
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:102
 #, elixir-autogen, elixir-format
 msgid "Invalid email or password."
 msgstr ""
@@ -6870,22 +6870,22 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:74
 #: lib/codex_pooler_web/live/admin/pages/lens_live.ex:25
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:173
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Lens"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Lens could not be loaded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:196
 #, elixir-autogen, elixir-format
 msgid "Lens could not update"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:175
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:183
 #, elixir-autogen, elixir-format
 msgid "Lens guide"
 msgstr ""
@@ -6943,7 +6943,7 @@ msgstr ""
 msgid "Linked keys"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:580
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:590
 #, elixir-autogen, elixir-format
 msgid "Lite for %{model}"
 msgstr ""
@@ -7026,7 +7026,7 @@ msgstr ""
 msgid "Load older requests"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Loading Lens"
 msgstr ""
@@ -7036,7 +7036,7 @@ msgstr ""
 msgid "Loading current usage"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Loading model declarations and charts for the selected filters."
 msgstr ""
@@ -7122,7 +7122,7 @@ msgstr ""
 msgid "Log out other sessions"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:103
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:108
 #, elixir-autogen, elixir-format
 msgid "Logged out successfully."
 msgstr ""
@@ -7680,7 +7680,7 @@ msgstr ""
 msgid "Model secondary window"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:578
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:588
 #, elixir-autogen, elixir-format
 msgid "Model serving mode for %{model}"
 msgstr ""
@@ -7697,8 +7697,8 @@ msgstr ""
 msgid "Model serving modes loaded."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:316
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:179
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:319
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:189
 #, elixir-autogen, elixir-format
 msgid "Model serving modes updated"
 msgstr ""
@@ -7776,7 +7776,7 @@ msgstr ""
 msgid "Name changed in response"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:183
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:191
 #, elixir-autogen, elixir-format
 msgid "Name changed in response: the provider reported model A, then model B during the same attempt. This can happen even if the first name matched what Pooler sent."
 msgstr ""
@@ -7911,7 +7911,7 @@ msgid "No active Pool assignments"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:524
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:851
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:865
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1253
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1265
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:158
@@ -8546,7 +8546,7 @@ msgid "OAuth flow was superseded"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:214
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:836
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:850
 #, elixir-autogen, elixir-format
 msgid "OAuth relink"
 msgstr ""
@@ -8650,7 +8650,7 @@ msgstr ""
 msgid "Onboarding could not continue. Try again or ask for a fresh invite."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:184
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
 #, elixir-autogen, elixir-format
 msgid "One request may have several attempts after a retry. These signals count attempts, and one attempt can have both. The goal is to spot a different model, regardless of its quality. The evidence is the model name reported by the provider."
 msgstr ""
@@ -8690,8 +8690,8 @@ msgstr ""
 msgid "Only instance owners can inspect or change global system settings."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:373
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:603
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:374
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:614
 #, elixir-autogen, elixir-format
 msgid "Only instance owners can manage operators."
 msgstr ""
@@ -8924,13 +8924,13 @@ msgstr ""
 msgid "Operator account updated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:616
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:627
 #, elixir-autogen, elixir-format
 msgid "Operator action failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:51
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:58
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:52
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:59
 #, elixir-autogen, elixir-format
 msgid "Operator created"
 msgstr ""
@@ -8940,7 +8940,7 @@ msgstr ""
 msgid "Operator credential"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:278
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:279
 #, elixir-autogen, elixir-format
 msgid "Operator deactivated"
 msgstr ""
@@ -8961,7 +8961,7 @@ msgstr ""
 msgid "Operator notes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:166
+#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:206
 #, elixir-autogen, elixir-format
 msgid "Operator password reset"
 msgstr ""
@@ -8972,7 +8972,7 @@ msgstr ""
 msgid "Operator profile"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:165
+#: lib/codex_pooler_web/live/admin/forms/operator_form.ex:205
 #, elixir-autogen, elixir-format
 msgid "Operator reactivated"
 msgstr ""
@@ -8997,19 +8997,19 @@ msgstr ""
 msgid "Operator signed out"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:167
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:168
 #, elixir-autogen, elixir-format
 msgid "Operator updated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:147
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:452
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:599
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:148
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:453
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:610
 #, elixir-autogen, elixir-format
 msgid "Operator was not found"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:611
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:622
 #, elixir-autogen, elixir-format
 msgid "Operator was not saved"
 msgstr ""
@@ -9021,7 +9021,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:46
 #: lib/codex_pooler_web/live/admin/pages/operators_live.ex:20
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:350
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "Operators"
 msgstr ""
@@ -9169,7 +9169,7 @@ msgstr ""
 msgid "Partial"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:222
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:227
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:168
 #: lib/codex_pooler_web/live/admin/components/pages/system/page_components/form_controls.ex:520
 #: lib/codex_pooler_web/live/admin/pages/settings_live.ex:454
@@ -9408,10 +9408,10 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/shared/badge_components.ex:175
 #: lib/codex_pooler_web/live/admin/components/shared/badge_components.ex:187
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:297
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:691
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:698
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:307
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:701
 #: lib/codex_pooler_web/live/admin/forms/pool_form.ex:708
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:718
 #, elixir-autogen, elixir-format
 msgid "Plan unknown"
 msgstr ""
@@ -9456,7 +9456,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:560
 #: lib/codex_pooler_web/live/admin/forms/job_filter_form.ex:364
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:300
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:283
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:126
 #, elixir-autogen, elixir-format
@@ -9469,10 +9469,10 @@ msgstr ""
 msgid "Pool / upstream"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1589
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1613
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:373
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:378
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1627
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:383
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:388
 #, elixir-autogen, elixir-format
 msgid "Pool action failed"
 msgstr ""
@@ -9484,13 +9484,13 @@ msgid "Pool authorization is required for this OAuth flow"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:279
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:133
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:134
 #, elixir-autogen, elixir-format
 msgid "Pool created"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:287
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:419
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:422
 #, elixir-autogen, elixir-format
 msgid "Pool deleted"
 msgstr ""
@@ -9500,7 +9500,7 @@ msgstr ""
 msgid "Pool deletion requested"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:420
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:423
 #, elixir-autogen, elixir-format
 msgid "Pool deletion started. The Pool disappears once its request history has been removed."
 msgstr ""
@@ -9570,7 +9570,7 @@ msgstr ""
 msgid "Pool invite revoked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1631
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1645
 #, elixir-autogen, elixir-format
 msgid "Pool is already active"
 msgstr ""
@@ -9585,8 +9585,8 @@ msgstr ""
 msgid "Pool is required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1630
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:49
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1644
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:50
 #, elixir-autogen, elixir-format
 msgid "Pool management is not available for this session"
 msgstr ""
@@ -9607,7 +9607,7 @@ msgstr ""
 msgid "Pool not available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:451
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:454
 #, elixir-autogen, elixir-format
 msgid "Pool reactivated"
 msgstr ""
@@ -9633,8 +9633,8 @@ msgid "Pool timeout (ms)"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:280
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:252
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:106
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:254
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:115
 #, elixir-autogen, elixir-format
 msgid "Pool updated"
 msgstr ""
@@ -9659,16 +9659,16 @@ msgstr ""
 msgid "Pool visibility"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:174
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:322
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:390
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:457
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1629
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:50
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:55
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:111
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:114
-#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:184
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:175
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:325
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:393
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:460
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1643
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:51
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:56
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:121
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:124
+#: lib/codex_pooler_web/live/admin/pages/upstreams_live/pool_editor_workflow.ex:194
 #, elixir-autogen, elixir-format
 msgid "Pool was not found"
 msgstr ""
@@ -9690,7 +9690,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:337
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:340
 #: lib/codex_pooler_web/live/admin/pages/pools_live.ex:31
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:718
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:721
 #, elixir-autogen, elixir-format
 msgid "Pools"
 msgstr ""
@@ -10145,7 +10145,7 @@ msgstr ""
 msgid "Reactivate operator"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:272
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:282
 #, elixir-autogen, elixir-format
 msgid "Reactivate the Pool before editing"
 msgstr ""
@@ -10329,8 +10329,8 @@ msgstr ""
 msgid "Recovery code"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:64
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:88
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:66
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:92
 #, elixir-autogen, elixir-format
 msgid "Recovery code is invalid."
 msgstr ""
@@ -10555,7 +10555,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:712
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:222
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:835
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:849
 #, elixir-autogen, elixir-format
 msgid "Replace auth.json"
 msgstr ""
@@ -10763,7 +10763,7 @@ msgstr ""
 msgid "Requests"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:772
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:775
 #, elixir-autogen, elixir-format
 msgid "Requests %{window}"
 msgstr ""
@@ -10897,7 +10897,7 @@ msgstr ""
 msgid "Retries"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:203
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:211
 #, elixir-autogen, elixir-format
 msgid "Retry"
 msgstr ""
@@ -10907,7 +10907,7 @@ msgstr ""
 msgid "Retry WebSocket"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:192
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:200
 #, elixir-autogen, elixir-format
 msgid "Retry to load model declarations for the selected filters."
 msgstr ""
@@ -10995,7 +10995,7 @@ msgstr ""
 msgid "Role"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:597
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:608
 #, elixir-autogen, elixir-format
 msgid "Role must be instance owner or instance admin."
 msgstr ""
@@ -11060,7 +11060,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:249
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:97
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:239
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1619
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
 #, elixir-autogen, elixir-format
 msgid "Routing strategy"
 msgstr ""
@@ -11643,7 +11643,7 @@ msgstr ""
 msgid "Second factor required"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:91
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:95
 #, elixir-autogen, elixir-format
 msgid "Second factor required."
 msgstr ""
@@ -12470,7 +12470,7 @@ msgstr ""
 msgid "TOTP setup failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:784
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:787
 #, elixir-autogen, elixir-format
 msgid "TPS %{window}"
 msgstr ""
@@ -12550,7 +12550,7 @@ msgstr ""
 msgid "The API key is invalid or unavailable."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:351
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:352
 #, elixir-autogen, elixir-format
 msgid "The accounts that can sign in to this admin area, with their roles and assigned Pools."
 msgstr ""
@@ -12645,7 +12645,7 @@ msgstr ""
 msgid "The pooler polls the provider until the code is confirmed."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:196
 #, elixir-autogen, elixir-format
 msgid "The previous snapshot is still displayed. Retry to load the current data."
 msgstr ""
@@ -13036,7 +13036,7 @@ msgstr ""
 msgid "Total cost unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:750
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:753
 #, elixir-autogen, elixir-format
 msgid "Total pools"
 msgstr ""
@@ -13321,7 +13321,7 @@ msgstr ""
 msgid "Unknown"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:677
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:687
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:529
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1258
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:201
@@ -13577,8 +13577,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:582
 #: lib/codex_pooler_web/live/admin/components/shared/upstream_naming.ex:31
 #: lib/codex_pooler_web/live/admin/components/shared/upstream_naming.ex:34
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:657
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1624
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:667
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
 #: lib/codex_pooler_web/live/admin/pages/request_logs_live.ex:302
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:531
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:582
@@ -13634,7 +13634,7 @@ msgstr ""
 msgid "Upstream account linked via device code"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:232
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:242
 #, elixir-autogen, elixir-format
 msgid "Upstream account options could not be loaded. Pool forms may be incomplete."
 msgstr ""
@@ -13718,12 +13718,12 @@ msgstr ""
 msgid "Upstream account · %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:757
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:760
 #, elixir-autogen, elixir-format
 msgid "Upstream accounts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:231
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:241
 #, elixir-autogen, elixir-format
 msgid "Upstream accounts unavailable"
 msgstr ""
@@ -13905,8 +13905,8 @@ msgstr ""
 msgid "Use account settings for your own account"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:458
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:600
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:459
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:611
 #, elixir-autogen, elixir-format
 msgid "Use account settings to change your own password."
 msgstr ""
@@ -14163,13 +14163,13 @@ msgstr ""
 msgid "Weekly-only quota evidence"
 msgstr ""
 
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:48
-#: lib/codex_pooler_web/controllers/user_session_controller.ex:81
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:49
+#: lib/codex_pooler_web/controllers/user_session_controller.ex:85
 #, elixir-autogen, elixir-format
 msgid "Welcome back."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:180
+#: lib/codex_pooler_web/live/admin/pages/lens_live.ex:188
 #, elixir-autogen, elixir-format
 msgid "What do these model differences mean?"
 msgstr ""
@@ -14189,7 +14189,7 @@ msgstr ""
 msgid "Who did what on this instance, from sign-ins to settings changes."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:413
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:423
 #, elixir-autogen, elixir-format
 msgid "Will be removed on save"
 msgstr ""
@@ -14324,7 +14324,7 @@ msgstr ""
 msgid "account label"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:831
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:845
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
@@ -14336,7 +14336,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:147
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:38
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:695
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:725
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:735
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:406
 #, elixir-autogen, elixir-format
 msgid "active"
@@ -14378,14 +14378,14 @@ msgid "applied"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:149
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:727
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:737
 #, elixir-autogen, elixir-format
 msgid "archived"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:65
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:625
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1653
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:144
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:97
 #, elixir-autogen, elixir-format
@@ -14549,7 +14549,7 @@ msgstr ""
 msgid "confirmation label"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1597
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1611
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:103
 #, elixir-autogen, elixir-format
 msgid "confirmation slug did not match pool slug"
@@ -14615,7 +14615,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:168
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:42
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:735
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:745
 #, elixir-autogen, elixir-format
 msgid "deleted"
 msgstr ""
@@ -14651,8 +14651,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:148
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:928
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:41
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:726
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:372
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:736
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:375
 #, elixir-autogen, elixir-format
 msgid "disabled"
 msgstr ""
@@ -14663,7 +14663,7 @@ msgstr ""
 msgid "discarded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:619
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:630
 #, elixir-autogen, elixir-format
 msgid "display_name"
 msgstr ""
@@ -14684,7 +14684,7 @@ msgstr ""
 msgid "eligible"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:618
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:629
 #, elixir-autogen, elixir-format
 msgid "email"
 msgstr ""
@@ -14695,7 +14695,7 @@ msgid "email or id"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:928
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:372
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:375
 #, elixir-autogen, elixir-format
 msgid "enabled"
 msgstr ""
@@ -14739,7 +14739,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:169
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:44
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:736
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:746
 #, elixir-autogen, elixir-format
 msgid "errored"
 msgstr ""
@@ -15025,13 +15025,13 @@ msgstr ""
 msgid "model identifier cannot contain whitespace or control characters"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1599
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1613
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:105
 #, elixir-autogen, elixir-format
 msgid "model identifier is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1602
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1616
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:108
 #, elixir-autogen, elixir-format
 msgid "model identifier is not available for this Pool"
@@ -15042,7 +15042,7 @@ msgstr ""
 msgid "model identifier must be text"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1601
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1615
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:107
 #, elixir-autogen, elixir-format
 msgid "model identifier was submitted more than once"
@@ -15060,42 +15060,42 @@ msgid_plural "model name changed · attempts %{attempts}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1604
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1618
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:110
 #, elixir-autogen, elixir-format
 msgid "model serving mode audit could not be recorded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1605
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1619
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:111
 #, elixir-autogen, elixir-format
 msgid "model serving mode event could not be emitted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1600
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1614
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:106
 #, elixir-autogen, elixir-format
 msgid "model serving mode is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1603
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1617
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:109
 #, elixir-autogen, elixir-format
 msgid "model serving modes changed since they were loaded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1606
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1620
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:112
 #, elixir-autogen, elixir-format
 msgid "model serving modes could not be saved because of a database conflict"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1641
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1655
 #, elixir-autogen, elixir-format
 msgid "model serving rows and revision are required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1642
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1656
 #, elixir-autogen, elixir-format
 msgid "model serving rows are invalid"
 msgstr ""
@@ -15120,12 +15120,12 @@ msgstr ""
 msgid "model_policies[%{index}].model_identifier is required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1615
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1629
 #, elixir-autogen, elixir-format
 msgid "name"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1633
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1647
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:113
 #, elixir-autogen, elixir-format
 msgid "name can't be blank"
@@ -15260,7 +15260,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:60
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:621
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1634
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1648
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:140
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:94
 #, elixir-autogen, elixir-format
@@ -15269,7 +15269,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:64
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:624
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1638
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1652
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:143
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:96
 #, elixir-autogen, elixir-format
@@ -15299,7 +15299,7 @@ msgstr ""
 msgid "partial"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:620
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:631
 #, elixir-autogen, elixir-format
 msgid "password"
 msgstr ""
@@ -15309,7 +15309,7 @@ msgstr ""
 msgid "password update required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:621
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:632
 #, elixir-autogen, elixir-format
 msgid "password_change_required"
 msgstr ""
@@ -15317,7 +15317,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:164
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:40
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:696
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:728
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:738
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:407
 #, elixir-autogen, elixir-format
 msgid "paused"
@@ -15325,13 +15325,13 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:161
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:39
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:730
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:740
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:709
 #, elixir-autogen, elixir-format
 msgid "pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1623
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:31
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:77
 #, elixir-autogen, elixir-format
@@ -15343,7 +15343,7 @@ msgstr ""
 msgid "pool filter is not available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1595
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1609
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:101
 #, elixir-autogen, elixir-format
 msgid "pool must be archived before deletion"
@@ -15351,14 +15351,14 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:43
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:616
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1594
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:138
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:100
 #, elixir-autogen, elixir-format
 msgid "pool was not found"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:623
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:634
 #, elixir-autogen, elixir-format
 msgid "pool_ids"
 msgstr ""
@@ -15435,7 +15435,7 @@ msgstr ""
 msgid "reauth required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:734
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:744
 #, elixir-autogen, elixir-format
 msgid "reauth_required"
 msgstr ""
@@ -15472,19 +15472,19 @@ msgstr ""
 msgid "refresh failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:731
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:741
 #, elixir-autogen, elixir-format
 msgid "refresh_due"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:733
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:743
 #, elixir-autogen, elixir-format
 msgid "refresh_failed"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:163
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:50
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:732
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:742
 #, elixir-autogen, elixir-format
 msgid "refreshing"
 msgstr ""
@@ -15575,7 +15575,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/invites/page_components.ex:330
 #: lib/codex_pooler_web/live/admin/forms/api_key_policy_form.ex:697
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:729
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:739
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:408
 #, elixir-autogen, elixir-format
 msgid "revoked"
@@ -15591,7 +15591,7 @@ msgstr ""
 msgid "revoked api keys cannot be rotated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:622
+#: lib/codex_pooler_web/live/admin/pages/operators_live.ex:633
 #, elixir-autogen, elixir-format
 msgid "role"
 msgstr ""
@@ -15623,7 +15623,7 @@ msgstr ""
 msgid "seen %{date}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1643
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1657
 #, elixir-autogen, elixir-format
 msgid "selected API keys are not available"
 msgstr ""
@@ -15633,7 +15633,7 @@ msgstr ""
 msgid "selected account"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1607
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1621
 #, elixir-autogen, elixir-format
 msgid "selected assignments are not available for this Pool"
 msgstr ""
@@ -15678,7 +15678,7 @@ msgstr ""
 msgid "skipped"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1616
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1630
 #, elixir-autogen, elixir-format
 msgid "slug"
 msgstr ""
@@ -15696,12 +15696,12 @@ msgid "statistics could not be loaded"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:119
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1617
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1631
 #, elixir-autogen, elixir-format
 msgid "status"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1598
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1612
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:104
 #, elixir-autogen, elixir-format
 msgid "status must be active, disabled, or archived"
@@ -15732,7 +15732,7 @@ msgstr ""
 msgid "terminal %{class}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1596
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1610
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:102
 #, elixir-autogen, elixir-format
 msgid "the Pool is being deleted"
@@ -15740,7 +15740,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:61
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:622
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1635
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1649
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:141
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:99
 #, elixir-autogen, elixir-format
@@ -15749,7 +15749,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:66
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:626
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1654
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:145
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:98
 #, elixir-autogen, elixir-format
@@ -15764,7 +15764,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:63
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:623
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1637
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1651
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:142
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:95
 #, elixir-autogen, elixir-format
@@ -15865,7 +15865,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:53
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:126
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex:415
-#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:737
+#: lib/codex_pooler_web/live/admin/forms/pool_form.ex:747
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:710
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:294
 #, elixir-autogen, elixir-format
@@ -15908,12 +15908,12 @@ msgstr ""
 msgid "unreported onboarding"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1644
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1658
 #, elixir-autogen, elixir-format
 msgid "unsupported pool assignment selection mode"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1632
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1646
 #, elixir-autogen, elixir-format
 msgid "unsupported pool option"
 msgstr ""
@@ -15938,7 +15938,7 @@ msgstr ""
 msgid "upstream account"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1610
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1624
 #, elixir-autogen, elixir-format
 msgid "upstream account is being deleted"
 msgstr ""
@@ -15965,7 +15965,7 @@ msgstr ""
 msgid "upstream identity is not in a locally reactivatable state"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1608
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1622
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:73
 #, elixir-autogen, elixir-format
 msgid "upstream identity was not found"
@@ -15993,7 +15993,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_support.ex:62
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:619
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1636
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1650
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/invite_workflow.ex:139
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live/workflow_error.ex:75
 #, elixir-autogen, elixir-format
@@ -16320,7 +16320,7 @@ msgstr ""
 msgid "Binding scope"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1618
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1632
 #, elixir-autogen, elixir-format
 msgid "Bridge ring size"
 msgstr ""
@@ -16712,7 +16712,7 @@ msgstr ""
 msgid "Priming pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1626
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1640
 #, elixir-autogen, elixir-format
 msgid "Priority"
 msgstr ""
@@ -17250,7 +17250,7 @@ msgstr ""
 msgid "Weekly-only probe"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1625
+#: lib/codex_pooler_web/live/admin/pages/pools_live.ex:1639
 #, elixir-autogen, elixir-format
 msgid "Weight"
 msgstr ""
