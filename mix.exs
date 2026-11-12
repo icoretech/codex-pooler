@@ -94,7 +94,7 @@ defmodule CodexPooler.MixProject do
       {:zoneinfo, "== 0.1.9"},
       {:tz, "== 0.28.4"},
       {:credo, "== 1.7.19", only: [:dev, :test], runtime: false},
-      {:dialyxir, "== 1.4.8", only: [:dev, :test], runtime: false},
+      {:dialyxir, "== 1.4.9", only: [:dev, :test], runtime: false},
       {:sobelow, "== 0.18.1", only: [:dev, :test], runtime: false},
       {:six, "== 0.4.3", only: :test},
       {:gettext, "== 1.0.2"},

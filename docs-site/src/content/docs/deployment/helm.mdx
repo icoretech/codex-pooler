@@ -17,7 +17,7 @@ helm repo update
 helm upgrade --install codex-pooler icoretech/codex-pooler \
   --namespace codex-pooler \
   --create-namespace \
-  --version 0.15.7 \
+  --version 0.15.8 \
   --values ./values.production.yaml
 ```
 
@@ -27,7 +27,7 @@ The same chart is also published as an OCI artifact:
 helm upgrade --install codex-pooler oci://ghcr.io/icoretech/charts/codex-pooler \
   --namespace codex-pooler \
   --create-namespace \
-  --version 0.15.7 \
+  --version 0.15.8 \
   --values ./values.production.yaml
 ```
 
