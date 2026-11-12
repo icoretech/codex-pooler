@@ -82,15 +82,15 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def rename_account_for_scope(_scope, _identity_or_id, _attrs),
     do: {:error, lifecycle_error(:invalid_request, "user scope is required")}
 
-  @spec pause_account(identity_ref(), map()) :: lifecycle_result()
-  defp pause_account(identity_or_id, attrs) do
+  @spec pause_account(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  defp pause_account(scope, identity_or_id, attrs) do
     case normalize_identity(identity_or_id) do
       %UpstreamIdentity{} = identity ->
         attrs = atomize_attrs(attrs)
         timestamp = Map.get(attrs, :paused_at, now())
 
         Repo.transaction(fn ->
-          locked_identity = CredentialFencing.lock_credential_replacement(identity.id)
+          locked_identity = lock_authorized_lifecycle_identity!(scope, identity.id)
           validate_lifecycle_epoch!(locked_identity)
 
           paused_identity =
@@ -126,7 +126,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   @spec pause_account_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
   def pause_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
-      pause_account(identity, attrs)
+      pause_account(scope, identity, attrs)
       |> AccountAudit.record_change_strict(scope, "upstream_account.pause", previous_status: identity.status)
       |> enqueue_lifecycle_catalog_sync()
     end
@@ -135,14 +135,14 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def pause_account_for_scope(_scope, _identity_or_id, _attrs),
     do: {:error, lifecycle_error(:invalid_request, "user scope is required")}
 
-  @spec reactivate_account(identity_ref(), map()) :: lifecycle_result()
-  defp reactivate_account(identity_or_id, attrs) do
+  @spec reactivate_account(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  defp reactivate_account(scope, identity_or_id, attrs) do
     case normalize_identity(identity_or_id) do
       %UpstreamIdentity{} = identity ->
         attrs = atomize_attrs(attrs)
         timestamp = Map.get(attrs, :reactivated_at, now())
 
-        Repo.transaction(fn -> reactivate_locked_account(identity.id, attrs, timestamp) end)
+        Repo.transaction(fn -> reactivate_locked_account(scope, identity.id, attrs, timestamp) end)
         |> tap_upstream_change("upstream_account_reactivated")
 
       nil ->
@@ -150,11 +150,10 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
     end
   end
 
-  defp reactivate_locked_account(identity_id, attrs, timestamp) do
-    identity = CredentialFencing.lock_credential_replacement(identity_id)
+  defp reactivate_locked_account(scope, identity_id, attrs, timestamp) do
+    identity = lock_authorized_lifecycle_identity!(scope, identity_id)
 
-    with %UpstreamIdentity{} = identity <- identity,
-         :ok <- ensure_reactivatable_identity(identity),
+    with :ok <- ensure_reactivatable_identity(identity),
          :ok <- ensure_reactivation_secret(identity),
          [_ | _] = assignments <- reactivatable_assignments(identity) do
       validate_lifecycle_epoch!(identity)
@@ -190,9 +189,6 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
 
       lifecycle_result(:active, active_identity)
     else
-      nil ->
-        Repo.rollback(lifecycle_error(:upstream_identity_not_found, "upstream identity was not found"))
-
       [] ->
         Repo.rollback(
           lifecycle_error(
@@ -206,6 +202,27 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
     end
   end
 
+  # The caller authorized on an unlocked read. Under the canonical identity lock no assignment can
+  # be attached and no deletion can be requested, so the decision is repeated here on the rows the
+  # mutation is about to write: a permanent deletion committed in between wins, and the operator
+  # must still hold the lifecycle capability over every Pool the identity serves now.
+  defp lock_authorized_lifecycle_identity!(%Scope{} = scope, identity_id) do
+    with %UpstreamIdentity{} = identity <- CredentialFencing.lock_credential_replacement(identity_id),
+         :ok <- ensure_not_deleting(identity),
+         {:ok, assignments} <- lifecycle_assignments(identity),
+         :ok <- require_lifecycle_pool_access(scope, assignments |> Enum.map(& &1.pool_id) |> Enum.uniq()) do
+      identity
+    else
+      nil -> Repo.rollback(lifecycle_error(:upstream_identity_not_found, "upstream identity was not found"))
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp ensure_not_deleting(%UpstreamIdentity{metadata: %{"permanent_deletion_requested_at" => _}}),
+    do: {:error, lifecycle_error(:upstream_account_deleting, "upstream account is being deleted")}
+
+  defp ensure_not_deleting(%UpstreamIdentity{}), do: :ok
+
   defp validate_lifecycle_epoch!(identity) do
     case CredentialFencing.validate_current_credential_epoch(identity) do
       {:ok, _epoch} -> :ok
@@ -217,7 +234,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
           lifecycle_result()
   def reactivate_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
-      reactivate_account(identity, attrs)
+      reactivate_account(scope, identity, attrs)
       |> AccountAudit.record_change_strict(scope, "upstream_account.reactivate", previous_status: identity.status)
       |> enqueue_lifecycle_catalog_sync()
     end
