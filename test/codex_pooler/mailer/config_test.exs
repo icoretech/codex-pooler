@@ -155,6 +155,21 @@ defmodule CodexPooler.Mailer.ConfigTest do
       assert config[:password] == password
     end
 
+    test "hydrates an SMTP password with outer spaces unchanged" do
+      password = " spaced password "
+
+      settings =
+        Settings.default()
+        |> Settings.changeset(%{
+          "smtp" => %{"enabled" => true, "host" => "smtp.example.com", "port" => 2525, "username" => "mailer", "from" => "sender@example.com", "ssl" => false, "tls" => "never", "retries" => 0, "password" => password, "password_action" => "set"}
+        })
+        |> Ecto.Changeset.apply_changes()
+
+      assert {:ok, %{adapter_config: config}} = MailerConfig.from_settings(settings)
+      assert config[:password] == password
+      assert config[:retries] == 0
+    end
+
     test "probe options cap retries and add a timeout" do
       assert {:ok, options} =
                MailerConfig.probe_options(%{

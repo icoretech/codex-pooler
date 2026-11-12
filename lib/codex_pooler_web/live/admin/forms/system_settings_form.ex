@@ -156,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     |> normalize_json_fields()
     |> normalize_bulkhead_fields()
     |> normalize_write_only("metrics", "bearer_token", "bearer_token_action")
-    |> normalize_write_only("smtp", "password", "password_action")
+    |> normalize_write_only("smtp", "password", "password_action", preserve_bytes: true)
   end
 
   @spec apply_bulkhead_preset(map(), String.t()) :: {:ok, map()} | :error
@@ -332,9 +332,12 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     end)
   end
 
-  defp normalize_write_only(params, group, value_field, action_field) do
+  # A credential that is not blank keeps its exact bytes when `preserve_bytes` is set: outer spaces are valid password data, and
+  # trimming only decides whether the field counts as blank (preserve the stored secret).
+  defp normalize_write_only(params, group, value_field, action_field, opts \\ []) do
     group_params = Map.get(params, group, %{})
-    value = group_params |> Map.get(value_field) |> blank_to_nil()
+    raw = Map.get(group_params, value_field)
+    value = if Keyword.get(opts, :preserve_bytes, false) and is_binary(blank_to_nil(raw)), do: raw, else: blank_to_nil(raw)
     action = Map.get(group_params, action_field)
 
     {value, action} =

@@ -520,7 +520,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> update_change(:username, &blank_to_nil/1)
     |> update_change(:from, &String.trim/1)
     |> validate_positive_integer(:port)
-    |> validate_positive_integer(:retries)
+    |> validate_number(:retries, greater_than_or_equal_to: 0)
     |> validate_inclusion(:tls, @tls_values)
     |> validate_smtp_enabled_host()
     |> maybe_apply_smtp_password()
@@ -565,7 +565,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp maybe_apply_smtp_password(changeset) do
     action = get_field(changeset, :password_action)
-    password = changeset |> get_field(:password) |> blank_to_nil()
+    password = changeset |> get_field(:password) |> nonblank_exact()
 
     cond do
       action == "clear" ->
@@ -794,6 +794,10 @@ defmodule CodexPooler.InstanceSettings.Settings do
   end
 
   defp blank_to_nil(value), do: value
+
+  # A credential keeps its exact bytes; only a blank value counts as absent.
+  defp nonblank_exact(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: value)
+  defp nonblank_exact(value), do: value
 
   defp decode64(value) when is_binary(value), do: Base.decode64(value)
   defp decode64(_value), do: :error

@@ -342,7 +342,7 @@ defmodule CodexPooler.Mailer.Config do
     host = require_non_blank_string!(smtp_settings, :host, "SMTP host")
     port = require_positive_integer!(smtp_settings, :port, "SMTP port")
     username = optional_non_blank_string!(smtp_settings, :username, "SMTP username")
-    password = optional_non_blank_string!(smtp_settings, :password, "SMTP password")
+    password = optional_exact_string!(smtp_settings, :password, "SMTP password")
     from = require_non_blank_string!(smtp_settings, :from, "SMTP from address")
     ssl = require_boolean!(smtp_settings, :ssl, "SMTP SSL")
     requested_tls = require_tls_atom!(smtp_settings, :tls)
@@ -424,6 +424,15 @@ defmodule CodexPooler.Mailer.Config do
     case optional_non_blank_string!(settings, key, label) do
       nil -> raise ArgumentError, "#{label} must be present when SMTP is enabled"
       value -> value
+    end
+  end
+
+  # A password is credential data: keep its exact bytes, treating only a blank value as absent.
+  defp optional_exact_string!(settings, key, label) do
+    case Map.get(settings, key) do
+      nil -> nil
+      value when is_binary(value) -> if String.trim(value) == "", do: nil, else: value
+      _other -> raise ArgumentError, "#{label} must be a string"
     end
   end
 

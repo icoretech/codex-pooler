@@ -2846,4 +2846,37 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   defp remote_ip(conn, ip), do: %{conn | remote_ip: ip}
+  @tag :sensitive
+  test "the SMTP form stores a password with outer spaces exactly, keeps it on a blank field, and accepts zero retries", %{conn: conn} do
+    password = " smtp form secret #{System.unique_integer([:positive])} "
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "smtp"}}")
+
+    view
+    |> form("#instance-settings-smtp-form", instance_settings: %{smtp: %{enabled: "true", host: "smtp.example.com", username: "mailer", from: "no-reply@example.com", retries: "0", password: password}})
+    |> render_submit()
+
+    stored = InstanceSettings.get!()
+    assert stored.smtp.enabled
+    assert stored.smtp.retries == 0
+    assert {:ok, ^password} = InstanceSettings.decrypt_smtp_password(stored)
+    assert has_element?(view, "#instance-settings-smtp-retries[value='0']")
+    refute render(view) =~ String.trim(password)
+
+    view
+    |> form("#instance-settings-smtp-form", instance_settings: %{smtp: %{password: "   ", retries: "2"}})
+    |> render_submit()
+
+    kept = InstanceSettings.get!()
+    assert kept.smtp.retries == 2
+    assert {:ok, ^password} = InstanceSettings.decrypt_smtp_password(kept)
+
+    html =
+      view
+      |> form("#instance-settings-smtp-form", instance_settings: %{smtp: %{retries: "-1"}})
+      |> render_submit()
+
+    assert html =~ "Retries"
+    assert has_element?(view, "#instance-settings-smtp-errors")
+    assert InstanceSettings.get!().smtp.retries == 2
+  end
 end

@@ -1477,6 +1477,28 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   @tag :sensitive
+  test "SMTP password keeps outer spaces and retries may be zero" do
+    %{user: user} =
+      AccountsFixtures.bootstrap_owner_fixture(%{"email" => AccountsFixtures.unique_user_email()})
+
+    scope = Scope.for_user(user, ["instance_owner"])
+    settings = InstanceSettings.ensure_singleton!()
+    password = " smtp-spaced-#{System.unique_integer([:positive])} "
+
+    attrs =
+      %{
+        "smtp" => %{"enabled" => true, "host" => "smtp.example.com", "username" => "mailer", "from" => "no-reply@example.com", "retries" => 0},
+        :current_scope => scope
+      }
+      |> InstanceSettings.put_smtp_password(password)
+
+    assert {:ok, updated} = InstanceSettings.update_system_settings(settings, attrs)
+    assert updated.smtp.retries == 0
+    assert {:ok, ^password} = InstanceSettings.decrypt_smtp_password(updated)
+    assert {:error, %Ecto.Changeset{}} = InstanceSettings.update_system_settings(updated, %{"smtp" => %{"retries" => -1}, :current_scope => scope})
+  end
+
+  @tag :sensitive
   test "blank SMTP password preserves the stored secret and explicit clear removes it" do
     %{user: user} =
       AccountsFixtures.bootstrap_owner_fixture(%{"email" => AccountsFixtures.unique_user_email()})
