@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
                               not MapSet.member?(allowed, byte),
                               do: <<byte>>
                         )
+  @opaque_schema_keys ~w(output_schema parameters schema)
   @unsupported_input_image_message "Responses input_image values must use https image URLs or supported image data URLs, or nonblank file_id references; Codex sediment:// references are unsupported"
 
   @spec validate(term()) :: :ok | {:error, Error.reason()}
@@ -34,10 +35,12 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
   defp find_unsupported_media(%{} = value) do
     value = Map.new(value, fn {key, item_value} -> {to_string(key), item_value} end)
 
+    # Tool and structured-output schemas are opaque JSON: a literal that looks like a content part
+    # inside one is schema data, never an attachment.
     searchable_value =
       if ToolResultShape.tool_result?(value),
-        do: Map.drop(value, ["output", "result"]),
-        else: value
+        do: Map.drop(value, ["output", "result" | @opaque_schema_keys]),
+        else: Map.drop(value, @opaque_schema_keys)
 
     cond do
       unsupported_input_image_file_id?(searchable_value) ->
