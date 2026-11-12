@@ -4,6 +4,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.MCP.{MetadataSanitizer, PrivacyMatrix}
+  alias CodexPooler.MCP.Tools.PoolMetadata.Common
   alias CodexPooler.MCP.Tools.ReadableText
 
   @public_debug_sources MapSet.new([
@@ -54,14 +55,14 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         errors: safe_errors(log.errors),
         admitted_at: iso8601(log.admitted_at),
         completed_at: iso8601(log.completed_at),
-        upstream_account_label: log.upstream_account_label,
+        upstream_account_label: Common.safe_label(log.upstream_account_label),
         upstream_account_email: log.upstream_account_email,
         upstream_account_plan_label: log.upstream_account_plan_label,
         upstream_account_plan_family: log.upstream_account_plan_family,
         upstream_identity_id: log.upstream_identity_id,
-        upstream_identity_label: log.upstream_identity_label,
+        upstream_identity_label: Common.safe_label(log.upstream_identity_label),
         pool_upstream_assignment_id: log.pool_upstream_assignment_id,
-        assignment_label: log.assignment_label,
+        assignment_label: Common.safe_label(log.assignment_label),
         reasoning_effort: log.reasoning_effort,
         applied_reasoning_effort: log.applied_reasoning_effort,
         effective_reasoning_effort: log.effective_reasoning_effort,

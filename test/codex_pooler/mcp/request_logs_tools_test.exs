@@ -809,6 +809,40 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert_no_unsafe_request_log_text(result)
   end
 
+  test "request-log structured content masks email-valued upstream labels in list and detail", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-request-log-email-labels", name: "MCP Request Log Email Labels"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP email label key"})
+    raw_email = "label.owner@example.com"
+
+    %{assignment: assignment} = upstream_assignment_fixture(pool, %{account_label: raw_email, assignment_label: raw_email})
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-email-label",
+        endpoint: "/backend-api/codex/responses",
+        correlation_id: "mcp-request-log-email-label",
+        upstream_account_label: raw_email
+      })
+
+    attempt_with_latency(request, assignment, 12)
+
+    assert {:ok, detail} = ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{auth: auth})
+    assert {:ok, list} = ToolDispatch.call("codex_pooler_list_request_logs", %{"pool_id" => pool.id, "limit" => 5}, %{auth: auth})
+
+    for result <- [detail, list] do
+      assert result["isError"] == false
+      refute CodexPooler.JSON.encode!(result["structuredContent"]) =~ raw_email
+      # The readable text block is built from the same projected item.
+      refute CodexPooler.JSON.encode!(result) =~ raw_email
+      assert Enum.any?(result["content"], &(&1["type"] == "text" and &1["text"] != ""))
+    end
+
+    assert %{"item" => item} = detail["structuredContent"]
+    assert item["upstream_account_label"] != raw_email
+    assert item["upstream_identity_label"] != raw_email
+    assert item["assignment_label"] != raw_email
+  end
+
   test "request-log compaction bridge is detail-only and list output remains byte-compatible", %{
     auth: auth
   } do
