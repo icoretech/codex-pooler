@@ -72,6 +72,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       |> post("/v1/images/generations", %{
         "model" => setup.model.exposed_model_id,
         "prompt" => "synthetic image request",
+        "output_format" => "png",
         "size" => "1024x1024",
         "quality" => "low",
         "n" => 1
@@ -90,7 +91,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["stream"] == true
-    assert [%{"type" => "image_generation", "model" => "gpt-image-1"}] = captured.json["tools"]
+    assert [%{"type" => "image_generation", "model" => "gpt-image-1", "output_format" => "png"}] = captured.json["tools"]
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -198,6 +199,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       |> post("/v1/images/edits", %{
         "model" => setup.model.exposed_model_id,
         "prompt" => "synthetic edit request",
+        "output_format" => "png",
         "size" => "1024x1024",
         "mask" => upload_fixture("mask.png", "image/png", image_bytes),
         "image" => upload_fixture("source-private.png", "image/png", image_bytes)
@@ -217,7 +219,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
                String.starts_with?(part["image_url"], "data:image/png;base64,")
            end)
 
-    assert [%{"input_image_mask" => %{"image_url" => mask_url}}] = captured.json["tools"]
+    assert [%{"input_image_mask" => %{"image_url" => mask_url}, "output_format" => "png"}] = captured.json["tools"]
     assert String.starts_with?(mask_url, "data:image/png;base64,")
     assert [%{"text" => "synthetic edit request"}, %{"type" => "input_image"}] = content
     refute captured.body =~ "source-private.png"

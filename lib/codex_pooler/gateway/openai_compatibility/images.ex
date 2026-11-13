@@ -93,7 +93,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
 
   defp native_response(payload, operation, opts) do
     endpoint = "/backend-api/codex/images/" <> operation
-    native = payload |> Map.take(~w(model prompt background quality size)) |> Map.put("n", 1)
+    native = payload |> Map.take(~w(model prompt background quality size output_format)) |> Map.put("n", 1)
 
     options =
       opts
@@ -165,6 +165,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
          :ok <- validate_one_of(payload, "background", @backgrounds),
          :ok <- validate_input_fidelity(payload),
          :ok <- validate_n(payload),
+         :ok <- validate_one_of(payload, "output_format", ["png"]),
          :ok <- validate_one_of(payload, "response_format", ["b64_json"]) do
       discard_user_identifier(payload)
     end
@@ -359,6 +360,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
       tool
       |> maybe_put(payload, "background")
       |> maybe_put(payload, "input_fidelity")
+      |> maybe_put(payload, "output_format")
 
     {:ok,
      %{
