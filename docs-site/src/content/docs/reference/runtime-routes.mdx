@@ -704,6 +704,10 @@ bounded field or numeric-index path. Invalid values and successful attempts
 omit the field, and raw upstream error messages or rejected values are never
 projected through it.
 
+### Session budget terminals
+
+A provider `budget_reached` error on a statusless `error` or `response.failed` stream event, or on a wrapped error with integer status `400`, is a session-local terminal refusal. Codex Pooler preserves the existing client error projection and failed accounting outcome without demoting the upstream assignment or counting a circuit failure. A verified terminal also prevents a native compaction successor from replaying that request. Other wrapped statuses, malformed status values, and `response.incomplete` keep their existing classification; this is not an account-quota reset or a reason to select another account.
+
 ### Upstream parameter validation rejections
 
 When upstream rejects an ordinary Responses or Chat Completions HTTP request

@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
 
   # This value belongs to one normalization call, never to relay/parser state.
@@ -16,9 +17,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
           direct_failure?: boolean(),
           preamble_guard?: boolean(),
           preamble_fragment?: boolean(),
+          session_budget_exceeded?: boolean() | nil,
           delivery_event: %{event_type: String.t() | nil, data_type: String.t() | nil}
         }
-  defstruct [:raw, :event_type, :decoded, :delivery_event, separator: "\n\n", direct_failure?: false, preamble_guard?: false, preamble_fragment?: false]
+  defstruct [:raw, :event_type, :decoded, :delivery_event, :session_budget_exceeded?, separator: "\n\n", direct_failure?: false, preamble_guard?: false, preamble_fragment?: false]
 
   @type delivery_part :: %{
           data: binary(),
@@ -52,6 +54,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
 
   @spec outcome(t()) :: {:ok, StreamProtocol.terminal_outcome()} | nil
   def outcome(%{decoded: decoded}) when map_size(decoded) == 0, do: nil
+
+  def outcome(%{session_budget_exceeded?: confirmed?} = block) when is_boolean(confirmed?) do
+    case StreamProtocol.terminal_outcome(block.event_type, block.decoded) do
+      {:ok, %{failure: failure} = outcome} ->
+        failure = if confirmed?, do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        {:ok, %{outcome | failure: failure}}
+
+      outcome ->
+        outcome
+    end
+  end
+
   def outcome(block), do: StreamProtocol.terminal_outcome(block.event_type, block.decoded)
 
   @spec normalize(t(), boolean()) :: {iodata(), t()}
@@ -71,6 +85,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
           raw: "",
           event_type: "response.failed",
           decoded: changed,
+          session_budget_exceeded?: ErrorCodes.session_budget_terminal?(block.event_type, block.decoded),
           delivery_event: %{event_type: "response.failed", data_type: decoded_type(changed)}
         }
       else

@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesTerminalOutput
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesToolCompletion
@@ -863,19 +864,32 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       end
 
     classification =
-      %{"type" => "response.failed", "response" => %{}}
+      decoded
+      |> Map.take(["status", "status_code"])
+      |> Map.merge(%{"type" => "response.failed", "response" => %{}})
       |> maybe_put_source_top_level_error(Map.get(decoded, "error"))
       |> maybe_put_source_nested_error(nested_error)
 
-    StreamProtocol.terminal_outcome("response.failed", classification)
+    case StreamProtocol.terminal_outcome("response.failed", classification) do
+      {:ok, %{failure: failure} = outcome} ->
+        failure = if ErrorCodes.session_budget_terminal?("response.failed", decoded), do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        {:ok, %{outcome | failure: failure}}
+
+      outcome ->
+        outcome
+    end
   end
 
   defp source_terminal_outcome("error", %{} = decoded) do
     if DeploymentPolicyDenial.frame?(Map.put(decoded, "type", "error")) do
       generic = decoded |> normalize_top_level_error() |> normalize_response_error()
       StreamProtocol.terminal_outcome("error", generic)
+    else
+      {:session_budget_terminal, ErrorCodes.session_budget_terminal?("error", decoded)}
     end
   end
+
+  defp source_terminal_outcome("response.incomplete", _decoded), do: {:session_budget_terminal, false}
 
   defp source_terminal_outcome(_event_type, _decoded), do: nil
 
@@ -1196,6 +1210,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp record_terminal(state, type, decoded, source_terminal_outcome) do
+    source_terminal_outcome = resolve_source_terminal_outcome(source_terminal_outcome, type, decoded)
+
     case source_terminal_outcome || StreamProtocol.terminal_outcome(type, decoded) do
       {:ok, %{kind: kind} = outcome} ->
         state
@@ -1207,6 +1223,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         state
     end
   end
+
+  defp resolve_source_terminal_outcome({:session_budget_terminal, confirmed?}, type, decoded) do
+    case StreamProtocol.terminal_outcome(type, decoded) do
+      {:ok, %{failure: failure} = outcome} ->
+        failure = if confirmed?, do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        {:ok, %{outcome | failure: failure}}
+
+      outcome ->
+        outcome
+    end
+  end
+
+  defp resolve_source_terminal_outcome(outcome, _type, _decoded), do: outcome
 
   defp maybe_put_terminal_failure(state, %{kind: :failed, failure: %{} = failure}) do
     Map.put(state, :terminal_failure, failure)

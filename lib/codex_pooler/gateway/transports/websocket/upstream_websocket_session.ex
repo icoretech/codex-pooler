@@ -106,7 +106,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
           optional(:upstream_error_code) => String.t() | nil,
-          optional(:upstream_error_param) => String.t() | nil
+          optional(:upstream_error_param) => String.t() | nil,
+          optional(:session_budget_exceeded?) => boolean()
         }
   @type request_failure :: %{
           required(:body) => binary(),
@@ -2413,6 +2414,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         headers: Map.get(state, :headers, []),
         upstream_error_code: receive_state.terminal_upstream_error_code,
         upstream_error_param: receive_state.terminal_upstream_error_param,
+        session_budget_exceeded?: receive_state.session_budget_exceeded?,
         public_tool_completion_reason: receive_state.public_tool_completion_reason,
         websocket_frame_headers: receive_state.websocket_frame_headers
       }
@@ -2473,7 +2475,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           result
         end
 
-      idle = %{receive_state | body: RetainedBody.empty(), response_usage: nil, request_caller_pid: nil, request_caller_monitor: nil, terminal_upstream_error_code: nil, terminal_upstream_error_param: nil}
+      idle = %{receive_state | body: RetainedBody.empty(), response_usage: nil, request_caller_pid: nil, request_caller_monitor: nil, terminal_upstream_error_code: nil, terminal_upstream_error_param: nil, session_budget_exceeded?: false}
       state = apply_native_steering_success(state, result)
       {result, Map.put(state, :native_response_steering_receive, idle)}
     else
@@ -3361,6 +3363,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
               receive_state.terminal_upstream_error_code ||
                 StreamProtocol.upstream_error_code(decoded),
             terminal_upstream_error_param: receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded),
+            session_budget_exceeded?: ErrorCodes.session_budget_terminal?(type, decoded),
             provider_refusal?: receive_state.provider_refusal? or provider_refusal_frame?(decoded)
         }
 

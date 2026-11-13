@@ -151,6 +151,8 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert codex_model_info_violations(model) == []
     assert model["context_window"] == 128_000
     assert model["auto_compact_token_limit"] == 200
+    assert model["default_reasoning_level"] == "low"
+    assert Enum.any?(model["supported_reasoning_levels"], &(&1["effort"] == "high"))
 
     assert {:ok, %{status: "released"}} = CodexCompactionSmokeFixture.release(options)
   end

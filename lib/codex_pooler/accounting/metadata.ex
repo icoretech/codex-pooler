@@ -473,6 +473,9 @@ defmodule CodexPooler.Accounting.Metadata do
   defp sanitize_value(value, key) when key in [:usage_observation, "usage_observation"],
     do: sanitize_usage_observation(value)
 
+  defp sanitize_value(value, key) when key in [:session_budget_terminal, "session_budget_terminal"],
+    do: value == true
+
   defp sanitize_value(value, key) when key in [:native_content_filter_terminal, "native_content_filter_terminal"],
     do: NativeContentFilterRetry.sanitize_terminal(value)
 

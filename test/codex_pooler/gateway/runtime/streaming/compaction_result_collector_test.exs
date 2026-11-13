@@ -95,6 +95,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     end
   end
 
+  test "the compact collector retains verified budget terminal evidence without changing its wire error" do
+    body = websocket_body([provider_failure_event("response.failed", "budget_reached", "input", "private")])
+    assert {:provider_failure, %{session_budget_exceeded?: true} = failure} = CompactionResultCollector.collect_websocket_body(body)
+    assert failure.upstream_code == "budget_reached"
+    assert %{"type" => "response.failed", "response" => %{"error" => %{"code" => "budget_reached"}}} = CompactionResultCollector.provider_failure_websocket_event(failure)
+  end
+
   test "websocket body sanitizes malformed provider codes and params without raw leakage" do
     raw_code = "provider code with spaces and private data"
     raw_param = "input[99999].private"

@@ -8,6 +8,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlockTest do
 
   @endpoint "/backend-api/codex/responses"
 
+  test "canonical native terminal delivery keeps original session budget evidence" do
+    for type <- ["error", "response.failed", "response.incomplete"], type_only? <- [false, true] do
+      error = if type_only?, do: %{"type" => "budget_reached"}, else: %{"code" => "budget_reached"}
+      source = event(type, %{"type" => type, "error" => error, "response" => %{"error" => error}})
+      {wire, block} = source |> NativeSSEBlock.parse() |> NativeSSEBlock.normalize(false)
+      assert %{parts: [%{outcome: {:ok, %{failure: failure}}}]} = NativeSSEBlock.delivery([{wire, block}])
+      assert Map.get(failure, :session_budget_exceeded?) == true == (type != "response.incomplete" and not type_only?)
+    end
+  end
+
   test "delivery evidence agrees with byte-based classification for original and rewritten events" do
     for block <- blocks(), private? <- [false, true] do
       parsed = NativeSSEBlock.parse(block)

@@ -707,7 +707,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
     stream =
       start_armed(fn ->
-        {:ok, %{upstream_websocket_connection: Map.put(connection, :ignored, "sentinel")}}
+        {:ok, %{upstream_websocket_connection: Map.put(connection, :ignored, "sentinel"), session_budget_exceeded?: true}}
       end)
 
     ref = stream.ref
@@ -727,9 +727,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
     metadata = WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream)
     assert metadata.upstream_websocket_connection.generation == connection.generation
+    assert metadata.session_budget_exceeded?
     refute Map.has_key?(metadata.upstream_websocket_connection, :ignored)
     refute inspect(metadata) =~ "sentinel"
     assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream).upstream_websocket_connection == nil
+    refute WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream).session_budget_exceeded?
   end
 
   for {scenario, source, expected} <- [

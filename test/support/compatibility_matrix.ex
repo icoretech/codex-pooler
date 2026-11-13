@@ -971,7 +971,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       routes: [%{method: :post, path: "/backend-api/codex/responses"}],
       future_routes: [],
       fixture: :first_event_stream_retry,
-      contract: "transient SSE failures may retry only before the client sees output, message, tool, or delta events"
+      contract: "transient SSE failures may retry only before the client sees output, message, tool, or delta events; an exact budget_reached error on a statusless error/response.failed or wrapped integer 400 is a terminal session-local refusal, leaves assignment/circuit health neutral, and fences a verified native compaction successor without changing other status or incomplete classifications"
     },
     %{
       slug: :tool_output_preservation,

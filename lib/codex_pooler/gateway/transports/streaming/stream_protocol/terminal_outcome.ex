@@ -36,7 +36,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
           required(:upstream_code) => String.t() | nil,
           required(:upstream_error_param) => String.t() | nil,
           required(:event_type) => String.t() | nil,
-          required(:data_type) => String.t() | nil
+          required(:data_type) => String.t() | nil,
+          optional(:session_budget_exceeded?) => true
         }
   @type terminal_outcome :: %{
           required(:kind) => atom(),
@@ -524,13 +525,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   defp terminal_failure_from_event(event) do
     event_type = Map.get(event, :event_type)
 
-    %{
+    failure = %{
       code: Map.get(event, :error_code) || event_type,
       upstream_code: Map.get(event, :upstream_error_code),
       upstream_error_param: Map.get(event, :upstream_error_param),
       event_type: event_type,
       data_type: Map.get(event, :data_type)
     }
+
+    if Map.get(event, :session_budget_exceeded?) == true,
+      do: Map.put(failure, :session_budget_exceeded?, true),
+      else: failure
   end
 
   defp visible_downstream_event?(event) do

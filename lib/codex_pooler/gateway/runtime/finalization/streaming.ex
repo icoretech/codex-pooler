@@ -229,12 +229,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         %ResponseContext{context: context, response: response} = response_context,
         opts
       ) do
+    websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+    failure = source_terminal_failure(failure, websocket_attempt_metadata)
     code = stream_failure_code(failure, context)
     health_code = stream_health_code(failure, code)
     failure = %{failure | code: code}
-    route_health = Keyword.get(opts, :route_health, fn -> record_terminal_health_failure(health_code, response.headers, context) end)
+    route_health = Keyword.get(opts, :route_health, fn -> record_terminal_failure_health(failure, health_code, response.headers, context) end)
 
-    websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
     transports = resolved_transports(response_context, websocket_attempt_metadata)
 
     result =
@@ -322,7 +323,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         stream_state \\ nil
       ) do
     websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
-    terminal_failure = Map.get(websocket_attempt_metadata, :tool_completion_failure) || terminal_failure_reason(reason)
+    terminal_failure = source_terminal_failure(Map.get(websocket_attempt_metadata, :tool_completion_failure) || terminal_failure_reason(reason), websocket_attempt_metadata)
     reason = if Map.get(websocket_attempt_metadata, :tool_completion_failure), do: {:terminal_stream_failure, terminal_failure}, else: reason
     code = error_code(reason)
     transports = resolved_transports(response_context, websocket_attempt_metadata)
@@ -366,6 +367,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     emit_terminal_outcome(result, code, transports)
     normalize_stale_generation(result)
   end
+
+  # Bridge bytes have already been normalized for the public client. Only the
+  # upstream task still knows whether the original carrier was a budget terminal.
+  defp source_terminal_failure(%{} = failure, %{session_budget_exceeded?: true}),
+    do: Map.put(failure, :session_budget_exceeded?, failure.upstream_code == "budget_reached")
+
+  defp source_terminal_failure(%{} = failure, %{session_budget_exceeded?: false}),
+    do: Map.delete(failure, :session_budget_exceeded?)
+
+  defp source_terminal_failure(failure, _metadata), do: failure
 
   defp emit_terminal_outcome(result, code, transports) do
     if AttemptSettlement.stale_generation?(result) do
@@ -691,9 +702,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       :ok
     else
       health_code = terminal_failure.upstream_code || code
-      record_terminal_health_failure(health_code, headers, context)
+      record_terminal_failure_health(terminal_failure, health_code, headers, context)
     end
   end
+
+  defp record_terminal_failure_health(%{session_budget_exceeded?: true}, _code, _headers, context),
+    do: DispatchLifecycle.neutral_completion(context)
+
+  defp record_terminal_failure_health(_failure, code, headers, context),
+    do: record_terminal_health_failure(code, headers, context)
 
   defp route_failure(%SelectedCandidateContext{} = context, code) do
     case DispatchLifecycle.failure(context, code) do
@@ -738,6 +755,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     |> maybe_put_compaction_terminal_code(diagnostic_upstream_code)
     |> maybe_put_compaction_terminal_type(failure.event_type)
     |> maybe_put_compaction_invalid_reason(failure)
+    |> Metadata.maybe_put_session_budget_terminal(failure)
     |> Map.delete("upstream_error_param")
     |> Metadata.maybe_put_upstream_error_param(%{
       upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param)
@@ -748,6 +766,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp non_first_event_terminal_attempt_metadata(metadata, failure, code) do
     metadata
     |> Metadata.maybe_put_upstream_error_param(failure)
+    |> Metadata.maybe_put_session_budget_terminal(failure)
     |> maybe_put_compaction_invalid_reason(failure)
     |> terminal_failure_attempt_metadata(code)
   end

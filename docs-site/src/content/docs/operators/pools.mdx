@@ -349,6 +349,8 @@ Serving modes are database-backed Pool configuration. There is no global environ
 
 Codex reads the whole Pool catalog as one document: a single entry it cannot decode (a required field missing or null, an unknown enumeration value, a fractional number where it expects an integer) makes it reject the whole response. With an explicit `model_catalog_url`, a failed fetch or decode clears the available catalog and invalidates its cached entries instead of substituting bundled models. For Codex clients covered by the decoder contract, the catalog is checked entry by entry and an entry that release cannot decode is left out, so the client keeps every other Pool model. The version is the one in the Codex `User-Agent`, which Codex sends on the catalog request and on every turn; the `client_version` query parameter is not read. Prereleases count by their whole version. Clients outside that contract, `/v1/models`, and clients whose `User-Agent` is not a Codex build's receive the catalog unchecked, because the decoder rules are not known to hold for them.
 
+The current verified decoder window is Codex `0.154.0` through `0.168.0`, including prereleases with a whole version inside that range. A newer client receives the unchecked catalog until its released decoder is qualified; updating the outbound client identity does not extend this window by itself.
+
 A left-out model is not advertised to that client, so it is missing from the Codex model picker. It stays routable: a request that names the model is routed and served as usual, because routing does not read the served catalog.
 
 Each omission is logged as a warning on every catalog fetch that leaves an entry out:

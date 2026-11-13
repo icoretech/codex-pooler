@@ -14,6 +14,18 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     {"null", nil}
   ]
 
+  test "public terminal classification preserves original session budget carrier evidence" do
+    for type <- ["error", "response.failed", "response.incomplete"], status <- [:absent, 400, nil, "400", 400.0, 401, 403, 429, 500], type_only? <- [false, true], fragmented? <- [false, true] do
+      error = if type_only?, do: %{"type" => "budget_reached"}, else: %{"code" => "budget_reached"}
+      terminal = %{"type" => type, "error" => error, "response" => %{"status" => if(type == "response.incomplete", do: "incomplete", else: "failed"), "error" => error}}
+      terminal = if status == :absent, do: terminal, else: Map.put(terminal, "status", status)
+      source = IO.iodata_to_binary(sse_event(type, terminal))
+      chunks = if fragmented?, do: for(<<byte <- source>>, do: <<byte>>), else: [source]
+      state = Enum.reduce(chunks, StreamProtocol.public_openai_responses_stream_state(), fn chunk, state -> elem(StreamProtocol.normalize_public_openai_responses_sse_data(chunk, state), 1) end)
+      assert Map.get(state.terminal_failure, :session_budget_exceeded?) == true == (type != "response.incomplete" and not type_only? and status in [:absent, 400])
+    end
+  end
+
   test "SSE raw tool obligations reject completed done and DONE across chunk and newline boundaries" do
     added = %{"type" => "response.output_item.added", "output_index" => 0, "item" => %{"id" => "tool_integrity", "type" => "function_call", "call_id" => "call_integrity", "name" => "lookup", "arguments" => ""}}
 

@@ -97,7 +97,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     end
   end
 
-  for family <- [:failed, :failure_coded_incomplete, :top_level_error, :ordinary_incomplete] do
+  for family <- [:failed, :failure_coded_incomplete, :top_level_error, :ordinary_incomplete, :session_budget] do
     @tag collector_family: family
     test "V2 native collector #{family} fails once without retry or replay", %{collector_family: family} do
       {event_type, terminal, {code, param}, diagnostics} = collector_terminal(family)
@@ -124,6 +124,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   defp collector_terminal(:failure_coded_incomplete), do: {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"}, {"server_error", "response.failed", "input"}}
   defp collector_terminal(:top_level_error), do: {"error", top_level_error(), {"invalid_request", "input"}, {"invalid_request", "response.failed", "input"}}
   defp collector_terminal(:ordinary_incomplete), do: {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil}, {"max_output_tokens", "response.incomplete", nil}}
+  defp collector_terminal(:session_budget), do: {"response.failed", %{"type" => "response.failed", "response" => %{"status" => "failed", "error" => %{"code" => "budget_reached", "message" => @raw_sentinel}}}, {"budget_reached", nil}, {"budget_reached", "response.failed", nil}}
 
   test "V2 full-history collector preserves a canonicalized typeless terminal failure" do
     result =
@@ -941,6 +942,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert attempt.status == "failed"
     assert attempt.network_error_code == expected_code
     refute attempt.retryable
+    if expected_code == "budget_reached", do: assert(attempt.response_metadata["session_budget_terminal"] == true)
 
     assert [turn] =
              Repo.all(

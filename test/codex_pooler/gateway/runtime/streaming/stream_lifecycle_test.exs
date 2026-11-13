@@ -2431,7 +2431,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
              upstream_websocket_connection: nil,
-             transport_failure: nil
+             transport_failure: nil,
+             session_budget_exceeded?: false
            }
   end
 

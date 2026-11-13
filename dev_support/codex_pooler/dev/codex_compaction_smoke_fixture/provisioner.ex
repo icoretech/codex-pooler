@@ -234,7 +234,9 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
             "service_tiers" => [%{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"}],
             "default_service_tier" => nil,
             "additional_speed_tiers" => ["fast"],
-            "supported_reasoning_levels" => [%{"effort" => "low", "description" => "Low reasoning effort"}],
+            # Release clients normalize configured choices to this ladder; the
+            # launch-delivery lanes deliberately request the non-default high.
+            "supported_reasoning_levels" => [%{"effort" => "low", "description" => "Low reasoning effort"}, %{"effort" => "high", "description" => "High reasoning effort"}],
             "default_reasoning_level" => "low",
             "context_window" => 128_000,
             "auto_compact_token_limit" => auto_compact_token_limit

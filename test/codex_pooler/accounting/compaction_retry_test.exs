@@ -387,6 +387,24 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     end
   end
 
+  test "a verified session budget terminal cannot create a compaction successor" do
+    {setup, predecessor, opts} = predecessor!("budget_reached", 0)
+    attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+    update!(attempt, response_metadata: %{"stream_terminal_type" => "response.failed", "session_budget_terminal" => true})
+    counts = row_counts()
+
+    assert {:error, :terminal_predecessor} = Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+    assert row_counts() == counts
+  end
+
+  test "a budget code without the verified terminal carrier keeps the prior retry policy" do
+    {setup, predecessor, opts} = predecessor!("budget_reached", 0)
+    attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+    update!(attempt, response_metadata: %{"stream_terminal_type" => "response.failed", "rejection_upstream_status" => 401})
+
+    assert {:ok, _claim} = Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+  end
+
   # The connection-bound guard refused an anchored compaction before sending
   # it, and its client got `previous_response_not_found`, which the released
   # client retries as the full request without the anchor. With owner

@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           required(:event_type) => String.t() | nil,
           required(:data_type) => String.t() | nil,
           optional(:diagnostic_upstream_code) => String.t(),
+          optional(:session_budget_exceeded?) => true,
           optional(:tool_completion_reason) => :incomplete_tool_item | :invalid_tool_correlation | :tool_tracking_overflow,
           optional(:withheld_body) => String.t()
         }

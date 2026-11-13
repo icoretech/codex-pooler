@@ -1989,10 +1989,10 @@ defmodule CodexPooler.Accounting.ClientRetry do
            transport: "websocket",
            replay_generation: 0,
            completed_at: %DateTime{},
-           response_metadata: %{"stream_terminal_type" => terminal_type}
+           response_metadata: %{"stream_terminal_type" => terminal_type} = metadata
          }
        ) do
-    if ErrorCodes.codex_compaction_terminal_retryable?(terminal_type, error),
+    if not (error == "budget_reached" and metadata["session_budget_terminal"] == true) and ErrorCodes.codex_compaction_terminal_retryable?(terminal_type, error),
       do: {:ok, :provider_terminal},
       else: {:error, :terminal_predecessor}
   end

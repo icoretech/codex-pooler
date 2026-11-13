@@ -576,11 +576,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   end
 
   defp terminal_failure(%{kind: :failed, failure: failure} = outcome) do
-    terminal_failure(
-      outcome.event_type,
-      failure.upstream_code,
-      failure.upstream_error_param
-    )
+    terminal = terminal_failure(outcome.event_type, failure.upstream_code, failure.upstream_error_param)
+
+    if Map.get(failure, :session_budget_exceeded?) == true,
+      do: Map.put(terminal, :session_budget_exceeded?, true),
+      else: terminal
   end
 
   defp terminal_failure(%{kind: :incomplete} = outcome) do
@@ -602,13 +602,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   end
 
   defp sanitize_provider_terminal_failure(failure) do
-    %{
+    sanitized = %{
       code: DiagnosticTaxonomy.identifier(failure.code),
       upstream_code: optional_identifier(failure.upstream_code),
       upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param),
       event_type: optional_identifier(failure.event_type),
       data_type: optional_identifier(failure.data_type)
     }
+
+    if Map.get(failure, :session_budget_exceeded?) == true,
+      do: Map.put(sanitized, :session_budget_exceeded?, true),
+      else: sanitized
   end
 
   defp optional_identifier(value) when is_binary(value), do: DiagnosticTaxonomy.identifier(value)

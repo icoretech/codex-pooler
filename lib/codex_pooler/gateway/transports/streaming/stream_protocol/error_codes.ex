@@ -267,6 +267,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   def health_neutral_error_code?(code) when code in @health_neutral_error_codes, do: true
   def health_neutral_error_code?(_code), do: false
 
+  # Codex 0.168.0 recognizes this session-local refusal only without a wrapped
+  # status or at exactly 400. Keep it out of the shared code vocabularies:
+  # those also decide wrapped authentication and account-refusal projections.
+  @spec session_budget_terminal?(String.t() | nil, map()) :: boolean()
+  def session_budget_terminal?(event_type, decoded) when event_type in ["error", "response.failed"] and is_map(decoded) do
+    error =
+      case decoded do
+        %{"response" => %{"error" => %{} = nested}} -> nested
+        _other -> Map.get(decoded, "error")
+      end
+
+    is_map(error) and Map.get(error, "code") == "budget_reached" and
+      case Map.fetch(decoded, "status") do
+        {:ok, status} -> status === 400
+        :error -> not Map.has_key?(decoded, "status_code") or Map.get(decoded, "status_code") === 400
+      end
+  end
+
+  def session_budget_terminal?(_event_type, _decoded), do: false
+
   @doc """
   True for a provider refusal the upstream websocket sent as its wrapped error
   frame (`{"type": "error", "status": 4xx, ...}`, whose integer `status` the
