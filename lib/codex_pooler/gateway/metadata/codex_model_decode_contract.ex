@@ -5,8 +5,9 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
 
   Codex decodes the whole `/models` response as one `ModelsResponse`
   (`codex-rs/protocol/src/openai_models.rs`); one entry that fails the
-  `ModelInfo` decode discards the whole catalog and the client falls back to
-  its bundled one with only a log line.
+  `ModelInfo` decode rejects the whole new catalog. With an explicit provider
+  catalog URL, a failed refresh may retain a valid same-identity snapshot,
+  but never substitutes bundled models.
 
   The rules below are only those that make serde fail in every client release
   inside `verified_range/0` (every tag reporting those whole versions,
@@ -27,7 +28,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   @verified_since {0, 154, 0}
   # Advance only after released-binary and complete-tag decoder verification,
   # independently of the managed client version and runtime overrides.
-  @verified_through {0, 168, 0}
+  @verified_through {0, 169, 0}
 
   @i32_range -2_147_483_648..2_147_483_647
   @i64_range -9_223_372_036_854_775_808..9_223_372_036_854_775_807

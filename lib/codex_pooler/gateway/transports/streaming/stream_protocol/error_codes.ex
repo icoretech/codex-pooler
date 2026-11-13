@@ -267,25 +267,38 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   def health_neutral_error_code?(code) when code in @health_neutral_error_codes, do: true
   def health_neutral_error_code?(_code), do: false
 
-  # Codex 0.168.0 recognizes this session-local refusal only without a wrapped
-  # status or at exactly 400. Keep it out of the shared code vocabularies:
-  # those also decide wrapped authentication and account-refusal projections.
-  @spec session_budget_terminal?(String.t() | nil, map()) :: boolean()
-  def session_budget_terminal?(event_type, decoded) when event_type in ["error", "response.failed"] and is_map(decoded) do
-    error =
-      case decoded do
-        %{"response" => %{"error" => %{} = nested}} -> nested
-        _other -> Map.get(decoded, "error")
-      end
-
-    is_map(error) and Map.get(error, "code") == "budget_reached" and
-      case Map.fetch(decoded, "status") do
-        {:ok, status} -> status === 400
-        :error -> not Map.has_key?(decoded, "status_code") or Map.get(decoded, "status_code") === 400
-      end
+  # Keep request-local refusals out of the shared code vocabularies: those also
+  # control wrapped authentication/account projections. Only the original
+  # carrier can prove this classification; normalization can invent its shape.
+  @spec request_local_terminal?(String.t() | nil, map()) :: boolean()
+  def request_local_terminal?(event_type, decoded) when is_map(decoded) do
+    with %{"code" => code} <- request_local_error(event_type, decoded),
+         true <- request_local_diagnostic_agrees?(decoded, code) do
+      request_local_terminal_status?(code, original_status(decoded))
+    else
+      _other -> false
+    end
   end
 
-  def session_budget_terminal?(_event_type, _decoded), do: false
+  def request_local_terminal?(_event_type, _decoded), do: false
+
+  defp request_local_error("error", %{"error" => %{} = error}), do: error
+  defp request_local_error("response.failed", %{"response" => %{"error" => %{} = error}}), do: error
+  defp request_local_error(_event_type, _decoded), do: nil
+
+  # Diagnostics remain nested-first. Conflicting maps cannot give authority to
+  # a different normalized failure, even if the client selects the top error.
+  defp request_local_diagnostic_agrees?(%{"response" => %{"error" => %{} = error}}, code), do: error["code"] == code
+  defp request_local_diagnostic_agrees?(%{"error" => %{} = error}, code), do: error["code"] == code
+  defp request_local_diagnostic_agrees?(_decoded, _code), do: false
+
+  defp original_status(%{"status" => status}), do: status
+  defp original_status(decoded), do: Map.get(decoded, "status_code", :absent)
+
+  defp request_local_terminal_status?(code, status) when code in ["budget_reached", "content_policy_violation"], do: status === :absent or status === 400
+  defp request_local_terminal_status?("inference_hook_denied", status), do: status === :absent or status === 403
+  defp request_local_terminal_status?(code, status) when code in ["invalid_access_program", "unsupported_access_program", "access_program_not_enabled"], do: status === :absent
+  defp request_local_terminal_status?(_code, _status), do: false
 
   @doc """
   True for a provider refusal the upstream websocket sent as its wrapped error

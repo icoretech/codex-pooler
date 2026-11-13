@@ -369,12 +369,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   end
 
   # Bridge bytes have already been normalized for the public client. Only the
-  # upstream task still knows whether the original carrier was a budget terminal.
-  defp source_terminal_failure(%{} = failure, %{session_budget_exceeded?: true}),
-    do: Map.put(failure, :session_budget_exceeded?, failure.upstream_code == "budget_reached")
+  # upstream task still knows whether the original carrier was request-local.
+  defp source_terminal_failure(%{} = failure, %{request_local_terminal?: true}),
+    do: Map.put(failure, :request_local_terminal?, true)
 
-  defp source_terminal_failure(%{} = failure, %{session_budget_exceeded?: false}),
-    do: Map.delete(failure, :session_budget_exceeded?)
+  defp source_terminal_failure(%{} = failure, %{request_local_terminal?: false}),
+    do: Map.delete(failure, :request_local_terminal?)
 
   defp source_terminal_failure(failure, _metadata), do: failure
 
@@ -706,7 +706,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     end
   end
 
-  defp record_terminal_failure_health(%{session_budget_exceeded?: true}, _code, _headers, context),
+  defp record_terminal_failure_health(%{request_local_terminal?: true}, _code, _headers, context),
     do: DispatchLifecycle.neutral_completion(context)
 
   defp record_terminal_failure_health(_failure, code, headers, context),
@@ -755,7 +755,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     |> maybe_put_compaction_terminal_code(diagnostic_upstream_code)
     |> maybe_put_compaction_terminal_type(failure.event_type)
     |> maybe_put_compaction_invalid_reason(failure)
-    |> Metadata.maybe_put_session_budget_terminal(failure)
+    |> Metadata.maybe_put_request_local_terminal(failure)
     |> Map.delete("upstream_error_param")
     |> Metadata.maybe_put_upstream_error_param(%{
       upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param)
@@ -766,7 +766,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp non_first_event_terminal_attempt_metadata(metadata, failure, code) do
     metadata
     |> Metadata.maybe_put_upstream_error_param(failure)
-    |> Metadata.maybe_put_session_budget_terminal(failure)
+    |> Metadata.maybe_put_request_local_terminal(failure)
     |> maybe_put_compaction_invalid_reason(failure)
     |> terminal_failure_attempt_metadata(code)
   end

@@ -17,10 +17,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
           direct_failure?: boolean(),
           preamble_guard?: boolean(),
           preamble_fragment?: boolean(),
-          session_budget_exceeded?: boolean() | nil,
+          request_local_terminal?: boolean() | nil,
           delivery_event: %{event_type: String.t() | nil, data_type: String.t() | nil}
         }
-  defstruct [:raw, :event_type, :decoded, :delivery_event, :session_budget_exceeded?, separator: "\n\n", direct_failure?: false, preamble_guard?: false, preamble_fragment?: false]
+  defstruct [:raw, :event_type, :decoded, :delivery_event, :request_local_terminal?, separator: "\n\n", direct_failure?: false, preamble_guard?: false, preamble_fragment?: false]
 
   @type delivery_part :: %{
           data: binary(),
@@ -55,10 +55,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
   @spec outcome(t()) :: {:ok, StreamProtocol.terminal_outcome()} | nil
   def outcome(%{decoded: decoded}) when map_size(decoded) == 0, do: nil
 
-  def outcome(%{session_budget_exceeded?: confirmed?} = block) when is_boolean(confirmed?) do
+  def outcome(%{request_local_terminal?: confirmed?} = block) when is_boolean(confirmed?) do
     case StreamProtocol.terminal_outcome(block.event_type, block.decoded) do
       {:ok, %{failure: failure} = outcome} ->
-        failure = if confirmed?, do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        failure = if confirmed?, do: Map.put(failure, :request_local_terminal?, true), else: Map.delete(failure, :request_local_terminal?)
         {:ok, %{outcome | failure: failure}}
 
       outcome ->
@@ -85,7 +85,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock do
           raw: "",
           event_type: "response.failed",
           decoded: changed,
-          session_budget_exceeded?: ErrorCodes.session_budget_terminal?(block.event_type, block.decoded),
+          request_local_terminal?: ErrorCodes.request_local_terminal?(block.event_type, block.decoded),
           delivery_event: %{event_type: "response.failed", data_type: decoded_type(changed)}
         }
       else

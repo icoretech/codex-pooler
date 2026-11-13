@@ -120,6 +120,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     end
   end
 
+  for code <- ~w(inference_hook_denied content_policy_violation invalid_access_program unsupported_access_program access_program_not_enabled), type <- ["error", "response.failed"] do
+    test "V2 collector #{type} #{code} is final and health-neutral" do
+      code = unquote(code)
+      type = unquote(type)
+      error = %{"code" => code, "message" => @raw_sentinel}
+      terminal = if type == "error", do: %{"type" => type, "error" => error}, else: %{"type" => type, "response" => %{"status" => "failed", "error" => error}}
+      result = execute_failure(FakeUpstream.sse_stream([native_compaction_item_event(), {type, terminal}], done: false))
+      assert result.error == nil
+      assert_provider_failure_frame(result, "response.failed", code, nil)
+      assert_failure_contract(result, code, diagnostics: {code, "response.failed", nil}, health: :neutral)
+    end
+  end
+
   defp collector_terminal(:failed), do: {"response.failed", response_failed(), {"context_length_exceeded", "input"}, {"context_length_exceeded", "response.failed", "input"}}
   defp collector_terminal(:failure_coded_incomplete), do: {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"}, {"server_error", "response.failed", "input"}}
   defp collector_terminal(:top_level_error), do: {"error", top_level_error(), {"invalid_request", "input"}, {"invalid_request", "response.failed", "input"}}

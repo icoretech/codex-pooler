@@ -872,7 +872,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
     case StreamProtocol.terminal_outcome("response.failed", classification) do
       {:ok, %{failure: failure} = outcome} ->
-        failure = if ErrorCodes.session_budget_terminal?("response.failed", decoded), do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        failure = if ErrorCodes.request_local_terminal?("response.failed", decoded), do: Map.put(failure, :request_local_terminal?, true), else: Map.delete(failure, :request_local_terminal?)
         {:ok, %{outcome | failure: failure}}
 
       outcome ->
@@ -885,11 +885,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       generic = decoded |> normalize_top_level_error() |> normalize_response_error()
       StreamProtocol.terminal_outcome("error", generic)
     else
-      {:session_budget_terminal, ErrorCodes.session_budget_terminal?("error", decoded)}
+      {:request_local_terminal, ErrorCodes.request_local_terminal?("error", decoded)}
     end
   end
 
-  defp source_terminal_outcome("response.incomplete", _decoded), do: {:session_budget_terminal, false}
+  defp source_terminal_outcome("response.incomplete", _decoded), do: {:request_local_terminal, false}
 
   defp source_terminal_outcome(_event_type, _decoded), do: nil
 
@@ -1224,10 +1224,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
-  defp resolve_source_terminal_outcome({:session_budget_terminal, confirmed?}, type, decoded) do
+  defp resolve_source_terminal_outcome({:request_local_terminal, confirmed?}, type, decoded) do
     case StreamProtocol.terminal_outcome(type, decoded) do
       {:ok, %{failure: failure} = outcome} ->
-        failure = if confirmed?, do: Map.put(failure, :session_budget_exceeded?, true), else: Map.delete(failure, :session_budget_exceeded?)
+        failure = if confirmed?, do: Map.put(failure, :request_local_terminal?, true), else: Map.delete(failure, :request_local_terminal?)
         {:ok, %{outcome | failure: failure}}
 
       outcome ->

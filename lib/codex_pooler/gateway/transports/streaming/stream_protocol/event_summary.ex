@@ -13,7 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary d
           required(:data_type) => String.t() | nil,
           required(:explicit_error?) => boolean(),
           required(:incomplete_reason) => String.t() | nil,
-          optional(:session_budget_exceeded?) => true
+          optional(:request_local_terminal?) => true
         }
 
   @spec from_block(binary()) :: t()
@@ -34,8 +34,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary d
       incomplete_reason: incomplete_reason(decoded)
     }
 
-    if event.upstream_error_code == "budget_reached" and ErrorCodes.session_budget_terminal?(event_type || decoded["type"], decoded),
-      do: Map.put(event, :session_budget_exceeded?, true),
+    if ErrorCodes.request_local_terminal?(event_type || decoded["type"], decoded),
+      do: Map.put(event, :request_local_terminal?, true),
       else: event
   end
 

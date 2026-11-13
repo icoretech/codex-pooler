@@ -8,13 +8,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlockTest do
 
   @endpoint "/backend-api/codex/responses"
 
-  test "canonical native terminal delivery keeps original session budget evidence" do
-    for type <- ["error", "response.failed", "response.incomplete"], type_only? <- [false, true] do
-      error = if type_only?, do: %{"type" => "budget_reached"}, else: %{"code" => "budget_reached"}
+  test "canonical native terminal delivery keeps original request-local evidence" do
+    for code <- ~w(budget_reached inference_hook_denied content_policy_violation invalid_access_program unsupported_access_program access_program_not_enabled), type <- ["error", "response.failed", "response.incomplete"], type_only? <- [false, true] do
+      error = if type_only?, do: %{"type" => code}, else: %{"code" => code}
       source = event(type, %{"type" => type, "error" => error, "response" => %{"error" => error}})
       {wire, block} = source |> NativeSSEBlock.parse() |> NativeSSEBlock.normalize(false)
       assert %{parts: [%{outcome: {:ok, %{failure: failure}}}]} = NativeSSEBlock.delivery([{wire, block}])
-      assert Map.get(failure, :session_budget_exceeded?) == true == (type != "response.incomplete" and not type_only?)
+      assert Map.get(failure, :request_local_terminal?) == true == (type != "response.incomplete" and not type_only?)
     end
   end
 

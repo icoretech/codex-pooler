@@ -578,8 +578,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp terminal_failure(%{kind: :failed, failure: failure} = outcome) do
     terminal = terminal_failure(outcome.event_type, failure.upstream_code, failure.upstream_error_param)
 
-    if Map.get(failure, :session_budget_exceeded?) == true,
-      do: Map.put(terminal, :session_budget_exceeded?, true),
+    if Map.get(failure, :request_local_terminal?) == true,
+      do: Map.put(terminal, :request_local_terminal?, true),
       else: terminal
   end
 
@@ -610,8 +610,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
       data_type: optional_identifier(failure.data_type)
     }
 
-    if Map.get(failure, :session_budget_exceeded?) == true,
-      do: Map.put(sanitized, :session_budget_exceeded?, true),
+    if Map.get(failure, :request_local_terminal?) == true,
+      do: Map.put(sanitized, :request_local_terminal?, true),
       else: sanitized
   end
 

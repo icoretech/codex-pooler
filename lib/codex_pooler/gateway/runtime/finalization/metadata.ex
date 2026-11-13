@@ -580,7 +580,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.put("stream_terminal_type", failure.event_type)
     |> Map.put("stream_error_code", failure.code)
     |> maybe_put_quota_rejection_proof(failure)
-    |> maybe_put_session_budget_terminal(failure)
+    |> maybe_put_request_local_terminal(failure)
     |> Map.merge(StreamTiming.failure_metadata(failure))
   end
 
@@ -589,11 +589,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp maybe_put_quota_rejection_proof(metadata, _failure), do: metadata
 
-  @spec maybe_put_session_budget_terminal(map(), term()) :: map()
-  def maybe_put_session_budget_terminal(metadata, %{session_budget_exceeded?: true}),
+  @spec maybe_put_request_local_terminal(map(), term()) :: map()
+  def maybe_put_request_local_terminal(metadata, %{request_local_terminal?: true, upstream_code: "budget_reached"}),
     do: Map.put(metadata, "session_budget_terminal", true)
 
-  def maybe_put_session_budget_terminal(metadata, _failure), do: metadata
+  def maybe_put_request_local_terminal(metadata, %{request_local_terminal?: true}),
+    do: Map.put(metadata, "request_policy_terminal", true)
+
+  def maybe_put_request_local_terminal(metadata, _failure), do: metadata
 
   @spec merge_stream_state_metadata(map(), term()) :: map()
   def merge_stream_state_metadata(metadata, state) when is_map(metadata) do

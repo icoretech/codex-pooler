@@ -87,7 +87,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           optional(:response_usage) => map(),
           optional(:tool_completion_failure) => StreamProtocol.terminal_failure(),
           optional(:provider_credits_admission) => CodexPooler.Gateway.Transports.ProviderCreditsAdmission.Receipt.t() | nil,
-          required(:session_budget_exceeded?) => boolean(),
+          required(:request_local_terminal?) => boolean(),
           upstream_websocket_connection: map() | nil,
           transport_failure: map() | nil
         }
@@ -167,7 +167,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           model_usage: nil,
           response_usage: nil,
           tool_completion_failure: nil,
-          session_budget_exceeded?: false,
+          request_local_terminal?: false,
           transport_failure: nil,
           provider_credits_admission: nil,
           policy_denial: nil,
@@ -881,7 +881,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           model_usage: model_usage(result),
           response_usage: Map.get(result, :response_usage),
           tool_completion_failure: tool_completion_failure(result),
-          session_budget_exceeded?: Map.get(result, :session_budget_exceeded?) == true,
+          request_local_terminal?: Map.get(result, :request_local_terminal?) == true,
           transport_failure: nonempty_map(transport_failure) || state.transport_failure,
           provider_credits_admission: Map.get(result, :provider_credits_admission),
           policy_denial: if(Map.get(result, :reason) == :provider_credits_policy_denied, do: result)
@@ -1052,7 +1052,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       upstream_websocket_connection: state.upstream_websocket_connection,
       transport_failure: state.transport_failure,
       provider_credits_admission: state.provider_credits_admission,
-      session_budget_exceeded?: state.session_budget_exceeded?
+      request_local_terminal?: state.request_local_terminal?
     }
     |> then(fn metadata -> if state.model_usage, do: Map.put(metadata, :model_usage, state.model_usage), else: metadata end)
     |> then(fn metadata -> if state.response_usage, do: Map.put(metadata, :response_usage, state.response_usage), else: metadata end)
@@ -1060,7 +1060,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   end
 
   defp empty_attempt_metadata do
-    %{upstream_websocket_connection: nil, transport_failure: nil, session_budget_exceeded?: false}
+    %{upstream_websocket_connection: nil, transport_failure: nil, request_local_terminal?: false}
   end
 
   defp safe_connection(connection) when is_map(connection) do

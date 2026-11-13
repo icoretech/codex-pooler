@@ -37,7 +37,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
           required(:upstream_error_param) => String.t() | nil,
           required(:event_type) => String.t() | nil,
           required(:data_type) => String.t() | nil,
-          optional(:session_budget_exceeded?) => true
+          optional(:request_local_terminal?) => true
         }
   @type terminal_outcome :: %{
           required(:kind) => atom(),
@@ -533,8 +533,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
       data_type: Map.get(event, :data_type)
     }
 
-    if Map.get(event, :session_budget_exceeded?) == true,
-      do: Map.put(failure, :session_budget_exceeded?, true),
+    if Map.get(event, :request_local_terminal?) == true,
+      do: Map.put(failure, :request_local_terminal?, true),
       else: failure
   end
 

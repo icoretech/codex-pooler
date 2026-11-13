@@ -397,6 +397,17 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     assert row_counts() == counts
   end
 
+  for code <- ~w(inference_hook_denied content_policy_violation invalid_access_program unsupported_access_program access_program_not_enabled) do
+    test "verified #{code} cannot create a native compaction successor" do
+      {setup, predecessor, opts} = predecessor!(unquote(code), 0)
+      attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+      update!(attempt, response_metadata: %{"stream_terminal_type" => "response.failed", "request_policy_terminal" => true})
+      counts = row_counts()
+      assert {:error, :terminal_predecessor} = Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+      assert row_counts() == counts
+    end
+  end
+
   test "a budget code without the verified terminal carrier keeps the prior retry policy" do
     {setup, predecessor, opts} = predecessor!("budget_reached", 0)
     attempt = Repo.get_by!(Attempt, request_id: predecessor.id)

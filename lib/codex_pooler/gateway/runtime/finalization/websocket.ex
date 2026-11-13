@@ -887,13 +887,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       Map.get(finalization, :upstream_error_code) ||
         StreamProtocol.terminal_error_code(body, terminal)
 
-    session_budget_failure =
-      if upstream_code == "budget_reached" and Map.get(finalization, :session_budget_exceeded?) == true,
-        do: %{session_budget_exceeded?: true}
+    request_local_failure =
+      if Map.get(finalization, :request_local_terminal?) == true,
+        do: %{request_local_terminal?: true, upstream_code: upstream_code}
 
     health_code =
       cond do
-        not is_nil(session_budget_failure) -> :neutral
+        not is_nil(request_local_failure) -> :neutral
         ErrorCodes.unknown_provider_refusal?(provider_refusal_status(body), upstream_code) -> :neutral
         Streaming.health_neutral_terminal_failure?(upstream_code, headers) -> upstream_code
         true -> StreamProtocol.terminal_error_code(body, terminal)
@@ -917,7 +917,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       )
       |> collected_compaction_diagnostics(finalization)
       |> Map.merge(provider_rejection_metadata(body, context.request_options))
-      |> Metadata.maybe_put_session_budget_terminal(session_budget_failure)
+      |> Metadata.maybe_put_request_local_terminal(request_local_failure)
 
     settle_terminal_failure(
       context,

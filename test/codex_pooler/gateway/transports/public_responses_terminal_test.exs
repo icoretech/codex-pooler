@@ -22,7 +22,18 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       source = IO.iodata_to_binary(sse_event(type, terminal))
       chunks = if fragmented?, do: for(<<byte <- source>>, do: <<byte>>), else: [source]
       state = Enum.reduce(chunks, StreamProtocol.public_openai_responses_stream_state(), fn chunk, state -> elem(StreamProtocol.normalize_public_openai_responses_sse_data(chunk, state), 1) end)
-      assert Map.get(state.terminal_failure, :session_budget_exceeded?) == true == (type != "response.incomplete" and not type_only? and status in [:absent, 400])
+      assert Map.get(state.terminal_failure, :request_local_terminal?) == true == (type != "response.incomplete" and not type_only? and status in [:absent, 400])
+    end
+  end
+
+  test "public policy evidence survives normalization without promoting incomplete, type-only or wrong-status sources" do
+    for code <- ~w(inference_hook_denied content_policy_violation invalid_access_program unsupported_access_program access_program_not_enabled), type <- ["error", "response.failed", "response.incomplete"], status <- [:absent, 401, 500], type_only? <- [false, true] do
+      error = if type_only?, do: %{"type" => code}, else: %{"code" => code}
+      terminal = %{"type" => type, "error" => error, "response" => %{"status" => if(type == "response.incomplete", do: "incomplete", else: "failed"), "error" => error}}
+      terminal = if status == :absent, do: terminal, else: Map.put(terminal, "status", status)
+      source = IO.iodata_to_binary(sse_event(type, terminal))
+      state = Enum.reduce(for(<<byte <- source>>, do: <<byte>>), StreamProtocol.public_openai_responses_stream_state(), fn chunk, state -> elem(StreamProtocol.normalize_public_openai_responses_sse_data(chunk, state), 1) end)
+      assert Map.get(state.terminal_failure, :request_local_terminal?) == true == (type != "response.incomplete" and not type_only? and status == :absent)
     end
   end
 

@@ -202,29 +202,52 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       error = %{"code" => "budget_reached", "message" => "synthetic budget"}
 
       for type <- ["error", "response.failed"], status <- [:absent, 400] do
-        event = %{"type" => type, "error" => error}
+        event = if type == "error", do: %{"type" => type, "error" => error}, else: %{"type" => type, "response" => %{"error" => error}}
         event = if status == :absent, do: event, else: Map.put(event, "status", status)
-        assert {:ok, %{session_budget_exceeded?: true}} = StreamProtocol.terminal_failure(CodexPooler.JSON.encode!(event))
+        assert {:ok, %{request_local_terminal?: true}} = StreamProtocol.terminal_failure(CodexPooler.JSON.encode!(event))
       end
 
       for status <- [nil, false, "400", 400.0, 401, 403, 429, 500] do
         event = %{"type" => "error", "status" => status, "status_code" => 400, "error" => error}
         assert {:ok, failure} = StreamProtocol.terminal_failure(CodexPooler.JSON.encode!(event))
-        refute Map.has_key?(failure, :session_budget_exceeded?)
+        refute Map.has_key?(failure, :request_local_terminal?)
       end
 
-      refute StreamProtocol.ErrorCodes.session_budget_terminal?("response.incomplete", %{"error" => error})
-      refute StreamProtocol.ErrorCodes.session_budget_terminal?("error", %{"status_code" => nil, "error" => error})
-      assert StreamProtocol.ErrorCodes.session_budget_terminal?("error", %{"status_code" => 400, "error" => error})
-      refute StreamProtocol.ErrorCodes.session_budget_terminal?("error", %{"error" => %{"type" => "budget_reached"}})
-      refute StreamProtocol.ErrorCodes.session_budget_terminal?("error", %{"code" => "budget_reached"})
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("response.incomplete", %{"error" => error})
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("error", %{"status_code" => nil, "error" => error})
+      assert StreamProtocol.ErrorCodes.request_local_terminal?("error", %{"status_code" => 400, "error" => error})
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("error", %{"error" => %{"type" => "budget_reached"}})
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("error", %{"code" => "budget_reached"})
 
       for nested <- [%{"type" => "budget_reached"}, %{"type" => "insufficient_quota"}, %{"code" => "insufficient_quota"}] do
-        refute StreamProtocol.ErrorCodes.session_budget_terminal?("response.failed", %{"response" => %{"error" => nested}, "error" => error})
+        refute StreamProtocol.ErrorCodes.request_local_terminal?("response.failed", %{"response" => %{"error" => nested}, "error" => error})
       end
 
       refute StreamProtocol.ErrorCodes.codex_response_failed_classified_code?("budget_reached")
       refute StreamProtocol.ErrorCodes.health_neutral_error_code?("budget_reached")
+    end
+
+    test "request policy authority is explicit, carrier-scoped and status-scoped" do
+      for {code, allowed_status} <- [{"content_policy_violation", 400}, {"inference_hook_denied", 403}, {"invalid_access_program", :absent}, {"unsupported_access_program", :absent}, {"access_program_not_enabled", :absent}], type <- ["error", "response.failed"] do
+        error = %{"code" => code}
+        event = if type == "error", do: %{"type" => type, "error" => error}, else: %{"type" => type, "response" => %{"error" => error}}
+
+        for status <- [:absent, nil, false, "400", 400.0, 400, 401, 403, 429, 500] do
+          source = if status == :absent, do: event, else: Map.put(event, "status", status)
+          assert StreamProtocol.ErrorCodes.request_local_terminal?(type, source) == (status === :absent or status === allowed_status)
+        end
+
+        refute StreamProtocol.ErrorCodes.request_local_terminal?("response.incomplete", event)
+        refute StreamProtocol.ErrorCodes.request_local_terminal?(type, %{"type" => type, "error" => %{"type" => code}})
+      end
+
+      error = %{"code" => "inference_hook_denied"}
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("response.failed", %{"error" => error, "response" => %{"error" => %{"code" => "server_error"}}})
+      refute StreamProtocol.ErrorCodes.request_local_terminal?("error", %{"error" => %{"code" => "server_error"}, "response" => %{"error" => error}})
+
+      for response <- [nil, false, "scalar", []] do
+        refute StreamProtocol.ErrorCodes.request_local_terminal?("response.failed", %{"error" => error, "response" => response})
+      end
     end
 
     test "classifies workspace credit depletion response.incomplete as failed" do
