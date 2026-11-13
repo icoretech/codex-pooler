@@ -264,6 +264,8 @@ If one account runs out of quota while your Pool still has capacity, Codex can r
 
 If Codex repeatedly enters a broken login/account state with a Pooler provider, advanced users can change the provider to `requires_openai_auth = false`. That makes Codex treat the provider as gateway-only and use only `env_key` for runtime auth, but Codex does not appear signed in for that provider and account-dependent features, including mobile/app-server features, may be unavailable. With a custom provider name, gateway-only mode also hides Codex's standalone image-generation tool; keep `requires_openai_auth = true` when you need it.
 
+The bundled ImageGen Python script has a separate SDK connection: set `OPENAI_BASE_URL` to the Pooler's `/v1` URL and `OPENAI_API_KEY` to your Pool API key in the process that launches it. The chat provider's `base_url` does not set those variables. See [ImageGen script setup](/clients/openai-compatible/#codex-imagegen-script); no additional Pooler skill or JSON configuration is required.
+
 <a id="route-boundaries"></a>
 
 ## Compatibility notes

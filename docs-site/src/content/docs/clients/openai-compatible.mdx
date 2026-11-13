@@ -597,6 +597,33 @@ GPT Image 2.6 support on `/v1/images` covers the options above. Its public OpenA
 
 Both native Images responses and translated Responses tool results are checked for base64-encoded PNG, JPEG, or WebP structure before success is recorded. If any final image result is missing or malformed, the entire response fails with `502 image_generation_failed`; valid images are not returned as a partial success. Result URLs are not downloaded or relabeled as base64.
 
+#### Codex ImageGen script
+
+The ImageGen Python script bundled with Codex uses the OpenAI SDK. Configure its connection in the environment that launches the script; the chat provider's `base_url` in Codex's `config.toml` does not configure this SDK client.
+
+With your Pool API key already available as `CODEX_POOLER_API_KEY`, set:
+
+**macOS / Linux / WSL**
+
+```bash
+export OPENAI_BASE_URL="https://codex-pooler.example.com/v1"
+export OPENAI_API_KEY="${CODEX_POOLER_API_KEY:?Set CODEX_POOLER_API_KEY first}"
+```
+
+**Windows PowerShell**
+
+```powershell
+if (-not $env:CODEX_POOLER_API_KEY) { throw "Set CODEX_POOLER_API_KEY first" }
+$env:OPENAI_BASE_URL = "https://codex-pooler.example.com/v1"
+$env:OPENAI_API_KEY = $env:CODEX_POOLER_API_KEY
+```
+
+For a local instance, use `http://localhost:4000/v1`. These variables select the endpoint and credentials for SDK clients launched from that environment. If Codex launches the script, make them available to that Codex process too; an unrelated terminal does not update a running desktop app.
+
+Use the existing script's `generate` or `edit` command with `--model gpt-image-2.6-flare` and its default PNG output. `--output-format png` is also accepted. Keep `n=1`; output compression, other output formats and configurable input fidelity for GPT Image 2/2.6 are outside this adapter's supported subset. Choose a new output filename before generating, because an existing file can be detected only after the provider has completed the request.
+
+No additional Pooler skill, plugin, wrapper or JSON configuration is required for this script. This setup does not enable Codex's native image tool or change approval prompts; those remain client concerns. See [Codex provider configuration](/clients/codex-cli-desktop/#custom-provider-name) for native tool availability.
+
 ### Audio transcriptions
 
 The Pool's `Allow Audio Transcription` setting must be enabled (the default). Disabling it rejects transcription requests with `403 audio_transcription_disabled` before the upload is parsed or sent upstream.
