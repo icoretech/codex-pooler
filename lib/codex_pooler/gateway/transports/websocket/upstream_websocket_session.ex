@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   require Logger
 
   alias CodexPooler.Accounting.ClientRetry
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Runtime.NativeResponseSteering
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
@@ -18,6 +19,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesToolCompletion
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
@@ -3016,6 +3018,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         terminal_discriminator
       )
 
+    collected_text = public_owner_accounting_text(collected_text, mapped_decoded, receive_state.message_mapper)
+
     receive_state =
       raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
@@ -3080,6 +3084,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp observe_steer_control(receive_state, _decoded, _topology), do: receive_state
+
+  # The owner forwards the diagnostic to the final public sink, but retains
+  # the same generic terminal it used before this presentation-only opt-in.
+  # In particular, raw 403/error extras must not become new rejection metadata.
+  defp public_owner_accounting_text(text, %{} = decoded, mapper) do
+    if public_openai_responses_mapper?(mapper) and DeploymentPolicyDenial.frame?(decoded) and not PublicResponses.provider_rejection_frame?(decoded) and not PublicResponses.provider_usage_limit_frame?(decoded) do
+      generic = PublicResponses.normalize_terminal_errors(Map.get(decoded, "type"), Map.drop(decoded, ["status", "status_code"]))
+      {normalized, _decoded} = PublicResponses.normalize_json_message(CodexPooler.JSON.encode!(generic), generic)
+      normalized
+    else
+      text
+    end
+  end
+
+  defp public_owner_accounting_text(text, _decoded, _mapper), do: text
 
   defp collected_text(
          %ReceiveState{delivery: %Delivery{mode: :collect_full_history}},

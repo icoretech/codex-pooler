@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   import Plug.Conn, only: [put_status: 2, put_resp_content_type: 2, send_resp: 3]
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
@@ -56,7 +57,8 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
            body,
            success_normalizer,
            input_file_upstream_404?: Map.get(result, :public_input_file_upstream_404?) === true,
-           source_code: Map.get(result, :public_stream_startup_error_code)
+           source_code: Map.get(result, :public_stream_startup_error_code),
+           deployment_policy_denial?: conn.request_path == "/v1/responses"
          ) do
       {:ok, {:text, text}} ->
         conn
@@ -113,6 +115,12 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   defp do_send(conn, {:ok, %{body: _body} = result}, _success_normalizer, _opts) do
     GatewayHelpers.send_gateway_result(conn, result)
+  end
+
+  defp do_send(%{request_path: "/v1/responses"} = conn, {:error, %{public_deployment_policy_denial?: true}}, _success_normalizer, _opts) do
+    conn
+    |> put_status(403)
+    |> json(%{"error" => DeploymentPolicyDenial.error()})
   end
 
   defp do_send(conn, {:error, %{status: status} = reason}, _success_normalizer, _opts) do

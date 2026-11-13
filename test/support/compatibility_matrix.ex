@@ -4233,6 +4233,44 @@ defmodule CodexPooler.CompatibilityMatrix do
         server_class_message: "upstream request failed",
         server_class_type: "server_error",
         server_class_code: ["safe_upstream_code", "upstream_error"],
+        deployment_policy_denial: %{
+          required_status: 403,
+          diagnostic: %{"error" => "middleware_denied", "reason_code" => "request_credential_denied", "layer" => "l7"},
+          diagnostic_match: "all_three_values_exact_no_string_code_or_substring_match",
+          diagnostic_extra_fields: "accepted_within_bound_then_discarded",
+          diagnostic_sources: %{http_json: "top_level_decoded_object", sse_and_websocket: "decoded_diagnostic_object"},
+          public_error: %{
+            code: "model_request_policy_denied",
+            type: "invalid_request_error",
+            message: "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings."
+          },
+          surfaces: %{
+            responses_http_json: %{route: "POST /v1/responses", status: 403, includes_stream_true_before_sse_starts: true},
+            responses_collected_sse_json: %{route: "POST /v1/responses", status: 403, stream: false},
+            responses_sse_terminal: %{route: "POST /v1/responses", status: 200, events: ["response.failed", "error"]},
+            responses_websocket: %{route: "GET /v1/responses", wrapped_refusal: %{status: 403, event: "error"}, failed_terminal: %{event: "response.failed"}}
+          },
+          bounds: %{
+            http_json_body_max_bytes: 8_192,
+            sse_diagnostic_object_max_bytes: 8_192,
+            websocket_diagnostic_object_max_bytes: 8_192,
+            inclusive: true,
+            includes_extra_diagnostic_fields: true
+          },
+          nonmatches: "wrong_status_incomplete_malformed_or_over_bound_keep_generic_redaction",
+          ordinary_403: "unchanged_generic_redaction",
+          unchanged_surfaces: ["native_backend", "chat_completions"],
+          routing_retries_and_settlement: "unchanged",
+          accounting_codes: "unchanged",
+          provider_messages_identifiers_and_siblings: "excluded",
+          evidence: %{
+            kind: "synthetic_contract",
+            source: "OpenClaw usage-limit-error.ts",
+            revision: "9211ea8272d0b774bbcfc2d8db7767442b3b98bc",
+            live_deployment_denial_observed: false,
+            native_client_behavior_guarantee: false
+          }
+        },
         responses_terminal_code_locations: [
           "response.error.code",
           "top_level_error.code_when_emitted"

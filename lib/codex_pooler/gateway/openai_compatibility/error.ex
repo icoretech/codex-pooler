@@ -5,7 +5,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Error do
           required(:status) => pos_integer(),
           required(:code) => String.t(),
           required(:message) => String.t(),
-          optional(:param) => String.t() | nil
+          optional(:param) => String.t() | nil,
+          optional(:public_deployment_policy_denial?) => true
         }
 
   @spec reason(pos_integer(), String.t() | atom(), String.t(), String.t() | nil) :: reason()

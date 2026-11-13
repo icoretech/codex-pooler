@@ -9,8 +9,22 @@ defmodule CodexPoolerWeb.V1.PolicyDenialErrorTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Repo
   alias CodexPoolerWeb.PublicGatewayResult
+
+  test "collected deployment denial projection is restricted to the Responses route" do
+    diagnostic = %{"error" => "middleware_denied", "reason_code" => "request_credential_denied", "layer" => "l7"}
+    terminal = %{"type" => "response.failed", "status" => 403, "response" => %{"status" => "failed", "error" => diagnostic}}
+    source = "event: response.failed\ndata: " <> CodexPooler.JSON.encode!(terminal) <> "\n\n"
+    assert {:error, reason} = Responses.response_from_sse(source)
+
+    response = build_conn(:post, "/v1/chat/completions") |> PublicGatewayResult.send({:error, reason}, &Function.identity/1)
+    assert json_response(response, 502) == %{"error" => %{"code" => "upstream_error", "message" => "upstream request failed", "type" => "server_error"}}
+
+    response = build_conn(:post, "/v1/responses") |> PublicGatewayResult.send({:error, reason}, &Function.identity/1)
+    assert %{"error" => %{"code" => "model_request_policy_denied", "type" => "invalid_request_error"}} = json_response(response, 403)
+  end
 
   # A Pooler-authored policy decision used to reach `/v1` as
   # `403 server_error "upstream request failed"`, blaming the upstream for a

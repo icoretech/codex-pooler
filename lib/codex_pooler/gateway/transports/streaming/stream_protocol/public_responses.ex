@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses do
   @moduledoc false
 
-  alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
+  alias CodexPooler.Gateway.OpenAICompatibility.{DeploymentPolicyDenial, PublicResponse, Responses}
   alias CodexPooler.Gateway.Runtime.Finalization.ProviderUsageLimit
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
@@ -136,7 +136,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize_owner_json_message(binary(), map()) :: {binary(), map()}
   def normalize_owner_json_message(data, %{} = decoded) when is_binary(data) do
-    if provider_rejection_frame?(decoded) or provider_usage_limit_frame?(decoded),
+    if provider_rejection_frame?(decoded) or provider_usage_limit_frame?(decoded) or DeploymentPolicyDenial.frame?(decoded),
       do: {data, decoded},
       else: normalize_json_message(data, decoded)
   end
@@ -766,7 +766,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         _value -> %{}
       end
 
-    status = wrapped_throttle_status(decoded)
+    status = wrapped_error_status(decoded)
 
     event = %{
       "type" => "response.failed",
@@ -782,8 +782,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     maybe_put_failed_top_level_error(event, decoded, status)
   end
 
+  def normalize_terminal_errors("error", %{} = decoded) do
+    if DeploymentPolicyDenial.frame?(Map.put(decoded, "type", "error")),
+      do: decoded |> Map.take(["sequence_number"]) |> Map.merge(%{"type" => "error", "status" => 403, "error" => DeploymentPolicyDenial.error()}),
+      else: decoded |> normalize_top_level_error() |> normalize_response_error()
+  end
+
   def normalize_terminal_errors(type, %{} = decoded)
-      when type in ["response.completed", "response.incomplete", "error"] do
+      when type in ["response.completed", "response.incomplete"] do
     decoded
     |> normalize_top_level_error()
     |> normalize_response_error()
@@ -840,7 +846,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
     if public_types_agree?(event_type, clean_string(Map.get(decoded, "type"))) do
       {_change, decoded} = suppress_incomplete_provider_error_types(decoded)
-      normalize_terminal_errors(event_type || clean_string(Map.get(decoded, "type")), decoded)
+
+      if DeploymentPolicyDenial.frame?(Map.put(decoded, "type", event_type || clean_string(Map.get(decoded, "type")))),
+        do: decoded,
+        else: normalize_terminal_errors(event_type || clean_string(Map.get(decoded, "type")), decoded)
     else
       decoded
     end
@@ -859,6 +868,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       |> maybe_put_source_nested_error(nested_error)
 
     StreamProtocol.terminal_outcome("response.failed", classification)
+  end
+
+  defp source_terminal_outcome("error", %{} = decoded) do
+    if DeploymentPolicyDenial.frame?(Map.put(decoded, "type", "error")) do
+      generic = decoded |> normalize_top_level_error() |> normalize_response_error()
+      StreamProtocol.terminal_outcome("error", generic)
+    end
   end
 
   defp source_terminal_outcome(_event_type, _decoded), do: nil
@@ -916,11 +932,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   # row 254-82; HTTP since row 254-72). The masked frame drops the status, and
   # the public websocket normalizes the owner's frame a second time, so a
   # redacted throttle error keeps its type there (`PublicResponse.redacted_throttle_error?/1`).
-  defp wrapped_throttle_status(decoded) do
-    if Map.get(decoded, "status", Map.get(decoded, "status_code")) == 429, do: 429
+  defp wrapped_error_status(decoded), do: Map.get(decoded, "status", Map.get(decoded, "status_code"))
+
+  defp normalize_terminal_error(error, status) when is_map(error) and is_integer(status) do
+    opts = [status: status, deployment_policy_denial?: true]
+    public_status = if status == 429, do: 429, else: PublicResponse.terminal_error_status(error, opts)
+    PublicResponse.normalize_error(error, Keyword.put(opts, :status, public_status))
   end
 
-  defp normalize_terminal_error(error, 429) when is_map(error), do: PublicResponse.normalize_error(error, status: 429)
   defp normalize_terminal_error(error, _status), do: normalize_terminal_error(error)
 
   defp normalize_terminal_error(%{} = error) do

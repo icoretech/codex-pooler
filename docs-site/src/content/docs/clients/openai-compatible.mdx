@@ -855,7 +855,7 @@ When the Codex backend returns a genuine terminal error, Codex Pooler preserves 
 the value is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`. Other code values are redacted to `upstream_error`.
 A surviving code may be a Codex-backend value that is not part of the OpenAI platform `ResponseError` enum.
 
-Upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
+Except for the narrow exceptions below, upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
 `server_error`, except that an upstream refusal answered with a `4xx` status other than `401`, `403`, `404` and
 `429` (for example `400` or `422`) is typed `invalid_request_error`, the class its status names, and an upstream
 `429` is typed `rate_limit_error`, on HTTP and in the `response.failed` event a `/v1/responses` websocket receives
@@ -864,26 +864,29 @@ retried.
 Clients must therefore treat `error.code` as an open string: handle the values they understand and
 keep an unknown-code fallback rather than validating against the platform enum.
 
+A deployment-policy exception applies only to public `/v1/responses` failures with explicit upstream status `403` and a decoded diagnostic object with `error` equal to `middleware_denied`, `reason_code` equal to `request_credential_denied`, and `layer` equal to `l7`. All three values must match exactly; a string code or substring match is insufficient. Additional diagnostic fields are permitted but discarded. The complete HTTP JSON body must be at most 8,192 bytes; for SSE and websocket failures, the complete diagnostic object has the same inclusive bound, including any extra fields. The public error contains only code `model_request_policy_denied`, type `invalid_request_error`, and the fixed message: "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings."
+
+An immediate HTTP rejection remains `403`, including a streaming request rejected before SSE starts. A failed SSE terminal collected for a non-streaming JSON response receives the same fixed `403` error. An already-started SSE response keeps HTTP `200` and its terminal event kind (`response.failed` or `error`) with the fixed error. On the narrow `GET /v1/responses` websocket, a wrapped upstream refusal receives an `error` event with status `403`; an upstream `response.failed` retains that terminal kind with the fixed error. Ordinary `403` failures and wrong-status, incomplete, malformed, or oversized diagnostics keep the generic redaction. Provider messages, identifiers, and other diagnostic fields are not exposed. Native backend routes and Chat Completions are unchanged by this exception.
+
 Public relays construct each `response.failed` envelope from a named-field projection. Unknown event, response,
 error, and usage siblings are excluded. The response identifier is retained only when it is a valid `resp_`
 identifier; otherwise it becomes `resp_failed`. Usage is either `null` or a bounded projection of the declared token
 counters. Content-bearing response fields are empty or `null`: `output` and `tools` are empty arrays, `output_text`
 is an empty string, and `instructions`, `metadata`, `temperature`, and `top_p` are `null`.
 
-Top-level and nested errors are sanitized independently and are never copied between locations. A safe code remains
+In generic terminal redaction, top-level and nested errors are sanitized independently and are never copied between locations. A safe code remains
 unchanged at its original location, while every invalid code becomes `upstream_error`; message and type remain the
-fixed `upstream request failed` and `server_error` values.
+fixed `upstream request failed` and `server_error` values unless a documented exception applies.
 
-One narrow exception applies to `misalignment_policy_violation`. An eligible
+Another narrow exception applies to `misalignment_policy_violation`. An eligible
 direct `400` or `403`, or an exact terminal SSE or websocket failure, is
 health-neutral and non-retryable. Public clients receive the exact code,
 `invalid_request_error`, and the nonblank provider message when available, or a
 fixed safe fallback when it is blank. The error never includes a provider
 `param`, body, or sibling fields. Durable accounting and logs retain only the
-exact code, fixed accounting text, and bounded facts. Every other provider error
-continues to use the generic redaction above.
+exact code, fixed accounting text, and bounded facts. Other provider errors use the generic redaction unless another documented exception applies.
 
-A second narrow exception covers upstream parameter validation. When upstream
+Another narrow exception covers upstream parameter validation. When upstream
 rejects a `POST /v1/responses` or `POST /v1/chat/completions` request before
 any stream starts with HTTP `400`, type `invalid_request_error`, and one of the
 codes `unsupported_value`, `invalid_value`, `unsupported_parameter`,

@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   require Logger
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -220,6 +221,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
     %Req.Response{status: status, headers: response_headers, body: body}
     |> Req.Response.put_private(:upstream_websocket_connection, connection)
     |> Req.Response.put_private(:transport_failure, TransportFailureReason.sanitize_continuation_generation_guard_metadata(metadata.transport_failure))
+    |> DeploymentPolicyDenial.mark_bridge_rejection()
   end
 
   defp put_bridged_options(%PreparedContext{context: context} = prepared_context, options) do

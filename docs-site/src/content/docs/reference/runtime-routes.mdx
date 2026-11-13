@@ -864,7 +864,7 @@ Unknown codes, unavailable-verification errors and malformed signals keep
 ordinary credential handling. This exception applies to HTTP, not websocket
 authentication failures.
 
-On `/v1`, such a failure keeps the redacted error (`upstream request failed`,
+On `/v1`, unless a documented narrow exception applies, such a failure keeps the redacted error (`upstream request failed`,
 code `upstream_status` or the upstream code, no param) on HTTP and in the
 `GET /v1/responses` websocket `error` event. Its `type` follows the status it is
 answered with: `invalid_request_error` for a refused `4xx` such as `400` or
@@ -875,6 +875,10 @@ upstream `404`, which `/v1` answers as `502`. A `429` or a `5xx` the upstream
 websocket sends reaches a `GET /v1/responses` websocket client as the masked
 `response.failed` event rather than an `error` event; its error is typed the
 same way, `rate_limit_error` for the `429` and `server_error` for the `5xx`.
+
+Public Responses has a narrow deployment-policy exception: an explicit upstream status `403` plus a decoded diagnostic object with the exact values `error=middleware_denied`, `reason_code=request_credential_denied`, and `layer=l7`. All three values are required; a string code or substring match does not qualify. Additional diagnostic fields are accepted within the bound but discarded. The complete HTTP JSON body is bounded to 8,192 bytes; complete SSE and websocket diagnostic objects have the same inclusive bound, including extra fields. The public error has exactly code `model_request_policy_denied`, type `invalid_request_error`, and message "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings."
+
+On `POST /v1/responses`, an immediate rejection returns HTTP `403`, including a streaming request rejected before SSE starts. A failed SSE terminal collected for non-streaming JSON receives the same fixed `403` error. An already-started SSE response remains HTTP `200` and keeps its terminal event kind (`response.failed` or `error`) with the fixed error. On the narrow `GET /v1/responses` websocket, a wrapped upstream refusal sends an `error` event with status `403`; an upstream `response.failed` retains that terminal kind with the fixed error. Wrong status, incomplete or malformed diagnostics, over-bound input, and ordinary `403` failures retain generic redaction. No provider message, identifier, or other diagnostic field is relayed. This is only a public Responses error projection: native backend and Chat Completions behavior, routing, retries, accounting codes, and settlement are unchanged.
 
 A native `/backend-api/codex/responses` websocket turn treats network failures
 as an HTTP request does. Before its request is written to the upstream

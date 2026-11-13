@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
@@ -70,7 +71,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {data, source_decoded, rejected?} = guard_success(data, source_decoded, tracker)
 
     {_data, decoded} =
-      if rejected? or pending_source_error?(source_decoded, tracker),
+      if rejected? or pending_source_error?(source_decoded, tracker) or DeploymentPolicyDenial.frame?(source_decoded),
         do: {data, source_decoded},
         else: PublicResponses.normalize_json_message(data, source_decoded)
 

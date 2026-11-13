@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   """
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.OpenAICompatibility.NativeImageResult
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Payloads.RequestOptions.{OpenAICompatibility, ResetProbe}
@@ -695,13 +696,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             {:error, usage_limit_error}
 
           :unknown ->
-            unanswered_failure_result(response, context, body, error_code, validation_rejection, opts)
+            public_upstream_status_failure(response, context, body, error_code, validation_rejection, opts)
         end
 
       {:error, gateway_error} ->
         {:error, gateway_error}
     end
   end
+
+  defp public_upstream_status_failure(response, context, body, error_code, validation_rejection, opts) do
+    case public_deployment_policy_denial(response, context.request_options) do
+      nil -> unanswered_failure_result(response, context, body, error_code, validation_rejection, opts)
+      public_error -> {:ok, %{status: 403, headers: [{"content-type", "application/json"}], body: %{"error" => public_error}}}
+    end
+  end
+
+  # Classify only after ordinary settlement. Drained rejection bytes stay
+  # private; this Responses-only answer contains no provider fields or prose.
+  defp public_deployment_policy_denial(response, %RequestOptions{openai_compatibility: %{source_endpoint: "/v1/responses"}, transport: %{upstream_endpoint: "/backend-api/codex/responses"}}) do
+    if DeploymentPolicyDenial.bridge_rejection?(response) or DeploymentPolicyDenial.matches?(response.status, Metadata.rejection_body(response)),
+      do: DeploymentPolicyDenial.error()
+  end
+
+  defp public_deployment_policy_denial(_response, _request_options), do: nil
 
   # A bridged `/v1` anchor refused by the connection-bound guard reaches here
   # as the provider's refusal of the same request, but nothing reached the

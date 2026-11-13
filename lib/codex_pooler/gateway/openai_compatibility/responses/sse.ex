@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -91,11 +92,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
            normalized["code"] || "upstream_error",
            normalized["message"] || "upstream request failed",
            normalized["param"]
-         )}
+         )
+         |> maybe_mark_deployment_policy_denial(event, error)}
 
       _other ->
         {:error, Error.reason(502, failure_code(failure), "upstream request failed")}
     end
+  end
+
+  # The collector settles from the existing reason before the public renderer
+  # applies this projection. Do not feed the public code/status into accounting.
+  defp maybe_mark_deployment_policy_denial(reason, event, error) do
+    status = Map.get(event, "status", Map.get(event, "status_code"))
+
+    if DeploymentPolicyDenial.matches?(status, error),
+      do: Map.put(reason, :public_deployment_policy_denial?, true),
+      else: reason
   end
 
   defp failure_code(%{code: code}) when is_binary(code), do: code

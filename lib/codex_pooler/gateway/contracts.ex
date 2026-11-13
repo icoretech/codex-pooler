@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Contracts do
           optional(:internal_reason) => String.t(),
           optional(:compaction_invalid_reason) => String.t(),
           optional(:public_compaction_error?) => boolean(),
+          optional(:public_deployment_policy_denial?) => true,
           optional(:retryable) => boolean(),
           optional(:requires_new_upstream_session) => boolean(),
           optional(:recovery) => recovery_contract(),

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @moduledoc false
 
   alias CodexPooler.Gateway.ErrorClassification
+  alias CodexPooler.Gateway.OpenAICompatibility.DeploymentPolicyDenial
   alias CodexPooler.Gateway.Runtime.Finalization.FlexUnavailable
   alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
@@ -9,13 +10,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @type normalized_body :: map() | {:text, String.t()}
   @type success_normalizer :: (map() -> normalized_body())
   @type error_status :: integer() | String.t() | nil
-  @type terminal_error_status :: 400 | 404 | 502
+  @type terminal_error_status :: 400 | 403 | 404 | 502
   @type error_origin :: :local_validation
   @type error_opts :: [
           status: error_status(),
           origin: error_origin(),
           input_file_upstream_404?: boolean(),
-          source_code: String.t() | nil
+          source_code: String.t() | nil,
+          deployment_policy_denial?: boolean()
         ]
 
   @public_recovery_error_tokens ~w(pinned_continuation_reauth_required pinned_continuation_unavailable)
@@ -43,10 +45,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
         {:ok, normalize_success.(decoded)}
 
       {:ok, %{"error" => %{} = error}} when status >= 400 ->
-        {:ok, %{"error" => normalize_error(error, Keyword.put(opts, :status, status))}}
+        error_opts = opts |> Keyword.put(:status, status) |> Keyword.delete(:deployment_policy_denial?)
+        {:ok, %{"error" => normalize_error(error, error_opts)}}
 
       {:ok, decoded} when is_map(decoded) and status >= 400 ->
-        {:ok, normalize_error_body(status, opts)}
+        {:ok, normalize_decoded_rejection(status, body, opts)}
 
       _error ->
         if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
@@ -55,6 +58,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   def normalize_raw_body(status, _body, _normalize_success, opts) do
     if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
+  end
+
+  defp normalize_decoded_rejection(status, body, opts) do
+    if Keyword.get(opts, :deployment_policy_denial?) == true and DeploymentPolicyDenial.matches?(status, body),
+      do: %{"error" => DeploymentPolicyDenial.error()},
+      else: normalize_error_body(status, opts)
   end
 
   @doc """
@@ -77,7 +86,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     public_error =
       case ValidationRejection.fetch_ordinary_route(response) do
         %{} = rejection -> rejection |> ValidationRejection.for_client(:unknown) |> validation_rejection_error()
-        nil -> normalize_error(error, status: status, source_code: "upstream_status")
+        nil -> normalize_error(error, status: status, source_code: "upstream_status", deployment_policy_denial?: true)
       end
 
     %{"type" => "error", "status" => public_http_error_status(status), "error" => public_error}
@@ -107,6 +116,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
     cond do
       input_file_capability_error?(status, opts) -> input_file_capability_error()
+      deployment_policy_denial?(error, status, opts) -> DeploymentPolicyDenial.error()
       field(error, "code") == "flex_unavailable" -> FlexUnavailable.error()
       misalignment_policy_violation?(error) -> misalignment_policy_violation_error(error)
       overload_error?(error) -> overload_error()
@@ -123,6 +133,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
     cond do
       input_file_capability_error?(status, opts) -> 404
+      deployment_policy_denial?(error, status, opts) -> 403
       local_validation_error?(error, status, opts) -> 400
       true -> 502
     end
@@ -180,6 +191,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   # Atom key only: a decoded provider or client body can never carry it.
   defp pooler_policy_denial?(error), do: Map.get(error, :pooler_policy) == true
+
+  defp deployment_policy_denial?(error, status, opts) do
+    Keyword.get(opts, :deployment_policy_denial?) == true and
+      Keyword.get(opts, :status) === 403 and DeploymentPolicyDenial.matches?(status, error)
+  end
 
   defp input_file_capability_error?(404, opts),
     do: Keyword.get(opts, :input_file_upstream_404?) === true
