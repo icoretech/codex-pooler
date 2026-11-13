@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.15.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.0...codex-pooler-v0.15.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **images:** accept explicit PNG output format ([64dcaa4](https://github.com/icoretech/codex-pooler/commit/64dcaa430d51fb7963fa38bf2e2ec50eceddb70c))
+* preserve Codex 0.169 request-policy terminal authority ([3c9bd8a](https://github.com/icoretech/codex-pooler/commit/3c9bd8a4fde71486b6007a2f8c6b051bc5c58ac2))
+* qualify Codex 0.168 session-budget terminal handling ([7accce8](https://github.com/icoretech/codex-pooler/commit/7accce87262b916b97fe09ddc707257df4ebc74d))
+* **responses:** preserve explicit deployment policy denials ([f3b3d57](https://github.com/icoretech/codex-pooler/commit/f3b3d57fb42bf14dd11f09152f7de39f0449fb50))
+
+
+### Dependencies
+
+* update ghcr.io/icoretech/codex-docker docker tag to v0.169.0 ([#609](https://github.com/icoretech/codex-pooler/issues/609)) ([c55a3ef](https://github.com/icoretech/codex-pooler/commit/c55a3ef909e1ad383547627cb3987ed13b7f0ace))
+* update helm release codex-pooler to v0.15.9 ([#629](https://github.com/icoretech/codex-pooler/issues/629)) ([74a7e37](https://github.com/icoretech/codex-pooler/commit/74a7e3746d7ea8f45aa7fe59e94e1c5691df9cac))
+
 ## [0.15.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.14.9...codex-pooler-v0.15.0) (2026-11-12)
 
 
