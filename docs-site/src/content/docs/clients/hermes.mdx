@@ -125,9 +125,13 @@ Either way the request log then shows `tier default` next to `priority requested
 
 When every account in a Pool has used up its quota, Codex Pooler answers `429` with `usage_limit_reached`, the reset time in `resets_at`, and `Retry-After`. Hermes treats this as a rate limit: before each retry it waits for `Retry-After`, up to 600 seconds, and then ends the turn with the reset time. With the default of three attempts, a turn can wait twice while the Pool cannot recover. `agent.api_max_retries: 2` keeps it to one wait.
 
+For example, `429 usage_limit_reached` with `Retry-After: 7200` means the earliest known quota reset is about two hours away. Hermes' 600-second wait cap does not shorten that deadline. Treat this as reset-bound exhaustion, not ordinary short-term throttling: choosing another model or configuring a fallback helps only if it reaches independent available capacity, not the same exhausted accounts. See [Pool-wide quota exhaustion](/clients/openai-compatible/#when-every-upstream-account-is-exhausted) for the reset fields and retry advice.
+
+An operator can check [saved-reset inventory and status](/operators/upstreams/#saved-resets) on the upstream account cards or cockpit. An eligible saved reset, redeemed manually or through enabled [automatic redemption](/operators/upstreams/#automatic-redemption), can restore quota before the advertised natural reset. A saved-reset count or an accepted redemption alone does not prove recovery; check the resulting quota confirmation and routing status before retrying.
+
 A retryable `503`, for example while an account's circuit is open, also carries `Retry-After`. Once a turn's own retries are spent, Hermes retries server errors through a recovery ladder of up to five cycles by default. `agent.auto_recovery_cycles: 1` keeps that to one extra cycle.
 
-If you have a second Pool API key, or another Codex Pooler instance, you can list it under `fallback_providers`. Hermes switches to it once the retries on the primary provider are spent. A fallback key in the same Pool does not help when that Pool is out of quota, because it uses the same accounts.
+Use `fallback_providers` for another Pool or provider with independent available capacity. Hermes switches to it once the retries on the primary provider are spent. A different model or API key in the same exhausted Pool does not restore quota. A different Pool or Codex Pooler instance is useful only if its eligible upstream accounts have capacity: Pools and instances can share the same exhausted accounts. In this example, `SECOND_POOL_API_KEY` must belong to the independently provisioned fallback Pool, and that Pool must serve the selected fallback model.
 
 ```yaml title="config.yaml" frame="code"
 providers:
