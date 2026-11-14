@@ -1,7 +1,7 @@
 FROM node:26.13.1-bookworm-slim AS node
 FROM elixir:1.20.5-otp-29-slim
 
-ARG HELM_VERSION=v4.3.1
+ARG HELM_VERSION=v4.3.2
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git libsctp1 lsof procps python3 ripgrep tar tzdata docker-cli docker-compose \
