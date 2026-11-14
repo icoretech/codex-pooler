@@ -1,8 +1,8 @@
 {
   "dependencies": {
-    "apexcharts": "8.8.1",
+    "apexcharts": "8.8.2",
     "cally": "0.9.2",
-    "daisyui": "5.7.50",
+    "daisyui": "5.8.0",
     "topbar": "3.0.1",
     "uqr": "0.1.3"
   }

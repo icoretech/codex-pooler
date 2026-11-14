@@ -57,6 +57,8 @@ Also exercise the changed consumer boundary: browser forms for UI dependencies, 
 
 For chart-library updates, exercise the real operator charts with synthetic data: render, replace the series, switch interval/cumulative mode, resize at the final viewport, and remount the page. Check the rendered SVG bounds and browser errors; helper tests and a successful bundle alone do not certify the browser integration.
 
+For CI tool updates, build `scripts/ci/Dockerfile` and execute the changed tool inside the resulting image. Verify its reported version and the image's runtime prerequisites; a host-installed CLI does not qualify the CI download, checksum verification, or architecture selection.
+
 ## Diagnostic output
 
 Successful tests keep measurement output quiet. Query and frame budget failures include their measured values in the assertion. To print additional replay-cleanup measurements explicitly:

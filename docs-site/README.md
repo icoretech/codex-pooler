@@ -40,6 +40,8 @@ The post-build SEO check verifies sitemap coverage, canonical URLs, index/noinde
 
 The landing page carries one structured-data graph (Organization, WebSite, SoftwareApplication) that every docs page points at by `@id`. The docs use the same variable Roboto Condensed WOFF2 files as the landing page, from `@fontsource-variable/roboto-condensed`.
 
+The project explicitly uses Astro's `scopedStyleStrategy: "where"` to preserve low-specificity component styles and class-based scope propagation across the landing page and docs. Starlight respects this setting rather than forcing its own strategy; keep it explicit so a dependency update cannot silently switch the site to higher-specificity attribute scopes. The custom sidebar still reveals the current page on a fresh visit and when the mobile menu opens, and the page actions stay outside the search index.
+
 ## Social card rendering
 
 Docs social cards are rendered at build time by `src/og/card.ts`: the bundled Roboto Condensed 400 and 700 TTF files supply the glyph outlines, and sharp rasterizes the complete SVG into a 1200×630 JPEG. The renderer does not depend on system fonts or Pango.

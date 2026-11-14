@@ -35,6 +35,8 @@ const finalizeMarkdownAssets = () => ({
 
 export default defineConfig({
   site: siteOrigin,
+  // Keep the low-specificity scopes and component class propagation used by the landing page.
+  scopedStyleStrategy: "where",
   redirects: DOCS_REDIRECTS,
   integrations: [
     // Only canonical content belongs in the sitemap, never legacy redirect stubs.
