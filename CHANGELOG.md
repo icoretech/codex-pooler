@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.1...codex-pooler-v0.15.2) (2026-11-14)
+
+
+### Dependencies
+
+* refresh frontend, documentation and SDK dependencies ([4d61fe2](https://github.com/icoretech/codex-pooler/commit/4d61fe2b994f06ae01ec75dc6abcac059e786748))
+* update dependency @astrojs/starlight to v0.42.11 ([#630](https://github.com/icoretech/codex-pooler/issues/630)) ([3736f62](https://github.com/icoretech/codex-pooler/commit/3736f62c42fb49257d31373dfe1636e8d45ae48d))
+* update dependency sobelow to v0.19.0 ([#633](https://github.com/icoretech/codex-pooler/issues/633)) ([bf93f4f](https://github.com/icoretech/codex-pooler/commit/bf93f4fdd137c9535ebf1115f012f4471899e6af))
+* update helm release codex-pooler to v0.16.0 ([#634](https://github.com/icoretech/codex-pooler/issues/634)) ([e40161e](https://github.com/icoretech/codex-pooler/commit/e40161e352e5170358789bb768330cf24b9ddd51))
+
 ## [0.15.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.0...codex-pooler-v0.15.1) (2026-11-13)
 
 
