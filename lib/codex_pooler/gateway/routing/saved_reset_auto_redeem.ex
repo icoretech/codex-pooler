@@ -197,7 +197,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     |> Enum.filter(fn {candidate, _index} ->
       # Short-circuit: the window read runs only for a candidate the policy and bank accept,
       # and only an `UpstreamIdentity` candidate can pass `redeemable_candidate?/2`.
-      redeemable_candidate?(candidate, timestamp) and resettable_candidate?(candidate, refresh_plan, timestamp)
+      not usage_capped_target?(candidate, refresh_plan) and redeemable_candidate?(candidate, timestamp) and resettable_candidate?(candidate, refresh_plan, timestamp)
     end)
     |> ExpiryPriority.order(timestamp)
     |> List.first()
@@ -210,6 +210,14 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     end
   end
 
+  # An account at its operator usage cap is never a redemption target, even
+  # while a running turn finishes on it: its banked resets belong to the owner
+  # the cap protects (`CandidateEligibility.UsageCap`, findings#593).
+  defp usage_capped_target?({_assignment, %UpstreamIdentity{id: identity_id}}, %{route_state: %RouteState{} = route_state}),
+    do: RouteState.usage_capped_identity?(route_state, identity_id)
+
+  defp usage_capped_target?(_candidate, _refresh_plan), do: false
+
   defp resettable_candidate?({_assignment, identity}, refresh_plan, timestamp),
     do: AutoEligibility.target_windows_resettable?(identity, quota_scope(refresh_plan), timestamp)
 
@@ -217,6 +225,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     candidates = candidate_order(refresh_plan)
 
     candidates
+    |> Enum.reject(&usage_capped_target?(&1, refresh_plan))
     |> Enum.find_value(&early_redeemable_candidate(&1, candidates, timestamp))
     |> case do
       {{assignment, identity}, trigger} ->

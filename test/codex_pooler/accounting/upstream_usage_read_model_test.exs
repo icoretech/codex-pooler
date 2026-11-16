@@ -257,6 +257,30 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
     end
   end
 
+  test "public usage speaks for an uncapped account, and for a capped one only when every account is capped" do
+    pool = pool_fixture()
+    %{identity: capped} = upstream_assignment_fixture(pool, %{plan_label: "pro", plan_family: "pro"})
+    %{identity: open} = upstream_assignment_fixture(pool, %{plan_label: "plus", plan_family: "plus"})
+    put_weekly_quota(capped, "85")
+    put_weekly_quota(open, "95")
+    capped |> Ecto.Changeset.change(usage_cap_percent: 80) |> CodexPooler.Repo.update!()
+
+    assert {:ok, %{plan_type: "plus", rate_limit: %{secondary_window: %{used_percent: 95}}}} = Accounting.build_codex_usage_for_pool(pool)
+
+    open |> Ecto.Changeset.change(usage_cap_percent: 90) |> CodexPooler.Repo.update!()
+    assert {:ok, %{plan_type: "pro"}} = Accounting.build_codex_usage_for_pool(pool)
+  end
+
+  defp put_weekly_quota(identity, used_percent) do
+    now = DateTime.utc_now()
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{window_kind: "primary", window_minutes: 300, used_percent: Decimal.new("5"), reset_at: DateTime.add(now, 300, :second), source: "test", freshness_state: "fresh"},
+               %{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, used_percent: Decimal.new(used_percent), reset_at: DateTime.add(now, 3, :day), source: "test", freshness_state: "fresh"}
+             ])
+  end
+
   defp put_fresh_account_quota(identity) do
     assert {:ok, _windows} =
              QuotaWindows.upsert_quota_windows(identity, [

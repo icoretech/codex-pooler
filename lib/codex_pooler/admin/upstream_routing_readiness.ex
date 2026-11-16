@@ -11,6 +11,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
 
@@ -33,6 +34,14 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
     reason: "One or more model and route lanes are recovering; unaffected routes may remain available.",
     reason_code: "circuit_recovering",
     recovery_action: "Wait for circuit recovery to complete before relying on affected routes."
+  }
+  @usage_cap_projection %{
+    state: "usage_cap_reached",
+    label: "Held by usage cap",
+    tone: :warning,
+    reason: "This account reached its operator usage cap and takes no new work until its quota window resets or the cap is raised.",
+    reason_code: "usage_cap_reached",
+    recovery_action: "Raise or clear the usage cap to give this account new work."
   }
   @blocked_lifecycle_projections %{
     "refresh_failed" => {
@@ -171,6 +180,20 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
   end
 
   def with_circuit_visibility(base_readiness, _circuit_summary), do: base_readiness
+
+  @doc """
+  Shows an account held by its operator usage cap as held, the way a paused
+  account shows as paused: it takes no new work although its quota and
+  circuits would admit it. `routing_ready_now?` is unchanged.
+  """
+  @spec with_usage_cap_visibility(t(), RoutingQuotaSnapshot.t() | nil) :: t()
+  def with_usage_cap_visibility(%{routing_ready_now?: true} = readiness, snapshot) do
+    if QuotaWindows.routing_usage_cap(snapshot),
+      do: Map.merge(readiness, @usage_cap_projection),
+      else: readiness
+  end
+
+  def with_usage_cap_visibility(readiness, _snapshot), do: readiness
 
   @spec base_projection(UpstreamIdentity.status() | nil, boolean(), UpstreamQuotaReadiness.t()) ::
           projection_base()

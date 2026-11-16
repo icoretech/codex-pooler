@@ -43,6 +43,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     field :last_successful_refresh_at, :utc_datetime_usec
     field :last_successful_sync_at, :utc_datetime_usec
     field :allow_provider_credits, :boolean, default: true
+    field :usage_cap_percent, :integer
     field :saved_reset_auto_redeem_enabled, :boolean, default: false
     field :saved_reset_auto_redeem_min_blocked_minutes, :integer, default: 60
     field :saved_reset_auto_redeem_keep_credits, :integer, default: 0
@@ -167,6 +168,57 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
 
   defp put_provider_credits_policy(changeset, _value),
     do: add_error(changeset, :allow_provider_credits, "must be a boolean")
+
+  @doc """
+  Changes only the identity-wide usage cap.
+
+  The cap is a whole percentage from 1 to 99 of the account's long window
+  (weekly, or 30-day on a plan without a weekly window), or
+  `nil` (also given as a blank string) for no cap. The key is required even
+  when unchanged; any other key is refused, and generic identity changesets
+  cannot overwrite the cap.
+  """
+  @spec usage_cap_policy_changeset(t(), attrs()) :: Ecto.Changeset.t()
+  def usage_cap_policy_changeset(%__MODULE__{} = identity, attrs) when is_map(attrs) do
+    changeset = change(identity)
+
+    case attrs do
+      %{usage_cap_percent: value} when map_size(attrs) == 1 ->
+        put_usage_cap_policy(changeset, value)
+
+      %{"usage_cap_percent" => value} when map_size(attrs) == 1 ->
+        put_usage_cap_policy(changeset, value)
+
+      attrs when map_size(attrs) == 0 ->
+        add_error(changeset, :usage_cap_percent, "is required")
+
+      _attrs ->
+        add_error(changeset, :usage_cap_percent, "only the usage cap may be changed")
+    end
+  end
+
+  defp put_usage_cap_policy(changeset, nil), do: put_change(changeset, :usage_cap_percent, nil)
+
+  defp put_usage_cap_policy(changeset, value) when is_integer(value) and value >= 1 and value <= 99,
+    do: put_change(changeset, :usage_cap_percent, value)
+
+  defp put_usage_cap_policy(changeset, value) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        put_usage_cap_policy(changeset, nil)
+
+      trimmed ->
+        case Integer.parse(trimmed) do
+          {integer, ""} -> put_usage_cap_policy(changeset, integer)
+          _invalid -> usage_cap_range_error(changeset)
+        end
+    end
+  end
+
+  defp put_usage_cap_policy(changeset, _value), do: usage_cap_range_error(changeset)
+
+  defp usage_cap_range_error(changeset),
+    do: add_error(changeset, :usage_cap_percent, "must be a whole number from 1 to 99, or blank for no cap")
 
   @doc """
   The provider-routable `chatgpt-account-id` scope for a stored account id, or `nil`.

@@ -19,7 +19,8 @@ defmodule CodexPooler.Upstreams do
     SavedResetPolicy,
     SavedResetRedemptionEnqueue,
     SecretStore,
-    TokenRefreshEnqueue
+    TokenRefreshEnqueue,
+    UsageCapPolicy
   }
 
   alias CodexPooler.Upstreams.Lifecycle.{AccountDeletion, AccountLifecycle, IdentityLifecycle}
@@ -277,6 +278,12 @@ defmodule CodexPooler.Upstreams do
           ProviderCreditsPolicy.update_result()
   defdelegate update_provider_credits_policy_for_scope(scope, identity_or_id, attrs),
     to: ProviderCreditsPolicy,
+    as: :update_for_scope
+
+  @spec update_usage_cap_policy_for_scope(Scope.t(), identity_ref(), map()) ::
+          UsageCapPolicy.update_result()
+  defdelegate update_usage_cap_policy_for_scope(scope, identity_or_id, attrs),
+    to: UsageCapPolicy,
     as: :update_for_scope
 
   @spec provider_credits_decision(CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot.t(), map() | keyword()) :: ProviderCreditsPolicy.decision()

@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.ProviderCreditsComponents
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.UsageCapComponents
   alias CodexPoolerWeb.RelativeTime
   alias Phoenix.HTML.Form
 
@@ -47,6 +48,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :saved_reset_policy_form, :any, required: true
   attr :editing_provider_credits_policy, :map, default: nil
   attr :provider_credits_policy_form, :any, default: nil
+  attr :editing_usage_cap_policy, :map, default: nil
+  attr :usage_cap_policy_form, :any, default: nil
   attr :confirming_saved_reset_redemption, :map, default: nil
   attr :account_panel_views, :map, required: true
   attr :upstream_accounts, :list, required: true
@@ -107,6 +110,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         datetime_preferences={@datetime_preferences}
       />
       <.provider_credits_policy_dialog account={@editing_provider_credits_policy} account_label={@editing_provider_credits_policy && @editing_provider_credits_policy.label} form={@provider_credits_policy_form} />
+      <.usage_cap_policy_dialog account={@editing_usage_cap_policy} account_label={@editing_usage_cap_policy && @editing_usage_cap_policy.label} form={@usage_cap_policy_form} />
 
       <section id="upstream-account-surface" class="grid min-w-0 gap-4">
         <.upstream_filter_form
@@ -630,6 +634,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_delete_account">{gettext("close")}</button>
+      </form>
+    </dialog>
+    """
+  end
+
+  attr :account, :map, default: nil
+  attr :form, :any, default: nil
+
+  attr :account_label, :string, required: true
+
+  @spec usage_cap_policy_dialog(map()) :: Phoenix.LiveView.Rendered.t()
+  def usage_cap_policy_dialog(assigns) do
+    ~H"""
+    <dialog :if={@account && @form} id="usage-cap-policy-dialog" class="modal modal-bottom overflow-x-hidden sm:modal-middle" aria-labelledby="usage-cap-policy-dialog-title usage-cap-policy-dialog-eyebrow" aria-modal="true" phx-window-keydown="cancel_usage_cap_policy" phx-key="escape" phx-remove={JS.pop_focus()} open>
+      <.focus_wrap id="usage-cap-policy-dialog-panel" class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl" phx-mounted={JS.focus(to: "#usage-cap-percent")}>
+        <div class="border-b border-base-300 px-5 py-4">
+          <p id="usage-cap-policy-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">{gettext("Upstream account · %{label}", label: @account_label)}</p>
+          <h2 id="usage-cap-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">{gettext("Usage cap")}</h2>
+        </div>
+        <div class="grid gap-4 p-5">
+          <UsageCapComponents.usage_cap_policy_form form={@form} />
+        </div>
+        <AdminComponents.dialog_footer id="usage-cap-policy-dialog-footer">
+          <:actions>
+            <AdminComponents.action_button id="usage-cap-policy-cancel" label={gettext("Cancel")} variant={:ghost} phx-click="cancel_usage_cap_policy" />
+            <AdminComponents.action_button id="usage-cap-save" label={gettext("Save policy")} icon="hero-check" type="submit" form="usage-cap-policy-form" variant={:primary} phx-disable-with={gettext("Saving…")} />
+          </:actions>
+        </AdminComponents.dialog_footer>
+      </.focus_wrap>
+      <form method="dialog" class="modal-backdrop">
+        <button id="usage-cap-policy-backdrop" type="button" phx-click="cancel_usage_cap_policy">{gettext("close")}</button>
       </form>
     </dialog>
     """

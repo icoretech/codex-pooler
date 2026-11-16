@@ -47,21 +47,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         <span data-role="upstream-limit-title" class="min-w-0 truncate font-medium text-base-content">
           {@limit.label}
         </span>
-        <span class={[quota_limit_percent_class(@limit), "shrink-0"]}>{@limit.percent_label}</span>
+        <span class="flex shrink-0 items-center gap-2">
+          <span :if={usage_capped?(@limit)} id={"#{@id}-usage-cap-reached"} data-role="usage-cap-reached" class="badge badge-warning badge-sm">{gettext("Usage cap reached")}</span>
+          <span class={quota_limit_percent_class(@limit)}>{@limit.percent_label}</span>
+        </span>
       </div>
-      <progress
-        id={"#{@id}-progress"}
-        data-role="upstream-limit-progress"
-        data-evidence-state={quota_limit_evidence_state(@limit)}
-        data-meter-state={quota_limit_meter_state(@limit)}
-        aria-label={quota_limit_progress_label(@limit)}
-        aria-describedby={if measurement_pending?(@limit), do: pending_description_id(@id)}
-        class={quota_limit_progress_class(@limit)}
-        value={if is_nil(@limit.percent), do: nil, else: @limit.percent_value}
-        max="100"
-      >
-        {@limit.percent_label}
-      </progress>
+      <div class="relative">
+        <progress
+          id={"#{@id}-progress"}
+          data-role="upstream-limit-progress"
+          data-evidence-state={quota_limit_evidence_state(@limit)}
+          data-meter-state={quota_limit_meter_state(@limit)}
+          aria-label={quota_limit_progress_label(@limit)}
+          aria-describedby={if measurement_pending?(@limit), do: pending_description_id(@id)}
+          class={quota_limit_progress_class(@limit)}
+          value={if is_nil(@limit.percent), do: nil, else: @limit.percent_value}
+          max="100"
+        >
+          {@limit.percent_label}
+        </progress>
+        <span
+          :if={usage_cap_percent(@limit)}
+          id={"#{@id}-usage-cap-marker"}
+          data-role="usage-cap-marker"
+          data-cap-percent={usage_cap_percent(@limit)}
+          class="pointer-events-none absolute -inset-y-0.5 w-0.5 -translate-x-1/2 rounded-full bg-base-content"
+          style={"left: #{100 - usage_cap_percent(@limit)}%"}
+          role="img"
+          aria-label={usage_cap_label(@limit)}
+          title={usage_cap_label(@limit)}
+        ></span>
+      </div>
       <div
         :if={quota_limit_details?(@limit)}
         class="flex items-center justify-between gap-3 text-[11px] text-base-content/60"
@@ -108,6 +124,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
     />
     """
   end
+
+  defp usage_cap_percent(%{usage_cap_percent: cap}) when is_integer(cap) and cap in 1..99, do: cap
+  defp usage_cap_percent(_limit), do: nil
+
+  defp usage_capped?(%{usage_capped?: true}), do: true
+  defp usage_capped?(_limit), do: false
+
+  defp usage_cap_label(limit), do: gettext("Usage cap: %{percent}%", percent: usage_cap_percent(limit))
 
   defp countdown_at(%{reset_semantics: :anchored, reset_at: %DateTime{} = reset_at}),
     do: DateTime.to_iso8601(reset_at)

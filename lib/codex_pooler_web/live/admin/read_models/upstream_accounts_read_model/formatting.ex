@@ -142,6 +142,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting do
     |> maybe_update_quota_readiness()
   end
 
+  defp readiness_text("Held by usage cap"), do: gettext("Held by usage cap")
+  defp readiness_text("This account reached its operator usage cap and takes no new work until its quota window resets or the cap is raised."), do: gettext("This account reached its operator usage cap and takes no new work until its quota window resets or the cap is raised.")
+  defp readiness_text("Raise or clear the usage cap to give this account new work."), do: gettext("Raise or clear the usage cap to give this account new work.")
   defp readiness_text("Circuit protection active"), do: gettext("Circuit protection active")
   defp readiness_text("One or more model and route lanes are blocked; unaffected routes may remain available."), do: gettext("One or more model and route lanes are blocked; unaffected routes may remain available.")
   defp readiness_text("Wait for circuit protection to clear before relying on affected routes."), do: gettext("Wait for circuit protection to clear before relying on affected routes.")

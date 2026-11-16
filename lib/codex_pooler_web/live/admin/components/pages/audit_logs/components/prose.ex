@@ -278,6 +278,14 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Prose do
     end
   end
 
+  defp sentence_template("upstream_account.usage_cap_policy_update", event) do
+    if pool_filterable?(event) do
+      gettext("%{actor} updated the usage cap of the upstream account %{target} in the Pool %{scoped_pool}", actor: marker(:actor), target: marker(:target), scoped_pool: marker(:scoped_pool))
+    else
+      gettext("%{actor} updated the usage cap of the upstream account %{target}", actor: marker(:actor), target: marker(:target))
+    end
+  end
+
   defp sentence_template("upstream_account.saved_reset_redeem_enqueue", event) do
     if pool_filterable?(event) do
       gettext("%{actor} queued a saved-reset redemption for the upstream account %{target} in the Pool %{scoped_pool}", actor: marker(:actor), target: marker(:target), scoped_pool: marker(:scoped_pool))

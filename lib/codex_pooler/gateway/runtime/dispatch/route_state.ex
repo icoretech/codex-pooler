@@ -115,6 +115,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   def put_candidates(%__MODULE__{} = route_state, candidates) when is_list(candidates),
     do: %{route_state | candidates: candidates}
 
+  @doc """
+  Records the identities at their operator usage cap in this request, including
+  one kept by the running-turn exemption, so automatic redemption never makes
+  any of them its target.
+  """
+  @spec put_usage_capped_identity_ids(t(), [Ecto.UUID.t()]) :: t()
+  def put_usage_capped_identity_ids(%__MODULE__{} = route_state, identity_ids) when is_list(identity_ids),
+    do: %{route_state | extensions: Map.put(route_state.extensions, :usage_capped_identity_ids, MapSet.new(identity_ids))}
+
+  @spec usage_capped_identity?(t() | term(), Ecto.UUID.t() | term()) :: boolean()
+  def usage_capped_identity?(%__MODULE__{extensions: extensions}, identity_id),
+    do: extensions |> Map.get(:usage_capped_identity_ids, MapSet.new()) |> MapSet.member?(identity_id)
+
+  def usage_capped_identity?(_route_state, _identity_id), do: false
+
   @type filter_exclusion :: %{required(:reason) => String.t(), required(:reason_codes) => [String.t()], optional(:observed_capacity_reason_codes) => [String.t()]}
 
   @spec clear_filter_exclusions(t()) :: t()

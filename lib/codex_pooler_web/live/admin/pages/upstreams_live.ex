@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
   alias CodexPoolerWeb.Admin.UpstreamPageComponents
+  alias CodexPoolerWeb.Admin.UsageCapWorkflow
 
   alias CodexPoolerWeb.Admin.UpstreamsLive.{
     AccountLifecycleWorkflow,
@@ -87,6 +88,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       |> assign(PoolEditorWorkflow.initial_assigns())
       |> assign(InviteWorkflow.initial_assigns(socket.assigns.locale.tag))
       |> assign(ProviderCreditsWorkflow.initial_assigns())
+      |> assign(UsageCapWorkflow.initial_assigns())
       |> allow_upload(:auth_json,
         accept: ~w(.json),
         max_entries: 1,
@@ -113,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   @impl true
-  def handle_info({Events, %{topics: topics, reason: "upstream_account_provider_credits_policy_updated"}}, socket) do
+  def handle_info({Events, %{topics: topics, reason: reason}}, socket) when reason in ["upstream_account_provider_credits_policy_updated", "upstream_account_usage_cap_policy_updated"] do
     if "upstreams" in topics, do: {:noreply, reload_upstreams(socket)}, else: {:noreply, socket}
   end
 
@@ -425,6 +427,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          socket
          |> close_saved_reset_policy_dialog()
          |> ProviderCreditsWorkflow.close()
+         |> UsageCapWorkflow.close()
          |> assign(
            renaming_account: account,
            rename_account_form: rename_account_form(identity)
@@ -474,6 +477,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   def handle_event("save_provider_credits_policy", params, socket) do
     {:noreply, ProviderCreditsWorkflow.save(socket, Map.get(params, "provider_credits_policy"), &reload_upstreams/1)}
+  end
+
+  def handle_event("open_usage_cap_policy", %{"id" => identity_id}, socket) do
+    socket = socket |> close_account_workflow_dialogs() |> reload_upstreams()
+    {:noreply, UsageCapWorkflow.open(socket, find_account(socket.assigns.upstream_accounts, identity_id))}
+  end
+
+  def handle_event("cancel_usage_cap_policy", _params, socket) do
+    {:noreply, socket |> UsageCapWorkflow.close() |> flush_deferred_upstreams_reload()}
+  end
+
+  def handle_event("validate_usage_cap_policy", params, socket) do
+    {:noreply, UsageCapWorkflow.validate(socket, Map.get(params, "usage_cap_policy"))}
+  end
+
+  def handle_event("save_usage_cap_policy", params, socket) do
+    {:noreply, UsageCapWorkflow.save(socket, Map.get(params, "usage_cap_policy"), &reload_upstreams/1)}
   end
 
   def handle_event("open_saved_reset_policy", %{"id" => identity_id}, socket) do
@@ -717,6 +737,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         saved_reset_policy_form={@saved_reset_policy_form}
         editing_provider_credits_policy={@editing_provider_credits_policy}
         provider_credits_policy_form={@provider_credits_policy_form}
+        editing_usage_cap_policy={@editing_usage_cap_policy}
+        usage_cap_policy_form={@usage_cap_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
         account_panel_views={@account_panel_views}
         upstream_accounts={@upstream_accounts}
@@ -828,6 +850,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       account_panel_views: prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
     )
     |> ProviderCreditsWorkflow.refresh(upstream_accounts)
+    |> UsageCapWorkflow.refresh(upstream_accounts)
     |> sync_saved_reset_status_timer()
   end
 
@@ -1059,7 +1082,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   defp unrelated_upstream_dialog_open?(socket) do
     socket.assigns.importing_auth_json or socket.assigns.oauth_linking or socket.assigns.creating_invite or
       not is_nil(socket.assigns.editing_pool) or not is_nil(socket.assigns.renaming_account) or
-      not is_nil(socket.assigns.deleting_account) or not is_nil(socket.assigns.editing_provider_credits_policy)
+      not is_nil(socket.assigns.deleting_account) or not is_nil(socket.assigns.editing_provider_credits_policy) or
+      not is_nil(socket.assigns.editing_usage_cap_policy)
   end
 
   defp request_saved_reset_status(socket), do: request_saved_reset_status(socket, saved_reset_status_targets(socket), false)
@@ -1275,6 +1299,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     |> OAuthWorkflow.close()
     |> close_saved_reset_policy_dialog()
     |> ProviderCreditsWorkflow.close()
+    |> UsageCapWorkflow.close()
   end
 
   defp close_lost_account_dialogs(socket) do
@@ -1286,10 +1311,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     |> close_if(lost?.(socket.assigns.renaming_account), &close_rename_account_dialog/1)
     |> close_if(lost?.(socket.assigns.deleting_account), &AccountLifecycleWorkflow.close_delete/1)
     |> close_if(provider_credits_control_lost?(socket), &ProviderCreditsWorkflow.close/1)
+    |> close_if(usage_cap_control_lost?(socket), &UsageCapWorkflow.close/1)
     |> close_if(lost?.(socket.assigns.editing_saved_reset_policy), &close_saved_reset_policy_dialog/1)
     |> close_if(lost?.(socket.assigns.confirming_saved_reset_redemption), &assign(&1, :confirming_saved_reset_redemption, nil))
     |> close_if(socket.assigns.oauth_linking and (lost?.(socket.assigns.oauth_link_target_account) or no_pools?), &OAuthWorkflow.close/1)
     |> close_if(socket.assigns.importing_auth_json and no_pools?, &AuthJsonWorkflow.close/1)
+  end
+
+  defp usage_cap_control_lost?(socket) do
+    case socket.assigns.editing_usage_cap_policy do
+      %{identity: %{id: identity_id}} ->
+        not Enum.any?(socket.assigns.upstream_accounts, &(&1.identity.id == identity_id and &1.can_manage_provider_credits?))
+
+      nil ->
+        false
+    end
   end
 
   defp provider_credits_control_lost?(socket) do

@@ -50,16 +50,36 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
     quota_mode = Keyword.get(opts, :quota_mode, :required)
 
     filter_input
-    |> filter_candidates(route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts)
+    |> filter_uncapped_candidates(route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts)
     |> SavedResetAutoRedeem.clear_post_apply_failure()
     |> CircuitRetryAfter.put(filter_input.candidates, route_state)
   end
 
+  # An account at its operator usage cap (public issue #637) leaves the
+  # request first, before circuits, quota eligibility and both saved-reset
+  # scans, like a paused account: it neither counts as a sibling's capacity
+  # nor becomes a redemption target. Its exclusion stays recorded, it stays in
+  # the dropped set Pool-return advice reads, and its window's reset joins a
+  # `quota_exhausted` refusal of the candidates that were left.
+  defp filter_uncapped_candidates(filter_input, route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts) do
+    case CandidateEligibility.UsageCap.exclude_capped(filter_input, route_state, quota_mode) do
+      {:ok, uncapped_input, uncapped_state, capped_exclusions} ->
+        uncapped_input
+        |> filter_candidates(uncapped_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts, filter_input.candidates)
+        |> CandidateEligibility.UsageCap.merge_capped_returns(capped_exclusions)
+
+      {:error, _refusal} = refused ->
+        refused
+    end
+  end
+
   # A retryable `503` of a Pool with an open-circuit candidate carries the
   # seconds until that circuit admits a probe (findings#206 row 206-532).
-  defp filter_candidates(filter_input, route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts) do
-    classified_candidates = filter_input.candidates
-    route_state = RouteState.clear_filter_exclusions(route_state)
+  defp filter_candidates(filter_input, route_state, request_options, quota_mode, saved_reset_scan_at, saved_reset_opts, classified_candidates) do
+    route_state =
+      route_state
+      |> RouteState.clear_filter_exclusions()
+      |> RouteState.record_filter_exclusions(classified_candidates, filter_input.candidates, "usage_capped")
 
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),

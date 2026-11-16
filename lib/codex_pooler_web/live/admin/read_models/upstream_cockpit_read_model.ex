@@ -177,6 +177,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:provider_credits_policy) => %{allow_provider_credits: boolean()},
           required(:provider_credits_summary) => QuotaProjection.provider_credits_summary(),
           required(:can_manage_provider_credits?) => boolean(),
+          required(:usage_cap_percent) => 1..99 | nil,
+          required(:usage_cap_unmeasurable?) => boolean(),
           required(:usage_poll_pause) => UpstreamAccountsReadModel.usage_poll_pause() | nil,
           required(:flags) => flags()
         }
@@ -374,6 +376,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       provider_credits_policy: account.provider_credits_policy,
       provider_credits_summary: account.provider_credits_summary,
       can_manage_provider_credits?: account.can_manage_provider_credits?,
+      usage_cap_percent: Map.get(account, :usage_cap_percent),
+      usage_cap_unmeasurable?: Map.get(account, :usage_cap_unmeasurable?, false),
       usage_poll_pause: Map.get(account, :usage_poll_pause),
       oauth_flows: oauth_flows,
       sections: sections,

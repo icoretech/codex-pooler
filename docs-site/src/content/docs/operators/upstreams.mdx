@@ -125,6 +125,23 @@ Saving the option changes admission, not the provider's billing system. A final 
 An accepted banked reset and confirmed included restoration are different events. Credit-capable responses cannot confirm a reset. Pending recovery keeps its existing latch; matching fresh included evidence is required, or a single existing guarded probe must be independently incapable of succeeding on provider credits. Credit availability and saved-reset status are displayed separately.
 
 
+## Usage cap
+
+**Usage cap** keeps part of an account's quota for the account's owner, for example when the same ChatGPT account is also used directly outside Codex Pooler. It is an upstream-level setting, off by default, from 1% to 99% of the account's long quota window: its weekly window, or its 30-day window on a plan that reports no weekly window. It applies to every Pool using that upstream identity, and changing it requires operator authority across all of those Pools.
+
+Once that window reads the capped share used, the account behaves for the Pool like a paused one: Codex Pooler stops giving it new work and routes that work to the Pool's other eligible accounts. The account takes work again when the window resets or the operator raises or clears the cap. The 5-hour window never counts toward the cap and can still be used up as usual.
+
+- **Turns already running.** A Codex turn that is running on the account when it reaches the cap finishes there, over the websocket and over HTTP. The next turn of the same conversation moves to another account. Over the websocket it is first refused on the capped account with the same retryable answer a session gets when its account runs out of quota, and the Codex client then resends the conversation. Input typed into a turn while it runs counts as the next turn. Reasoning carried over from earlier turns does not move between accounts, so that next turn starts from the conversation text alone.
+- **Requests that cannot move.** A request that uses a file stored on the capped account, and a `/v1` request that continues a response produced on it (`previous_response_id`), still go to that account. New file uploads go to an uncapped account whenever the Pool has one.
+- **Approximate, and not a hard limit.** The cap is read from the usage the provider reports with each response and from usage polls. Requests already in flight, the rest of a running turn and the requests that cannot move can take the account past the cap, up to its provider limit.
+- **Every account capped.** When every eligible account of a Pool is capped or out of quota, clients receive the usual usage-limit answer with the soonest reset among them.
+- **No current reading.** An account without a current weekly or 30-day reading cannot be measured against the cap: one the provider reports as available without any usage percentage, or one whose window has just reset and has not been read again. The cap stays saved but has no effect until such a reading arrives, and the account card and cockpit say so.
+- **Saved resets.** For [automatic redemption](#automatic-redemption) a capped account counts as paused. It never holds another account's banked reset back: when the Pool's other accounts run out, their resets are redeemed as if the capped account were not in the Pool. Pool traffic never spends the capped account's own banked resets, not even while a running turn finishes on it.
+- **Usage reported to clients.** The Codex usage endpoints describe an uncapped account of the Pool. When every account is capped they report the provider's figures for one of them unchanged, so a client can see usage below its limit while its requests receive the usage-limit answer.
+- **Readiness and alerts.** While the cap holds, the account card shows **Held by usage cap** instead of a ready state. Pool capacity counts and alerts still treat the account as available capacity.
+
+The meter of the window the cap is read from, weekly or 30-day, marks the cap on the account card and in the cockpit, and shows **Usage cap reached** while it is in force. Open **Usage cap** from the card action menu or the cockpit to set or clear it; leave the field empty for no cap.
+
 ## Saved resets
 
 Account cards show the banked-resets meter only when sanitized usage observations report at least one available reset. Common cockpit labels are `N saved resets`, `No saved resets`, `Saved resets unavailable`, and `Saved resets not reported`. When sanitized saved-reset observations include expiration metadata, the badge title, cockpit summary, and saved-reset dialog also show the next expiration time. The meter and the card dropdown action `Saved resets` open the saved-reset dialog.
@@ -468,6 +485,10 @@ The current actions are:
     <tr>
       <td>Provider credits</td>
       <td>Opens the provider-credit policy dialog, where the <a href="#use-provider-credits">Use provider credits</a> admission policy is saved for the upstream.</td>
+    </tr>
+    <tr>
+      <td>Usage cap</td>
+      <td>Opens the <a href="#usage-cap">usage cap</a> dialog, where the share of the weekly or 30-day window that Pools may use is set or cleared for the upstream.</td>
     </tr>
     <tr>
       <td>Saved resets</td>

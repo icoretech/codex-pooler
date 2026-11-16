@@ -51,6 +51,7 @@ defmodule CodexPooler.Audit do
     {"Upstream account deleted", "upstream_account.delete"},
     {"Upstream account saved reset policy updated", "upstream_account.saved_reset_policy_update"},
     {"Upstream account provider credits policy updated", "upstream_account.provider_credits_policy_update"},
+    {"Upstream account usage cap updated", "upstream_account.usage_cap_policy_update"},
     {"Upstream account saved reset redemption queued", "upstream_account.saved_reset_redeem_enqueue"},
     {"API key created", "api_key.create"},
     {"API key updated", "api_key.update"},

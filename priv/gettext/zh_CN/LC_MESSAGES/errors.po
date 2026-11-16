@@ -241,6 +241,7 @@ msgstr "强制使用确切推理强度时不能设置"
 msgid "contains an invalid IP or CIDR rule"
 msgstr "包含无效的 IP 或 CIDR 规则"
 
+#: lib/codex_pooler_web/live/admin/forms/usage_cap_policy.ex:65
 #: lib/codex_pooler_web/validation_messages.ex:31
 #, elixir-autogen, elixir-format
 msgid "contains unexpected fields"
@@ -311,6 +312,7 @@ msgstr "必须是映射"
 msgid "must be a non-empty model identifier without whitespace"
 msgstr "必须是无空格的非空模型标识符"
 
+#: lib/codex_pooler_web/live/admin/forms/usage_cap_policy.ex:50
 #: lib/codex_pooler_web/validation_messages.ex:30
 #, elixir-autogen, elixir-format
 msgid "must be a policy form"

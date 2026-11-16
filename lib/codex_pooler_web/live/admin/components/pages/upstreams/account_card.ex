@@ -192,6 +192,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   account_label={@account.label}
                   limit={limit}
                 />
+                <p :if={Map.get(@account, :usage_cap_unmeasurable?, false)} id={"upstream-account-#{@account.identity.id}-usage-cap-unmeasurable"} data-role="usage-cap-unmeasurable" class="text-xs leading-5 text-warning">
+                  {gettext("Usage cap %{percent}% has no effect right now: the account has no current weekly or 30-day quota reading.", percent: @account.usage_cap_percent)}
+                </p>
                 <ProviderCreditsComponents.provider_credits_summary
                   :if={Map.has_key?(@account, :provider_credits_summary)}
                   id={"upstream-account-#{@account.identity.id}-provider-credits"}
@@ -761,6 +764,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             phx-click={JS.push_focus() |> JS.push("open_provider_credits_policy")}
             phx-value-id={@account.identity.id}
             aria-controls="provider-credits-policy-dialog"
+            aria-haspopup="dialog"
+          />
+        </li>
+        <li :if={Map.get(@account, :can_manage_provider_credits?, false) and @account.identity.status != "deleted"}>
+          <AdminComponents.dropdown_action_item
+            id={"usage-cap-policy-upstream-account-#{@account.identity.id}"}
+            icon="hero-chart-bar"
+            label={gettext("Usage cap")}
+            phx-click={JS.push_focus() |> JS.push("open_usage_cap_policy")}
+            phx-value-id={@account.identity.id}
+            aria-controls="usage-cap-policy-dialog"
             aria-haspopup="dialog"
           />
         </li>

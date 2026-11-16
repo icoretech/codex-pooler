@@ -15,6 +15,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     Quota.Windows.EvidenceStore,
     Quota.Windows.ExpiredPruning,
     Quota.Windows.Routing,
+    Quota.Windows.UsageCap,
     Quota.WindowSelector
   }
 
@@ -349,6 +350,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   """
   @spec routing_account_denial(RoutingQuotaSnapshot.t() | nil) :: AccountDenial.t() | nil
   def routing_account_denial(snapshot), do: AccountDenial.active(snapshot)
+
+  @doc """
+  The operator usage cap in force for the snapshot's identity, or nil.
+  Deliberately separate from routing eligibility; see `UsageCap`.
+  """
+  @spec routing_usage_cap(RoutingQuotaSnapshot.t() | nil) :: UsageCap.t() | nil
+  def routing_usage_cap(snapshot), do: UsageCap.active(snapshot)
+
+  @doc "The operator usage cap's state for display; see `UsageCap.state/1`."
+  @spec routing_usage_cap_state(RoutingQuotaSnapshot.t() | nil) :: UsageCap.state()
+  def routing_usage_cap_state(snapshot), do: UsageCap.state(snapshot)
 
   @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
           [Quota.AccountQuotaWindow.t()]

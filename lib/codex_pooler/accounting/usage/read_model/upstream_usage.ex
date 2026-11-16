@@ -212,7 +212,11 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     {primary, secondary} = UsageResponses.account_usage_windows(windows, as_of)
     rate_limit = account_rate_limit(snapshot, primary, secondary)
 
+    # An account at its operator usage cap takes no new work, so it speaks for
+    # the Pool's capacity only when every account is capped; its own provider
+    # facts are reported unchanged then, like any other local policy.
     {
+      if(QuotaWindows.routing_usage_cap(snapshot), do: 0, else: 1),
       if(rate_limit.allowed, do: 1, else: 0),
       usage_routing_state_rank(snapshot),
       plan_rank(identity),

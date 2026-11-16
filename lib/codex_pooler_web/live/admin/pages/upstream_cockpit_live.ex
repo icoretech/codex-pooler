@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   alias CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
   alias CodexPoolerWeb.Admin.UpstreamsLive.WorkflowError
+  alias CodexPoolerWeb.Admin.UsageCapWorkflow
   alias CodexPoolerWeb.DateTimeDisplay
 
   @saved_reset_status_interval_ms 5_000
@@ -67,6 +68,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         saved_reset_status_timer_token: nil
       )
       |> assign(ProviderCreditsWorkflow.initial_assigns())
+      |> assign(UsageCapWorkflow.initial_assigns())
       |> allow_upload(:auth_json,
         accept: ~w(.json),
         max_entries: 1,
@@ -93,7 +95,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   @impl true
-  def handle_info({Events, %{topics: topics, reason: "upstream_account_provider_credits_policy_updated", payload: payload}}, socket) do
+  def handle_info({Events, %{topics: topics, reason: reason, payload: payload}}, socket) when reason in ["upstream_account_provider_credits_policy_updated", "upstream_account_usage_cap_policy_updated"] do
     if "upstreams" in topics and upstream_event_in_scope?(socket, payload), do: {:noreply, request_saved_reset_status(socket)}, else: {:noreply, socket}
   end
 
@@ -194,7 +196,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   @impl true
   def handle_event("open_rename_account", %{"id" => identity_id}, socket) do
-    {:noreply, socket |> ProviderCreditsWorkflow.close() |> AccountLifecycleWorkflow.open_rename(identity_id)}
+    {:noreply, socket |> ProviderCreditsWorkflow.close() |> UsageCapWorkflow.close() |> AccountLifecycleWorkflow.open_rename(identity_id)}
   end
 
   def handle_event("cancel_rename_account", _params, socket) do
@@ -229,7 +231,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         Map.get(params, "pool-id") || Map.get(params, "pool_id") ||
           default_pool_id(socket.assigns.cockpit)
 
-      {:noreply, socket |> ProviderCreditsWorkflow.close() |> AuthJsonImportWorkflow.open(pool_id)}
+      {:noreply, socket |> ProviderCreditsWorkflow.close() |> UsageCapWorkflow.close() |> AuthJsonImportWorkflow.open(pool_id)}
     else
       {:noreply, put_unavailable_action_error(socket, :replace_auth_json)}
     end
@@ -253,6 +255,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
          |> OAuthRelinkWorkflow.close()
          |> SavedResetWorkflow.close_redemption_confirmation()
          |> ProviderCreditsWorkflow.close()
+         |> UsageCapWorkflow.close()
          |> OAuthRelinkWorkflow.open()}
 
       true ->
@@ -320,7 +323,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   def handle_event("open_delete_account", %{"id" => identity_id}, socket) do
-    {:noreply, socket |> ProviderCreditsWorkflow.close() |> AccountLifecycleWorkflow.open_delete(identity_id)}
+    {:noreply, socket |> ProviderCreditsWorkflow.close() |> UsageCapWorkflow.close() |> AccountLifecycleWorkflow.open_delete(identity_id)}
   end
 
   def handle_event("cancel_delete_account", _params, socket) do
@@ -335,7 +338,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   def handle_event("open_provider_credits_policy", _params, socket) do
-    socket = socket |> AuthJsonImportWorkflow.close() |> OAuthRelinkWorkflow.close() |> AccountLifecycleWorkflow.close_rename() |> AccountLifecycleWorkflow.close_delete() |> SavedResetWorkflow.close_redemption_confirmation() |> load_cockpit()
+    socket = socket |> AuthJsonImportWorkflow.close() |> OAuthRelinkWorkflow.close() |> AccountLifecycleWorkflow.close_rename() |> AccountLifecycleWorkflow.close_delete() |> SavedResetWorkflow.close_redemption_confirmation() |> UsageCapWorkflow.close() |> load_cockpit()
     {:noreply, ProviderCreditsWorkflow.open(socket, socket.assigns.cockpit)}
   end
 
@@ -347,6 +350,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   def handle_event("save_provider_credits_policy", params, socket) do
     {:noreply, ProviderCreditsWorkflow.save(socket, Map.get(params, "provider_credits_policy"), &load_cockpit/1)}
+  end
+
+  def handle_event("open_usage_cap_policy", _params, socket) do
+    socket = socket |> AuthJsonImportWorkflow.close() |> OAuthRelinkWorkflow.close() |> AccountLifecycleWorkflow.close_rename() |> AccountLifecycleWorkflow.close_delete() |> SavedResetWorkflow.close_redemption_confirmation() |> ProviderCreditsWorkflow.close() |> load_cockpit()
+    {:noreply, UsageCapWorkflow.open(socket, socket.assigns.cockpit)}
+  end
+
+  def handle_event("cancel_usage_cap_policy", _params, socket), do: {:noreply, UsageCapWorkflow.close(socket)}
+
+  def handle_event("validate_usage_cap_policy", params, socket) do
+    {:noreply, UsageCapWorkflow.validate(socket, Map.get(params, "usage_cap_policy"))}
+  end
+
+  def handle_event("save_usage_cap_policy", params, socket) do
+    {:noreply, UsageCapWorkflow.save(socket, Map.get(params, "usage_cap_policy"), &load_cockpit/1)}
   end
 
   def handle_event("validate_saved_reset_policy", %{"saved_reset_policy" => params}, socket) do
@@ -486,6 +504,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         saved_reset_policy_form={@saved_reset_policy_form}
         editing_provider_credits_policy={@editing_provider_credits_policy}
         provider_credits_policy_form={@provider_credits_policy_form}
+        editing_usage_cap_policy={@editing_usage_cap_policy}
+        usage_cap_policy_form={@usage_cap_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
         selected_request_log={@selected_request_log}
         refresh_data_message={@refresh_data_message}
@@ -631,6 +651,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     |> invalidate_saved_reset_status()
     |> assign(cockpit: nil, confirming_saved_reset_redemption: nil, quota_observations_open?: false, selected_request_log: nil, saved_reset_policy_dirty?: false)
     |> ProviderCreditsWorkflow.close()
+    |> UsageCapWorkflow.close()
     |> cancel_saved_reset_status_timer()
   end
 
@@ -769,6 +790,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       saved_reset_policy_form: preserve_policy_edits(socket, cockpit)
     )
     |> ProviderCreditsWorkflow.refresh([cockpit])
+    |> UsageCapWorkflow.refresh([cockpit])
     |> schedule_saved_reset_status()
   end
 

@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Upstreams.Quota.CapacityFactsStore
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
+  alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations
@@ -36,6 +37,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @type quota_limit_row :: %{
           optional(:saved_reset_context) => QuotaObservations.saved_reset_context(),
           optional(:observation_group) => String.t(),
+          optional(:usage_cap_percent) => 1..99 | nil,
+          optional(:usage_capped?) => boolean(),
           optional(:observations) => [QuotaObservations.observation()],
           required(:key) => atom() | String.t(),
           required(:label) => String.t(),
@@ -238,6 +241,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     |> quota_limit_rows(preferences, snapshot_at, raw_windows)
     |> QuotaObservations.attach_saved_reset_context(raw_windows, redemption, snapshot_at)
   end
+
+  @doc """
+  Marks the row of the window the operator's usage cap is judged on (weekly,
+  or 30-day on a plan without a weekly window) with the cap and whether routing
+  is holding the account at it right now. A cap that cannot be read marks no
+  row; the account card says so instead (`usage_cap_unmeasurable?/1`).
+  """
+  @spec attach_usage_cap([quota_limit_row()], RoutingQuotaSnapshot.t()) :: [quota_limit_row()]
+  def attach_usage_cap(rows, %RoutingQuotaSnapshot{usage_cap_percent: cap} = snapshot) when is_list(rows) do
+    case Windows.routing_usage_cap_state(snapshot) do
+      {state, kind} when state in [:below, :reached] ->
+        key = if kind == :monthly, do: :primary_30d, else: :weekly
+
+        Enum.map(rows, fn
+          %{key: ^key} = row -> row |> Map.put(:usage_cap_percent, cap) |> Map.put(:usage_capped?, state == :reached)
+          row -> row
+        end)
+
+      _none_or_unmeasurable ->
+        rows
+    end
+  end
+
+  @doc "Whether the account has a usage cap that cannot apply because it reports no readable weekly or 30-day window."
+  @spec usage_cap_unmeasurable?(RoutingQuotaSnapshot.t()) :: boolean()
+  def usage_cap_unmeasurable?(%RoutingQuotaSnapshot{} = snapshot), do: Windows.routing_usage_cap_state(snapshot) == :unmeasurable
 
   @type provider_credits_summary :: %{
           balance_state: :finite | :unlimited | :unknown,

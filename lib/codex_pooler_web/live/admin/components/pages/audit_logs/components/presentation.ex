@@ -298,6 +298,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
   defp action_label("upstream_account.delete"), do: gettext("Upstream account deleted")
   defp action_label("upstream_account.saved_reset_policy_update"), do: gettext("Upstream account saved reset policy updated")
   defp action_label("upstream_account.provider_credits_policy_update"), do: gettext("Upstream account provider credits policy updated")
+  defp action_label("upstream_account.usage_cap_policy_update"), do: gettext("Upstream account usage cap updated")
   defp action_label("upstream_account.saved_reset_redeem_enqueue"), do: gettext("Upstream account saved reset redemption queued")
   defp action_label("api_key.create"), do: gettext("API key created")
   defp action_label("api_key.update"), do: gettext("API key updated")

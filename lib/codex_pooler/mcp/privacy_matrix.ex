@@ -221,6 +221,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :onboarding_method,
         :status,
         :allow_provider_credits,
+        :usage_cap_percent,
         :plan_family,
         :plan_label,
         :auth_fresh_at,
@@ -264,6 +265,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :workspace_label,
         :status,
         :allow_provider_credits,
+        :usage_cap_percent,
         :plan_family,
         :assignment_summary,
         :quota_summary,
@@ -505,6 +507,8 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
 
   defp transform(:allowed, :allow_provider_credits, value) when is_boolean(value), do: value
   defp transform(:allowed, :allow_provider_credits, _value), do: nil
+  defp transform(:allowed, :usage_cap_percent, value) when is_integer(value) and value >= 1 and value <= 99, do: value
+  defp transform(:allowed, :usage_cap_percent, _value), do: nil
   defp transform(:allowed, _field, value), do: value
   defp transform(:masked, field, value), do: mask(field, value)
   defp transform(:summarized, field, value), do: summarize(field, value)

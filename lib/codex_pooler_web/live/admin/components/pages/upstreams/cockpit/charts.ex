@@ -81,6 +81,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           variant={:secondary}
         />
       </div>
+      <div :if={@cockpit.can_manage_provider_credits? and @cockpit.identity.status != "deleted"} class="px-4 pb-4">
+        <AdminComponents.action_button
+          id="usage-cap-policy-open"
+          label={gettext("Usage cap")}
+          icon="hero-chart-bar"
+          phx-click={JS.push_focus() |> JS.push("open_usage_cap_policy")}
+          aria-controls="usage-cap-policy-dialog"
+          aria-haspopup="dialog"
+          variant={:secondary}
+        />
+        <p :if={Map.get(@cockpit, :usage_cap_unmeasurable?, false)} id="cockpit-usage-cap-unmeasurable" data-role="usage-cap-unmeasurable" class="text-xs leading-5 text-warning">
+          {gettext("Usage cap %{percent}% has no effect right now: the account has no current weekly or 30-day quota reading.", percent: @cockpit.usage_cap_percent)}
+        </p>
+      </div>
 
       <details
         id="saved-reset-bank-disclosure"

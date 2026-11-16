@@ -89,6 +89,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountAudit do
       |> maybe_put_detail(:trigger_kind, Keyword.get(opts, :trigger_kind))
       |> maybe_put_detail(:job_conflict, Keyword.get(opts, :job_conflict?))
       |> maybe_put_provider_credits_details(opts)
+      |> maybe_put_usage_cap_details(opts)
 
     %{
       pool_id: pool_id,
@@ -106,6 +107,16 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountAudit do
     case {Keyword.get(opts, :previous_allow_provider_credits), Keyword.get(opts, :allow_provider_credits)} do
       {previous, current} when is_boolean(previous) and is_boolean(current) ->
         Map.merge(details, %{previous_allow_provider_credits: previous, allow_provider_credits: current})
+
+      _values ->
+        details
+    end
+  end
+
+  defp maybe_put_usage_cap_details(details, opts) do
+    case Keyword.get(opts, :usage_cap_change) do
+      {previous, current} when (is_nil(previous) or is_integer(previous)) and (is_nil(current) or is_integer(current)) ->
+        Map.merge(details, %{previous_usage_cap_percent: previous, usage_cap_percent: current})
 
       _values ->
         details

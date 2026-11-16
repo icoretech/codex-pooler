@@ -26,7 +26,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
     :credential_epoch,
     :as_of
   ]
-  defstruct @enforce_keys ++ [credit_balance: nil, credit_balance_reported?: false, capacity_facts: nil, capacity_facts_reported?: false, capacity_blockers: [], capacity_blockers_overflowed?: false, capacity_blocker_reported?: false, allow_provider_credits: true, redemption: nil]
+  defstruct @enforce_keys ++ [credit_balance: nil, credit_balance_reported?: false, capacity_facts: nil, capacity_facts_reported?: false, capacity_blockers: [], capacity_blockers_overflowed?: false, capacity_blocker_reported?: false, allow_provider_credits: true, usage_cap_percent: nil, redemption: nil]
 
   @type t :: %__MODULE__{
           upstream_identity_id: Ecto.UUID.t(),
@@ -41,6 +41,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
           capacity_facts_reported?: boolean(),
           capacity_blocker_reported?: boolean(),
           allow_provider_credits: boolean(),
+          usage_cap_percent: 1..99 | nil,
           redemption: map() | nil,
           as_of: DateTime.t()
         }
@@ -71,6 +72,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
       capacity_facts_reported?: metadata_reported?(identity.metadata, "quota_capacity_facts"),
       capacity_blocker_reported?: metadata_reported?(identity.metadata, "quota_capacity_blocker"),
       allow_provider_credits: identity.allow_provider_credits,
+      usage_cap_percent: identity.usage_cap_percent,
       redemption: redemption(identity.metadata),
       credential_epoch: epoch,
       as_of: as_of
@@ -132,6 +134,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
           upstream_identity_id: identity.id,
           metadata: identity.metadata,
           allow_provider_credits: identity.allow_provider_credits,
+          usage_cap_percent: identity.usage_cap_percent,
           window: window
         }
     )
@@ -158,6 +161,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
          capacity_facts_reported?: metadata_reported?(metadata, "quota_capacity_facts"),
          capacity_blocker_reported?: metadata_reported?(metadata, "quota_capacity_blocker"),
          allow_provider_credits: hd(identity_rows).allow_provider_credits,
+         usage_cap_percent: hd(identity_rows).usage_cap_percent,
          redemption: redemption(metadata),
          credential_epoch: epoch,
          as_of: as_of

@@ -243,6 +243,7 @@ msgstr ""
 msgid "contains an invalid IP or CIDR rule"
 msgstr ""
 
+#: lib/codex_pooler_web/live/admin/forms/usage_cap_policy.ex:65
 #: lib/codex_pooler_web/validation_messages.ex:31
 #, elixir-autogen, elixir-format
 msgid "contains unexpected fields"
@@ -313,6 +314,7 @@ msgstr ""
 msgid "must be a non-empty model identifier without whitespace"
 msgstr ""
 
+#: lib/codex_pooler_web/live/admin/forms/usage_cap_policy.ex:50
 #: lib/codex_pooler_web/validation_messages.ex:30
 #, elixir-autogen, elixir-format
 msgid "must be a policy form"

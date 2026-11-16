@@ -116,6 +116,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Upstreams do
       onboarding_method: identity.onboarding_method,
       status: identity.status,
       allow_provider_credits: snapshot.allow_provider_credits,
+      usage_cap_percent: snapshot.usage_cap_percent,
       capacity_decision: QuotaReadModel.capacity_decision(snapshot),
       plan_family: identity.plan_family,
       plan_label: identity.plan_label,
@@ -225,6 +226,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Upstreams do
       {:plan, "plan", required: true},
       {:assignments, "assignments", required: true},
       {:provider_credits_policy, "provider_credits_policy", required: true},
+      {:usage_cap, "usage_cap", required: true},
       {:capacity_basis, "capacity_basis", required: true},
       {:qualification, "qualification", required: true},
       {:capacity_reasons, "capacity_reasons"}
@@ -241,10 +243,14 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Upstreams do
     |> Map.put("plan", Map.get(item, "plan_label") || Map.get(item, "plan_family"))
     |> Map.put("assignments", Common.summary_text(item, "assignment_summary"))
     |> Map.put("provider_credits_policy", if(item["allow_provider_credits"] == true, do: "enabled", else: "disabled"))
+    |> Map.put("usage_cap", usage_cap_text(item["usage_cap_percent"]))
     |> Map.put("capacity_basis", capacity["capacity_basis"])
     |> Map.put("qualification", capacity["qualification"])
     |> Map.put("capacity_reasons", Enum.join(capacity["reason_codes"] || [], ", "))
   end
+
+  defp usage_cap_text(percent) when is_integer(percent), do: "#{percent}%"
+  defp usage_cap_text(_percent), do: "none"
 
   defp list_tool do
     %{

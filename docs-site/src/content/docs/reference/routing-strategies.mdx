@@ -203,7 +203,7 @@ Ordinary fallback follows the eligible shortlist. Guarded credit or saved-reset 
 
 If the first chosen upstream account returns a retryable backend status, rate limit, authorization failure, or server error, or the connection to it fails before the request reaches the provider, Codex Pooler can try the next eligible account in the route plan. A network failure after the request reached the provider ends the request on that account, because the provider may already be running it, and an authorization failure that a native websocket turn receives in a response frame is relayed to the client instead. It records safe attempt metadata and may briefly demote the failing assignment for the same Pool and model.
 
-Fallback doesn't bypass hard checks. It won't use a paused account, an account without model support, an account with unusable quota evidence, or an account that conflicts with session or file affinity. For session-bound work, fallback is intentionally limited because moving the request to another account could break the conversation state.
+Fallback doesn't bypass hard checks. It won't use a paused account, an account without model support, an account with unusable quota evidence, an account at its [usage cap](/operators/upstreams/#usage-cap), or an account that conflicts with session or file affinity. For session-bound work, fallback is intentionally limited because moving the request to another account could break the conversation state.
 
 ## Saved Reset Redemption During Routing
 
@@ -247,7 +247,7 @@ Operators configure routing from the admin UI. The exact visibility depends on r
     </tr>
     <tr>
       <td>Upstreams</td>
-      <td>Upstream account readiness, lifecycle state, Pool assignment, model support, quota evidence freshness, saved reset count, saved reset redemption policy, and reauth state</td>
+      <td>Upstream account readiness, lifecycle state, Pool assignment, model support, quota evidence freshness, saved reset count, saved reset redemption policy, usage cap, and reauth state</td>
     </tr>
     <tr>
       <td>Pool API keys</td>

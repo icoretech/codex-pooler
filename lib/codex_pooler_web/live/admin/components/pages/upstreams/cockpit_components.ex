@@ -29,6 +29,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   attr :saved_reset_policy_form, :any, required: true
   attr :editing_provider_credits_policy, :map, default: nil
   attr :provider_credits_policy_form, :any, default: nil
+  attr :editing_usage_cap_policy, :map, default: nil
+  attr :usage_cap_policy_form, :any, default: nil
   attr :confirming_saved_reset_redemption, :map, default: nil
   attr :selected_request_log, :map, default: nil
   attr :refresh_data_message, :string, default: nil
@@ -118,6 +120,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
                 datetime_preferences={@datetime_preferences}
               />
               <UpstreamPageComponents.provider_credits_policy_dialog account={@editing_provider_credits_policy} account_label={@editing_provider_credits_policy && @editing_provider_credits_policy.header.title} form={@provider_credits_policy_form} />
+              <UpstreamPageComponents.usage_cap_policy_dialog account={@editing_usage_cap_policy} account_label={@editing_usage_cap_policy && @editing_usage_cap_policy.header.title} form={@usage_cap_policy_form} />
               <Charts.request_section
                 cockpit={@cockpit}
                 refresh_data_message={@refresh_data_message}

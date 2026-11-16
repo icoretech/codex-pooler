@@ -19,7 +19,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Routing.CandidateEligibility.{AccountDenial, Quota, UsageLimit}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.{AccountDenial, Quota, UsageCap, UsageLimit}
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
@@ -64,12 +64,13 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn do
   defp circuit_eligible?(%{eligible?: false}), do: false
   defp circuit_eligible?(_snapshot), do: true
 
-  # Quota first, then the workspace denial, in routing's order; a candidate
-  # neither excludes is routable and has no return time to advise.
+  # Quota first, then the workspace denial, then the operator usage cap, in
+  # routing's order; a candidate none excludes is routable and has no return
+  # time to advise.
   defp exclusion(model, candidate, route_state, request_options) do
     case Quota.candidate_exclusions(model, [candidate], route_state, request_options) do
       [exclusion] -> exclusion
-      [] -> AccountDenial.candidate_exclusion(candidate, route_state, model, request_options)
+      [] -> AccountDenial.candidate_exclusion(candidate, route_state, model, request_options) || UsageCap.candidate_exclusion(candidate, route_state)
     end
   end
 end

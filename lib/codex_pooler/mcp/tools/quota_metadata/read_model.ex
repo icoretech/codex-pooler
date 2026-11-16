@@ -116,6 +116,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
     %{
       allow_provider_credits: snapshot.allow_provider_credits,
+      usage_cap_percent: snapshot.usage_cap_percent,
       capacity_decision: PrivacyMatrix.project!(:upstream_quotas, %{capacity_decision: capacity_decision(snapshot)}).capacity_decision,
       id: identity.id,
       label: safe_label(identity.account_label),

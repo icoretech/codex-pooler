@@ -8,12 +8,16 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
   exclusions, and never decides an outcome. Quota classification stays the
   single authority, reached through
   `CodexPooler.Gateway.Routing.CandidateEligibility.Quota.quota_routable?/4`.
+  An account at its operator usage cap counts as not routable, as a
+  paused one does, because route filtering removes it before quota
+  classification (`CandidateEligibility.UsageCap`).
   """
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageCap
   alias CodexPooler.Gateway.Routing.ProviderCredits
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -73,6 +77,7 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
             snapshot = Map.fetch!(quota_snapshots, identity.id),
             context = candidate_request_context(model, request_context, assignment.id),
             Quota.quota_routable?(model, candidate, snapshot, context),
+            not UsageCap.capped?(snapshot),
             into: MapSet.new(),
             do: assignment.id
 

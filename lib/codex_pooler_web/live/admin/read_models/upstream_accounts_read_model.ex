@@ -143,6 +143,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:provider_credits_policy) => %{allow_provider_credits: boolean()},
           required(:provider_credits_summary) => QuotaProjection.provider_credits_summary(),
           required(:can_manage_provider_credits?) => boolean(),
+          required(:usage_cap_percent) => 1..99 | nil,
+          required(:usage_cap_unmeasurable?) => boolean(),
           required(:quota_limits) => [quota_limit_row()],
           required(:identity_observability) => identity_observability(),
           required(:usage_poll_pause) => usage_poll_pause() | nil
@@ -464,6 +466,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       |> UpstreamRoutingReadiness.from_inputs(identity_assignments, quota_readiness)
       |> UpstreamRoutingReadiness.with_model_availability(quota_snapshot, identity_assignments)
       |> UpstreamRoutingReadiness.with_circuit_visibility(circuit_readiness)
+      |> UpstreamRoutingReadiness.with_usage_cap_visibility(quota_snapshot)
       |> Formatting.localize_routing_readiness()
 
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
@@ -517,6 +520,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       quota_readiness: quota_readiness,
       routing_readiness: routing_readiness,
       provider_credits_policy: %{allow_provider_credits: quota_snapshot.allow_provider_credits},
+      usage_cap_percent: quota_snapshot.usage_cap_percent,
+      usage_cap_unmeasurable?: QuotaProjection.usage_cap_unmeasurable?(quota_snapshot),
       provider_credits_summary: QuotaProjection.provider_credits_summary(quota_snapshot),
       quota_limits:
         QuotaProjection.quota_limit_rows(
@@ -525,7 +530,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           snapshot_at,
           raw_quota_windows,
           redemption
-        ),
+        )
+        |> QuotaProjection.attach_usage_cap(quota_snapshot),
       identity_observability: identity_observability,
       usage_poll_pause: usage_poll_pause(identity, snapshot_at, datetime_preferences)
     }
