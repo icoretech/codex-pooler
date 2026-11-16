@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Routing.UsageCapSavedResetTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -137,7 +138,7 @@ defmodule CodexPooler.Gateway.Routing.UsageCapSavedResetTest do
 
     request_options =
       if session_assignment_id,
-        do: %{request_options | continuity: %{request_options.continuity | codex_session: %CodexPooler.Gateway.Persistence.CodexSession{pool_upstream_assignment_id: session_assignment_id}}},
+        do: %{request_options | continuity: %{request_options.continuity | codex_session: %CodexSession{pool_upstream_assignment_id: session_assignment_id}}},
         else: request_options
 
     FilterInput.new(%{auth: %{pool: pool, api_key: api_key}, model: model, endpoint: "/backend-api/codex/responses", payload: payload, request_options: request_options, candidates: candidates})

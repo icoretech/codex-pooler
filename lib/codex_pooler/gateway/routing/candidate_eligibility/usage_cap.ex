@@ -74,10 +74,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageCap do
     excluded_ids = MapSet.new(excluded, fn {{assignment, _identity}, _exclusion} -> assignment.id end)
     remaining = Enum.reject(input.candidates, fn {assignment, _identity} -> MapSet.member?(excluded_ids, assignment.id) end)
 
-    route_state =
-      route_state
-      |> RouteState.put_usage_capped_identity_ids(capped_identity_ids)
-      |> RouteState.put_saved_reset_auto_capacity(uncapped_capacity(route_state))
+    route_state = record_capped(route_state, capped_identity_ids)
 
     cond do
       excluded == [] ->
@@ -162,8 +159,9 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageCap do
   defp session_assignment_id(%{continuity: %{codex_session: %{pool_upstream_assignment_id: assignment_id}}}) when is_binary(assignment_id), do: assignment_id
   defp session_assignment_id(_request_options), do: nil
 
-  defp translated_surface?(%{openai_compatibility: %OpenAICompatibility{} = compatibility}), do: OpenAICompatibility.translated_responses_surface?(compatibility)
-  defp translated_surface?(_request_options), do: false
+  # Every `RequestOptions` constructor sets the compatibility struct, as the
+  # other callers of `translated_responses_surface?/1` assume.
+  defp translated_surface?(%{openai_compatibility: compatibility}), do: OpenAICompatibility.translated_responses_surface?(compatibility)
 
   @doc """
   Whether a request continues a Codex turn already running, on any transport:
@@ -211,9 +209,18 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.UsageCap do
   end
 
   # Saved-reset capacity is the request-compatible set before the session pin;
-  # a capped sibling is no capacity, whether or not this request keeps it.
-  defp uncapped_capacity(%RouteState{saved_reset_auto_capacity: capacity} = route_state),
-    do: Enum.reject(capacity, fn {_assignment, identity} -> not is_nil(usage_cap(identity, route_state)) end)
+  # a capped sibling is no capacity, whether or not this request keeps it. With
+  # nothing capped the route state is returned untouched, so callers that pass
+  # it on unchanged still see the very state they prepared.
+  defp record_capped(%RouteState{saved_reset_auto_capacity: capacity} = route_state, capped_identity_ids) do
+    uncapped_capacity = Enum.reject(capacity, fn {_assignment, identity} -> not is_nil(usage_cap(identity, route_state)) end)
+
+    route_state = if capped_identity_ids == [], do: route_state, else: RouteState.put_usage_capped_identity_ids(route_state, capped_identity_ids)
+
+    if length(uncapped_capacity) == length(capacity),
+      do: route_state,
+      else: RouteState.put_saved_reset_auto_capacity(route_state, uncapped_capacity)
+  end
 
   defp usage_cap(identity, route_state), do: route_state.quota_snapshots |> Map.get(identity.id) |> QuotaWindows.routing_usage_cap()
 

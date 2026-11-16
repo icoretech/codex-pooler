@@ -5,8 +5,8 @@ defmodule CodexPooler.Gateway.Routing.UsageCapBoundaryTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
-  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.CandidateEligibility.PoolReturn
   alias CodexPooler.Gateway.Routing.CandidateEligibility.UsageCap

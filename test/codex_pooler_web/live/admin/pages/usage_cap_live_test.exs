@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
 
   alias CodexPooler.{Accounts, FakeUpstream, ProviderCreditsFixtures, Repo}
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow
@@ -69,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
     reset_at = DateTime.utc_now() |> DateTime.add(20, :day) |> DateTime.truncate(:second)
 
     assert {:ok, [_monthly]} =
-             CodexPooler.Upstreams.Quota.Windows.upsert_quota_windows(identity, [
+             QuotaWindows.upsert_quota_windows(identity, [
                %{quota_key: "account", window_kind: "primary", window_minutes: 43_200, used_percent: Decimal.new("35"), reset_at: reset_at, source: "codex_usage_api", source_precision: "observed", quota_scope: "account", quota_family: "account", freshness_state: "fresh"}
              ])
 
