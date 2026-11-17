@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-04T23:45:30.599125Z",
+  "generated_at": "2026-11-17T18:40:30.889868Z",
   "models": {
     "chat-latest": {
       "categories": [
@@ -10,7 +10,7 @@
         "tiers": {
           "standard": {
             "provenance": {
-              "evidence_sha256": "f64e1feda2c1f7815f724ac8920720e1e9a1ce6c217cece041f34ca2af2d43f7",
+              "evidence_sha256": "af9839f2b096e295896c9feea6f27b10b3210823d5b7089de258e775fbb07790",
               "locator": "chat-latest/standard/context"
             },
             "status": "uniform"
@@ -526,7 +526,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5/flex/context"
             },
             "status": "uniform"
@@ -600,7 +600,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5-mini/flex/context"
             },
             "status": "uniform"
@@ -667,7 +667,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5-nano/flex/context"
             },
             "status": "uniform"
@@ -764,7 +764,7 @@
         "tiers": {
           "standard": {
             "provenance": {
-              "evidence_sha256": "f64e1feda2c1f7815f724ac8920720e1e9a1ce6c217cece041f34ca2af2d43f7",
+              "evidence_sha256": "af9839f2b096e295896c9feea6f27b10b3210823d5b7089de258e775fbb07790",
               "locator": "gpt-5-search-api/standard/context"
             },
             "status": "uniform"
@@ -810,7 +810,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5.1/flex/context"
             },
             "status": "uniform"
@@ -884,7 +884,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5.2/flex/context"
             },
             "status": "uniform"
@@ -988,14 +988,14 @@
         "tiers": {
           "fast": {
             "provenance": {
-              "evidence_sha256": "f64e1feda2c1f7815f724ac8920720e1e9a1ce6c217cece041f34ca2af2d43f7",
+              "evidence_sha256": "98cd2a67e00a26319577039f6886d67eeca02fb087c03327d42f16d46abbb4da",
               "locator": "gpt-5.3-codex/fast/context"
             },
             "status": "uniform"
           },
           "standard": {
             "provenance": {
-              "evidence_sha256": "f64e1feda2c1f7815f724ac8920720e1e9a1ce6c217cece041f34ca2af2d43f7",
+              "evidence_sha256": "af9839f2b096e295896c9feea6f27b10b3210823d5b7089de258e775fbb07790",
               "locator": "gpt-5.3-codex/standard/context"
             },
             "status": "uniform"
@@ -1048,6 +1048,14 @@
             },
             "status": "known"
           },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "408c918716841b6fccbe946e2aecb08cd66095f5d20843b6f065234d001b3cc6",
+              "locator": "gpt-5.4/flex/context"
+            },
+            "status": "known"
+          },
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
@@ -1091,6 +1099,23 @@
             "cached_input": 0.5,
             "input": 5.0,
             "output": 30.0
+          }
+        },
+        "flex": {
+          "default": {
+            "cached_input": 0.13,
+            "input": 1.25,
+            "output": 7.5
+          },
+          "long_context": {
+            "cached_input": 0.25,
+            "input": 2.5,
+            "output": 11.25
+          },
+          "short_context": {
+            "cached_input": 0.13,
+            "input": 1.25,
+            "output": 7.5
           }
         },
         "standard": {
@@ -1139,7 +1164,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5.4-mini/flex/context"
             },
             "status": "uniform"
@@ -1206,7 +1231,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "gpt-5.4-nano/flex/context"
             },
             "status": "uniform"
@@ -1265,6 +1290,14 @@
             },
             "status": "known"
           },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "c4f7bf30940ba89b19dd2aa2ccecda01bc2e4879dbd332192f01170bbc747044",
+              "locator": "gpt-5.4-pro/flex/context"
+            },
+            "status": "known"
+          },
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
@@ -1279,6 +1312,20 @@
       "model": "gpt-5.4-pro",
       "prices": {
         "batch": {
+          "default": {
+            "input": 15.0,
+            "output": 90.0
+          },
+          "long_context": {
+            "input": 30.0,
+            "output": 135.0
+          },
+          "short_context": {
+            "input": 15.0,
+            "output": 90.0
+          }
+        },
+        "flex": {
           "default": {
             "input": 15.0,
             "output": 90.0
@@ -1335,6 +1382,14 @@
             },
             "status": "known"
           },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "2267f5f538d077c1f656519f585d16e7f909d7595758f2d7a85511e5a9fe64f8",
+              "locator": "gpt-5.5/flex/context"
+            },
+            "status": "known"
+          },
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
@@ -1380,6 +1435,23 @@
             "output": 75.0
           }
         },
+        "flex": {
+          "default": {
+            "cached_input": 0.25,
+            "input": 2.5,
+            "output": 15.0
+          },
+          "long_context": {
+            "cached_input": 0.5,
+            "input": 5.0,
+            "output": 22.5
+          },
+          "short_context": {
+            "cached_input": 0.25,
+            "input": 2.5,
+            "output": 15.0
+          }
+        },
         "standard": {
           "default": {
             "cached_input": 0.5,
@@ -1403,7 +1475,7 @@
         "per_1m_tokens"
       ]
     },
-    "gpt-5.5-cyber": {
+    "gpt-5.5-cyber-preview": {
       "categories": [
         "cyber"
       ],
@@ -1413,15 +1485,15 @@
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
-              "locator": "gpt-5.5-cyber/standard/context"
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-5.5-cyber-preview/standard/context"
             },
             "status": "known"
           }
         },
         "version": 1
       },
-      "model": "gpt-5.5-cyber",
+      "model": "gpt-5.5-cyber-preview",
       "prices": {
         "standard": {
           "default": {
@@ -1459,6 +1531,14 @@
             },
             "status": "known"
           },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "859be972d9874f40feeaee26fe7ea578e869a7d5b0e76ab39829911d0a079730",
+              "locator": "gpt-5.5-pro/flex/context"
+            },
+            "status": "known"
+          },
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
@@ -1473,6 +1553,19 @@
       "model": "gpt-5.5-pro",
       "prices": {
         "batch": {
+          "default": {
+            "input": 15.0,
+            "output": 90.0
+          },
+          "long_context": {
+            "available": false
+          },
+          "short_context": {
+            "input": 15.0,
+            "output": 90.0
+          }
+        },
+        "flex": {
           "default": {
             "input": 15.0,
             "output": 90.0
@@ -1515,7 +1608,7 @@
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
               "locator": "gpt-5.6-cyber/standard/context"
             },
             "status": "known"
@@ -1570,6 +1663,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-5.6-luna/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-5.6-luna/flex/context"
             },
             "status": "known"
           },
@@ -1632,6 +1733,29 @@
             "output": 2.4
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 0.25,
+            "cache_write_30m": 0.125,
+            "cached_input": 0.01,
+            "input": 0.1,
+            "output": 0.6
+          },
+          "long_context": {
+            "cache_write_12h": 0.5,
+            "cache_write_30m": 0.25,
+            "cached_input": 0.02,
+            "input": 0.2,
+            "output": 0.9
+          },
+          "short_context": {
+            "cache_write_12h": 0.25,
+            "cache_write_30m": 0.125,
+            "cached_input": 0.01,
+            "input": 0.1,
+            "output": 0.6
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 0.5,
@@ -1663,7 +1787,6 @@
     },
     "gpt-5.6-sol": {
       "categories": [
-        "cyber",
         "language_model"
       ],
       "category": "language_model",
@@ -1682,6 +1805,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-5.6-sol/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-5.6-sol/flex/context"
             },
             "status": "known"
           },
@@ -1744,6 +1875,29 @@
             "output": 40.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.2,
+            "input": 2.0,
+            "output": 10.0
+          },
+          "long_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.4,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "short_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.2,
+            "input": 2.0,
+            "output": 10.0
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 10.0,
@@ -1793,6 +1947,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-5.6-terra/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-5.6-terra/flex/context"
             },
             "status": "known"
           },
@@ -1855,6 +2017,29 @@
             "output": 24.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.1,
+            "input": 1.0,
+            "output": 6.0
+          },
+          "long_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.2,
+            "input": 2.0,
+            "output": 9.0
+          },
+          "short_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.1,
+            "input": 1.0,
+            "output": 6.0
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 5.0,
@@ -1904,6 +2089,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-6-astra/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6-astra/flex/context"
             },
             "status": "known"
           },
@@ -1974,6 +2167,29 @@
             "output": 100.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 12.5,
+            "cache_write_30m": 6.25,
+            "cached_input": 0.5,
+            "input": 5.0,
+            "output": 25.0
+          },
+          "long_context": {
+            "cache_write_12h": 25.0,
+            "cache_write_30m": 12.5,
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 37.5
+          },
+          "short_context": {
+            "cache_write_12h": 12.5,
+            "cache_write_30m": 6.25,
+            "cached_input": 0.5,
+            "input": 5.0,
+            "output": 25.0
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 25.0,
@@ -2028,17 +2244,18 @@
     },
     "gpt-6-astra-law": {
       "categories": [
-        "legal"
+        "legal_model_configurations"
       ],
-      "category": "legal",
+      "category": "legal_model_configurations",
       "context_pricing": {
         "tiers": {
           "standard": {
+            "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "cb9a2bceda85d106b5dedfd9975259b347653e62b6d5b755bba2371814494828",
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
               "locator": "gpt-6-astra-law/standard/context"
             },
-            "status": "uniform"
+            "status": "known"
           }
         },
         "version": 1
@@ -2050,6 +2267,63 @@
             "cached_input": 1.0,
             "input": 10.0,
             "output": 50.0
+          },
+          "long_context": {
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 75.0
+          },
+          "short_context": {
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6-cyber": {
+      "categories": [
+        "cyber"
+      ],
+      "category": "cyber",
+      "context_pricing": {
+        "tiers": {
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6-cyber/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6-cyber",
+      "prices": {
+        "standard": {
+          "default": {
+            "cache_write_12h": 50.0,
+            "cache_write_30m": 25.0,
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 100.0
+          },
+          "long_context": {
+            "cached_input": 4.0,
+            "input": 40.0,
+            "output": 150.0
+          },
+          "short_context": {
+            "cache_write_12h": 50.0,
+            "cache_write_30m": 25.0,
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 100.0
           }
         }
       },
@@ -2078,6 +2352,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-6-luna/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6-luna/flex/context"
             },
             "status": "known"
           },
@@ -2140,6 +2422,29 @@
             "output": 1.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 0.125,
+            "cache_write_30m": 0.0625,
+            "cached_input": 0.005,
+            "input": 0.05,
+            "output": 0.25
+          },
+          "long_context": {
+            "cache_write_12h": 0.25,
+            "cache_write_30m": 0.125,
+            "cached_input": 0.01,
+            "input": 0.1,
+            "output": 0.375
+          },
+          "short_context": {
+            "cache_write_12h": 0.125,
+            "cache_write_30m": 0.0625,
+            "cached_input": 0.005,
+            "input": 0.05,
+            "output": 0.25
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 0.25,
@@ -2179,7 +2484,7 @@
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
               "locator": "gpt-6-rosalind/standard/context"
             },
             "status": "known"
@@ -2191,25 +2496,25 @@
       "prices": {
         "standard": {
           "default": {
-            "cache_write_12h": 37.5,
-            "cache_write_30m": 18.75,
-            "cached_input": 1.5,
-            "input": 15.0,
-            "output": 75.0
+            "cache_write_12h": 25.0,
+            "cache_write_30m": 12.5,
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
           },
           "long_context": {
-            "cache_write_12h": 75.0,
-            "cache_write_30m": 37.5,
-            "cached_input": 3.0,
-            "input": 30.0,
-            "output": 112.5
+            "cache_write_12h": 50.0,
+            "cache_write_30m": 25.0,
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 75.0
           },
           "short_context": {
-            "cache_write_12h": 37.5,
-            "cache_write_30m": 18.75,
-            "cached_input": 1.5,
-            "input": 15.0,
-            "output": 75.0
+            "cache_write_12h": 25.0,
+            "cache_write_30m": 12.5,
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
           }
         }
       },
@@ -2238,6 +2543,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-6-sol/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6-sol/flex/context"
             },
             "status": "known"
           },
@@ -2300,6 +2613,29 @@
             "output": 20.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.1,
+            "input": 1.0,
+            "output": 5.0
+          },
+          "long_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.2,
+            "input": 2.0,
+            "output": 7.5
+          },
+          "short_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.1,
+            "input": 1.0,
+            "output": 5.0
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 5.0,
@@ -2349,6 +2685,14 @@
             "provenance": {
               "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
               "locator": "gpt-6.1-sol/fast/context"
+            },
+            "status": "known"
+          },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.1-sol/flex/context"
             },
             "status": "known"
           },
@@ -2417,6 +2761,29 @@
             "cached_input": 0.2,
             "input": 4.0,
             "output": 20.0
+          }
+        },
+        "flex": {
+          "default": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
+          },
+          "long_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 7.5
+          },
+          "short_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
           }
         },
         "standard": {
@@ -2494,6 +2861,14 @@
             },
             "status": "known"
           },
+          "flex": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.1-terra/flex/context"
+            },
+            "status": "known"
+          },
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
@@ -2553,6 +2928,29 @@
             "output": 10.0
           }
         },
+        "flex": {
+          "default": {
+            "cache_write_12h": 1.25,
+            "cache_write_30m": 0.625,
+            "cached_input": 0.025,
+            "input": 0.5,
+            "output": 2.5
+          },
+          "long_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 3.75
+          },
+          "short_context": {
+            "cache_write_12h": 1.25,
+            "cache_write_30m": 0.625,
+            "cached_input": 0.025,
+            "input": 0.5,
+            "output": 2.5
+          }
+        },
         "standard": {
           "default": {
             "cache_write_12h": 2.5,
@@ -2574,6 +2972,401 @@
             "cached_input": 0.05,
             "input": 1.0,
             "output": 5.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6.2-astra": {
+      "categories": [
+        "language_model"
+      ],
+      "category": "language_model",
+      "context_pricing": {
+        "tiers": {
+          "batch": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-astra/batch/context"
+            },
+            "status": "known"
+          },
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-astra/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-astra/standard/context"
+            },
+            "status": "known"
+          },
+          "ultrafast_list": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-astra/ultrafast_list/context"
+            },
+            "status": "known"
+          },
+          "ultrafast_promotion": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-astra/ultrafast_promotion/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.2-astra",
+      "prices": {
+        "batch": {
+          "default": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          },
+          "long_context": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "short_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          }
+        },
+        "fast": {
+          "default": {
+            "cache_write_12h": 40.0,
+            "cache_write_30m": 20.0,
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 80.0
+          },
+          "long_context": {
+            "cache_write_12h": 80.0,
+            "cache_write_30m": 40.0,
+            "cached_input": 1.6,
+            "input": 32.0,
+            "output": 120.0
+          },
+          "short_context": {
+            "cache_write_12h": 40.0,
+            "cache_write_30m": 20.0,
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 80.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          },
+          "long_context": {
+            "cache_write_12h": 40.0,
+            "cache_write_30m": 20.0,
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 60.0
+          },
+          "short_context": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          }
+        },
+        "ultrafast_list": {
+          "default": {
+            "cache_write_12h": 120.0,
+            "cache_write_30m": 60.0,
+            "cached_input": 2.4,
+            "input": 48.0,
+            "output": 240.0
+          },
+          "long_context": {
+            "cache_write_12h": 240.0,
+            "cache_write_30m": 120.0,
+            "cached_input": 4.8,
+            "input": 96.0,
+            "output": 360.0
+          },
+          "short_context": {
+            "cache_write_12h": 120.0,
+            "cache_write_30m": 60.0,
+            "cached_input": 2.4,
+            "input": 48.0,
+            "output": 240.0
+          }
+        },
+        "ultrafast_promotion": {
+          "default": {
+            "cache_write_12h": 60.0,
+            "cache_write_30m": 30.0,
+            "cached_input": 1.2,
+            "input": 24.0,
+            "output": 120.0
+          },
+          "long_context": {
+            "cache_write_12h": 120.0,
+            "cache_write_30m": 60.0,
+            "cached_input": 2.4,
+            "input": 48.0,
+            "output": 180.0
+          },
+          "short_context": {
+            "cache_write_12h": 60.0,
+            "cache_write_30m": 30.0,
+            "cached_input": 1.2,
+            "input": 24.0,
+            "output": 120.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6.2-astra-law": {
+      "categories": [
+        "legal_model_configurations"
+      ],
+      "category": "legal_model_configurations",
+      "context_pricing": {
+        "tiers": {
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6.2-astra-law/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.2-astra-law",
+      "prices": {
+        "standard": {
+          "default": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          },
+          "long_context": {
+            "cache_write_12h": 40.0,
+            "cache_write_30m": 20.0,
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 60.0
+          },
+          "short_context": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          }
+        }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6.2-sol": {
+      "categories": [
+        "language_model"
+      ],
+      "category": "language_model",
+      "context_pricing": {
+        "tiers": {
+          "batch": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-sol/batch/context"
+            },
+            "status": "known"
+          },
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-sol/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-sol/standard/context"
+            },
+            "status": "known"
+          },
+          "ultrafast_list": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-sol/ultrafast_list/context"
+            },
+            "status": "known"
+          },
+          "ultrafast_promotion": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "locator": "gpt-6.2-sol/ultrafast_promotion/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.2-sol",
+      "prices": {
+        "batch": {
+          "default": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
+          },
+          "long_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 7.5
+          },
+          "short_context": {
+            "cache_write_12h": 2.5,
+            "cache_write_30m": 1.25,
+            "cached_input": 0.05,
+            "input": 1.0,
+            "output": 5.0
+          }
+        },
+        "fast": {
+          "default": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          },
+          "long_context": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "short_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          },
+          "long_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "short_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          }
+        },
+        "ultrafast_list": {
+          "default": {
+            "cache_write_12h": 30.0,
+            "cache_write_30m": 15.0,
+            "cached_input": 0.6,
+            "input": 12.0,
+            "output": 60.0
+          },
+          "long_context": {
+            "cache_write_12h": 60.0,
+            "cache_write_30m": 30.0,
+            "cached_input": 1.2,
+            "input": 24.0,
+            "output": 90.0
+          },
+          "short_context": {
+            "cache_write_12h": 30.0,
+            "cache_write_30m": 15.0,
+            "cached_input": 0.6,
+            "input": 12.0,
+            "output": 60.0
+          }
+        },
+        "ultrafast_promotion": {
+          "default": {
+            "cache_write_12h": 15.0,
+            "cache_write_30m": 7.5,
+            "cached_input": 0.3,
+            "input": 6.0,
+            "output": 30.0
+          },
+          "long_context": {
+            "cache_write_12h": 30.0,
+            "cache_write_30m": 15.0,
+            "cached_input": 0.6,
+            "input": 12.0,
+            "output": 45.0
+          },
+          "short_context": {
+            "cache_write_12h": 15.0,
+            "cache_write_30m": 7.5,
+            "cached_input": 0.3,
+            "input": 6.0,
+            "output": 30.0
           }
         }
       },
@@ -2835,6 +3628,17 @@
       "category": "image_generation",
       "model": "gpt-image-2.6-flare",
       "prices": {
+        "batch": {
+          "image": {
+            "cached_input": 1.0,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "text": {
+            "cached_input": 0.625,
+            "input": 2.5
+          }
+        },
         "standard": {
           "image": {
             "cached_input": 2.0,
@@ -2859,6 +3663,17 @@
       "category": "image_generation",
       "model": "gpt-image-2.6-sunburst",
       "prices": {
+        "batch": {
+          "image": {
+            "cached_input": 1.0,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "text": {
+            "cached_input": 0.625,
+            "input": 2.5
+          }
+        },
         "standard": {
           "image": {
             "cached_input": 2.0,
@@ -3132,7 +3947,7 @@
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
               "locator": "gpt-rosalind-discovery/standard/context"
             },
             "status": "known"
@@ -3173,7 +3988,7 @@
           "standard": {
             "long_context_input_tokens_gt": 272000,
             "provenance": {
-              "evidence_sha256": "958ec764f75da3ab4dacab92a0c5ce3d9beb5d259c254a7e312955cc817d8a03",
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
               "locator": "gpt-rosalind-research/standard/context"
             },
             "status": "known"
@@ -3245,7 +4060,7 @@
           },
           "flex": {
             "provenance": {
-              "evidence_sha256": "3a550ce7553e58a38e858f731ac46cb5c000c49f76ba96cb72b7ef9b790e631f",
+              "evidence_sha256": "ed5b09c37156b7affb366590014022fb743630134b88b70ad704417a29ff6470",
               "locator": "o3/flex/context"
             },
             "status": "uniform"
@@ -3466,7 +4281,7 @@
       ]
     }
   },
-  "models_count": 73,
+  "models_count": 77,
   "schema_version": 2,
   "source": "openai_official_pricing_page",
   "source_url": "https://developers.openai.com/api/docs/pricing",
@@ -3478,14 +4293,14 @@
       "details": "ChatKit file and image upload storage",
       "price": 0.1,
       "price_semantics": "first listed rate; consult rates for billing conditions",
-      "pricing": "$0.10 / GB-day after 1 GB free per account per month",
+      "pricing": "$0.10 / GB-day 1 GB free",
       "rates": [
         {
           "amounts": [
             0.1
           ],
           "details": "ChatKit file and image upload storage",
-          "pricing": "$0.10 / GB-day after 1 GB free per account per month",
+          "pricing": "$0.10 / GB-day 1 GB free",
           "tool": "Agent Kit"
         }
       ],
@@ -3501,7 +4316,7 @@
       "details": "Hosted Shell and Code Interpreter",
       "price": 0.03,
       "price_semantics": "first listed rate; consult rates for billing conditions",
-      "pricing": "1 GB $0.03, 4 GB $0.12, 16 GB $0.48, 64 GB $1.92 per 20-minute session per container.",
+      "pricing": "1 GB $0.03, 4 GB $0.12, 16 GB $0.48, 64 GB $1.92 per 20-minute session per container",
       "rates": [
         {
           "amounts": [
@@ -3511,7 +4326,7 @@
             1.92
           ],
           "details": "Hosted Shell and Code Interpreter",
-          "pricing": "1 GB $0.03, 4 GB $0.12, 16 GB $0.48, 64 GB $1.92 per 20-minute session per container.",
+          "pricing": "1 GB $0.03, 4 GB $0.12, 16 GB $0.48, 64 GB $1.92 per 20-minute session per container",
           "tool": "Containers"
         }
       ],
@@ -3524,14 +4339,14 @@
       "details": "Storage",
       "price": 0.1,
       "price_semantics": "first listed rate; consult rates for billing conditions",
-      "pricing": "$0.10 / GB per day (1 GB free)",
+      "pricing": "$0.10 / GB per day 1 GB free",
       "rates": [
         {
           "amounts": [
             0.1
           ],
           "details": "Storage",
-          "pricing": "$0.10 / GB per day (1 GB free)",
+          "pricing": "$0.10 / GB per day 1 GB free",
           "tool": "File search"
         },
         {
@@ -3549,7 +4364,7 @@
       "amounts": [
         10.0
       ],
-      "details": "Web search (all models)",
+      "details": "Web search (incl. images)",
       "price": 10.0,
       "price_semantics": "first listed rate; consult rates for billing conditions",
       "pricing": "$10.00 / 1k calls + Search content tokens billed at model rates.",
@@ -3558,7 +4373,7 @@
           "amounts": [
             10.0
           ],
-          "details": "Web search (all models)",
+          "details": "Web search (incl. images)",
           "pricing": "$10.00 / 1k calls + Search content tokens billed at model rates.",
           "tool": "Web search"
         },
@@ -3566,15 +4381,7 @@
           "amounts": [
             10.0
           ],
-          "details": "Image Web search (all models)",
-          "pricing": "$10.00 / 1k calls + Search content tokens billed at model rates.",
-          "tool": "Web search"
-        },
-        {
-          "amounts": [
-            10.0
-          ],
-          "details": "Web search preview (reasoning models, including gpt-5 , o-series )",
+          "details": "Web search preview (reasoning models)",
           "pricing": "$10.00 / 1k calls + Search content tokens billed at model rates.",
           "tool": "Web search"
         },
@@ -3582,7 +4389,7 @@
           "amounts": [
             25.0
           ],
-          "details": "Web search preview (non-reasoning models)",
+          "details": "Web search preview (other models)",
           "pricing": "$25.00 / 1k calls + Search content tokens are free.",
           "tool": "Web search"
         }
