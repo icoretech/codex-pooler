@@ -21,6 +21,7 @@ defmodule CodexPooler.ServiceTier do
   def pricing_aliases(tier) do
     case canonicalize(tier) do
       "priority" -> ["priority", "fast"]
+      "ultrafast" -> ["ultrafast", "ultrafast_promotion", "ultrafast_list"]
       nil -> []
       canonical -> [canonical]
     end

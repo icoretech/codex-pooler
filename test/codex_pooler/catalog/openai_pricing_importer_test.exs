@@ -504,7 +504,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     rows =
       Repo.all(from row in PricingSnapshot, where: row.price_version == ^imported.price_version)
 
-    for {model, %{"pricing_applicability" => applicability}} <- payload["models"] do
+    for {model, %{"pricing_applicability" => applicability} = model_data} <- payload["models"] do
       for {tier, %{"mode" => "skip"}} <- applicability["tiers"] do
         refute Enum.any?(rows, fn row ->
                  row.model_identifier == model and row.config["service_tier"] == tier
@@ -520,6 +520,26 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         assert model_rows != []
         assert Enum.all?(model_rows, &(&1.config["availability"] == "unavailable"))
         assert Enum.all?(model_rows, &(is_nil(&1.input_token_micros) and is_nil(&1.output_token_micros)))
+      end
+
+      for {tier, %{"mode" => "effective"} = rule} <- applicability["tiers"] do
+        model_rows =
+          Enum.filter(rows, fn row ->
+            row.model_identifier == model and row.config["service_tier"] == tier
+          end)
+
+        assert model_rows != []
+        assert Enum.all?(model_rows, &(&1.config["pricing_applicability"] == model_data["pricing_applicability"]))
+
+        expected_effective_at =
+          case rule["effective_at"] do
+            nil -> imported.price_version |> String.split(":importer-format-", parts: 2) |> hd()
+            value -> value
+          end
+
+        {:ok, expected_effective_at, _offset} = DateTime.from_iso8601(expected_effective_at)
+
+        assert Enum.all?(model_rows, &(DateTime.compare(&1.effective_at, expected_effective_at) == :eq))
       end
     end
   end

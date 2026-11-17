@@ -159,6 +159,33 @@ defmodule CodexPooler.Accounting.PricingContextBoundariesTest do
     refute Map.has_key?(pricing, :price_bucket_fallback)
   end
 
+  test "effective ultrafast variants switch at the published boundary" do
+    promotion =
+      snapshot!(
+        "gpt-effective-ultrafast",
+        "default",
+        "effective-generation",
+        service_tier: "ultrafast_promotion",
+        effective_at: ~U[2026-10-01 00:00:00.000000Z],
+        pricing_effective_until: "2027-03-01T08:00:00Z"
+      )
+
+    listed =
+      snapshot!(
+        "gpt-effective-ultrafast",
+        "default",
+        "effective-generation",
+        service_tier: "ultrafast_list",
+        effective_at: ~U[2027-03-01 08:00:00.000000Z]
+      )
+
+    before = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-02-28 23:59:59Z])
+    after_pricing = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-03-01 08:00:00Z])
+
+    assert before.snapshot.id == promotion.id
+    assert after_pricing.snapshot.id == listed.id
+  end
+
   test "cached and written input count before rate decomposition and missing write rate cannot borrow" do
     setup = accounting_setup()
     identifier = setup.model.pricing_ref
@@ -310,8 +337,9 @@ defmodule CodexPooler.Accounting.PricingContextBoundariesTest do
   end
 
   defp snapshot!(identifier, bucket, version, opts \\ []) do
-    config = %{"service_tier" => "standard", "price_bucket" => bucket, "pricing_type" => "per_1m_tokens"}
+    config = %{"service_tier" => Keyword.get(opts, :service_tier, "standard"), "price_bucket" => bucket, "pricing_type" => "per_1m_tokens"}
     config = if opts[:unavailable], do: Map.put(config, "availability", "unavailable"), else: config
+    config = if opts[:pricing_effective_until], do: Map.put(config, "pricing_effective_until", opts[:pricing_effective_until]), else: config
     config = if opts[:coherent], do: Map.merge(config, %{"importer_format_revision" => "3", "catalog_schema_version" => opts[:schema] || 2, "context_pricing" => opts[:rule] || stored_rule(500_000)}), else: config
 
     Repo.insert!(%PricingSnapshot{
@@ -330,12 +358,16 @@ defmodule CodexPooler.Accounting.PricingContextBoundariesTest do
   defp stored_rule(cutoff), do: rule(cutoff) |> Map.put("version", 1) |> put_in(["provenance", "source_url"], "https://example.com/pricing")
 
   defp lookup(identifier, input, tier \\ "standard", upstream \\ nil) do
+    lookup_at(identifier, input, tier, @as_of, upstream)
+  end
+
+  defp lookup_at(identifier, input, tier, timestamp, upstream \\ nil) do
     PricingResolution.lookup(
       %Model{pricing_ref: identifier, upstream_model_id: upstream, exposed_model_id: identifier},
       identifier,
       %{"service_tier" => tier},
       %{reservation_estimate: %{input_tokens: input}},
-      @as_of
+      timestamp
     )
   end
 

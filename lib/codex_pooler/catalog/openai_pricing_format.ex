@@ -32,6 +32,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
             reasoning: Decimal.t() | nil,
             request_base: Decimal.t() | nil,
             reasoning_price_source: String.t() | nil,
+            effective_at: DateTime.t() | nil,
+            pricing_applicability: map() | nil,
             catalog_schema_version: pos_integer(),
             context_pricing: map()
           }
@@ -51,6 +53,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       :reasoning,
       :request_base,
       :reasoning_price_source,
+      :effective_at,
+      :pricing_applicability,
       :catalog_schema_version,
       :context_pricing,
       categories: []
@@ -367,7 +371,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       add_error(
         state,
         :invalid_pricing_applicability,
-        "pricing applicability must describe unsupported tiers with a version and reason",
+        "pricing applicability must describe versioned tier selection rules",
         path <> ".pricing_applicability"
       )
     end
@@ -376,8 +380,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   defp valid_pricing_applicability?(%{"version" => 1, "tiers" => tiers}) when is_map(tiers) do
     Enum.all?(tiers, fn {tier, rule} ->
       is_binary(tier) and tier == String.trim(tier) and tier != "" and
-        exact_keys?(rule, ~w(mode reason status)) and rule["mode"] in ["skip", "unavailable"] and
-        unsupported_applicability?(rule)
+        valid_pricing_applicability_rule?(rule)
     end)
   end
 
@@ -389,6 +392,49 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   end
 
   defp unsupported_applicability?(_value), do: false
+
+  defp valid_pricing_applicability_rule?(%{"mode" => mode} = rule)
+       when mode in ["skip", "unavailable"] do
+    valid_unsupported_rule?(rule)
+  end
+
+  defp valid_pricing_applicability_rule?(%{"mode" => "effective"} = rule) do
+    valid_effective_rule?(rule)
+  end
+
+  defp valid_pricing_applicability_rule?(_rule), do: false
+
+  defp valid_unsupported_rule?(rule),
+    do: exact_keys?(rule, ~w(mode reason status)) and unsupported_applicability?(rule)
+
+  defp valid_effective_rule?(rule) do
+    exact_keys?(rule, ~w(effective_at effective_until mode reason status timezone)) and
+      valid_supported_rule?(rule) and
+      valid_effective_timestamp?(rule["effective_at"]) and
+      valid_effective_timestamp?(rule["effective_until"]) and
+      (is_binary(rule["effective_at"]) or is_binary(rule["effective_until"])) and
+      effective_bounds_ordered?(rule["effective_at"], rule["effective_until"])
+  end
+
+  defp valid_supported_rule?(rule) do
+    rule["status"] == "supported" and valid_reason?(rule["reason"]) and
+      is_binary(rule["timezone"]) and rule["timezone"] == String.trim(rule["timezone"])
+  end
+
+  defp valid_reason?(reason),
+    do: is_binary(reason) and reason != "" and reason == String.trim(reason) and byte_size(reason) <= 80
+
+  defp valid_effective_timestamp?(nil), do: true
+  defp valid_effective_timestamp?(value), do: match?({:ok, _}, parse_timestamp(value))
+
+  defp effective_bounds_ordered?(nil, _until), do: true
+  defp effective_bounds_ordered?(_at, nil), do: true
+
+  defp effective_bounds_ordered?(effective_at, effective_until) do
+    {:ok, effective_at} = parse_timestamp(effective_at)
+    {:ok, effective_until} = parse_timestamp(effective_until)
+    DateTime.compare(effective_at, effective_until) == :lt
+  end
 
   defp skip_applicability?(%{"pricing_applicability" => applicability}, tier)
        when is_map(applicability) and is_binary(tier) do
@@ -751,9 +797,22 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
               do: "default.reasoning",
               else: "output_fallback"
             )
-        )
+        ),
+      effective_at: applicability_effective_at(model, raw_tier),
+      pricing_applicability: model["pricing_applicability"]
     }
     |> Map.put(:raw_service_tier, raw_tier)
+  end
+
+  defp applicability_effective_at(model, tier) do
+    case get_in(model, ["pricing_applicability", "tiers", tier, "effective_at"]) do
+      value when is_binary(value) ->
+        {:ok, timestamp} = parse_timestamp(value)
+        timestamp
+
+      _value ->
+        nil
+    end
   end
 
   defp coalesce_alias_rows(state) do
@@ -867,6 +926,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       :reasoning,
       :request_base,
       :reasoning_price_source,
+      :effective_at,
+      :pricing_applicability,
       :catalog_schema_version,
       :context_pricing
     ])

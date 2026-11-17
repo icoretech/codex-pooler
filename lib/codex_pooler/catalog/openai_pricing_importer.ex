@@ -239,26 +239,36 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
       output_token_micros: row.output,
       reasoning_token_micros: row.reasoning,
       request_base_micros: row.request_base,
-      effective_at: effective_at,
+      effective_at: row.effective_at || effective_at,
       source_url: source_url,
       captured_at: captured_at,
-      config: %{
-        "source" => @source,
-        "importer_format_revision" => @revision,
-        "catalog_schema_version" => row.catalog_schema_version,
-        "context_pricing" => row.context_pricing,
-        "source_generated_at" => generated_at_raw,
-        "source_path" => source_url,
-        "service_tier" => row.service_tier,
-        "price_bucket" => row.price_bucket,
-        "pricing_type" => row.pricing_type,
-        "category" => row.category,
-        "categories" => row.categories,
-        "availability" => row.availability,
-        "cache_write_rates" => cache_write_rates(row),
-        "reasoning_price_source" => row.reasoning_price_source
-      }
+      config: pricing_config(row, generated_at_raw, source_url)
     }
+  end
+
+  defp pricing_config(row, generated_at_raw, source_url) do
+    base = %{
+      "source" => @source,
+      "importer_format_revision" => @revision,
+      "catalog_schema_version" => row.catalog_schema_version,
+      "context_pricing" => row.context_pricing,
+      "source_generated_at" => generated_at_raw,
+      "source_path" => source_url,
+      "service_tier" => row.service_tier,
+      "price_bucket" => row.price_bucket,
+      "pricing_type" => row.pricing_type,
+      "category" => row.category,
+      "categories" => row.categories,
+      "availability" => row.availability,
+      "cache_write_rates" => cache_write_rates(row),
+      "reasoning_price_source" => row.reasoning_price_source,
+      "pricing_applicability" => row.pricing_applicability
+    }
+
+    case get_in(row.pricing_applicability || %{}, ["tiers", row.service_tier, "effective_until"]) do
+      value when is_binary(value) -> Map.put(base, "pricing_effective_until", value)
+      _value -> base
+    end
   end
 
   defp cache_write_rates(row) do
@@ -290,7 +300,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
       pricing_type: snapshot.config["pricing_type"],
       category: snapshot.config["category"],
       categories: snapshot.config["categories"],
-      reasoning_price_source: snapshot.config["reasoning_price_source"]
+      reasoning_price_source: snapshot.config["reasoning_price_source"],
+      pricing_applicability: snapshot.config["pricing_applicability"],
+      pricing_effective_until: snapshot.config["pricing_effective_until"]
     }
   end
 
@@ -317,7 +329,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
       pricing_type: attrs.config["pricing_type"],
       category: attrs.config["category"],
       categories: attrs.config["categories"],
-      reasoning_price_source: attrs.config["reasoning_price_source"]
+      reasoning_price_source: attrs.config["reasoning_price_source"],
+      pricing_applicability: attrs.config["pricing_applicability"],
+      pricing_effective_until: attrs.config["pricing_effective_until"]
     }
   end
 

@@ -15,7 +15,9 @@ defmodule CodexPooler.Accounting.PricingResolution.Generations do
   ), eligible AS MATERIALIZED (
     SELECT ps.*, lower(ps.model_identifier) AS identifier
     FROM pricing_snapshots ps JOIN candidates c ON lower(ps.model_identifier) = c.identifier
-    WHERE ps.effective_at <= $2 AND ps.config->>'pricing_type' = 'per_1m_tokens'
+    WHERE ps.effective_at <= $2
+      AND (ps.config->>'pricing_effective_until' IS NULL OR (ps.config->>'pricing_effective_until')::timestamptz > $2)
+      AND ps.config->>'pricing_type' = 'per_1m_tokens'
   ), anchors AS MATERIALIZED (
     SELECT DISTINCT ON (identifier) e.*
     FROM eligible e WHERE e.config->>'service_tier' = ANY($3::text[])

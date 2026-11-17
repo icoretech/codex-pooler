@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T19:55:03.661699Z",
+  "generated_at": "2026-11-17T20:32:34.767800Z",
   "models": {
     "chat-latest": {
       "categories": [
@@ -3171,14 +3171,20 @@
       "pricing_applicability": {
         "tiers": {
           "ultrafast_list": {
-            "mode": "skip",
+            "effective_at": "2027-03-01T08:00:00Z",
+            "effective_until": null,
+            "mode": "effective",
             "reason": "time_conditioned",
-            "status": "unsupported"
+            "status": "supported",
+            "timezone": "America/Los_Angeles"
           },
           "ultrafast_promotion": {
-            "mode": "skip",
+            "effective_at": null,
+            "effective_until": "2027-03-01T08:00:00Z",
+            "mode": "effective",
             "reason": "time_conditioned",
-            "status": "unsupported"
+            "status": "supported",
+            "timezone": "America/Los_Angeles"
           }
         },
         "version": 1
@@ -3418,14 +3424,20 @@
       "pricing_applicability": {
         "tiers": {
           "ultrafast_list": {
-            "mode": "skip",
+            "effective_at": "2027-03-01T08:00:00Z",
+            "effective_until": null,
+            "mode": "effective",
             "reason": "time_conditioned",
-            "status": "unsupported"
+            "status": "supported",
+            "timezone": "America/Los_Angeles"
           },
           "ultrafast_promotion": {
-            "mode": "skip",
+            "effective_at": null,
+            "effective_until": "2027-03-01T08:00:00Z",
+            "mode": "effective",
             "reason": "time_conditioned",
-            "status": "unsupported"
+            "status": "supported",
+            "timezone": "America/Los_Angeles"
           }
         },
         "version": 1

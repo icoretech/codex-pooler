@@ -70,7 +70,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
     assert result.compatible?
 
-    for {model, %{"pricing_applicability" => applicability}} <- payload["models"] do
+    for {model, %{"pricing_applicability" => applicability} = model_data} <- payload["models"] do
       for {tier, %{"mode" => "skip"}} <- applicability["tiers"] do
         refute Enum.any?(result.rows, fn row ->
                  row.model_identifier == model and row.service_tier == tier
@@ -91,6 +91,13 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
                  warning.code == :unsupported_pricing_applicability and
                    String.starts_with?(warning.path, "models.#{model}.prices.#{tier}.")
                end) == length(rows)
+      end
+
+      for {tier, %{"mode" => "effective"}} <- applicability["tiers"] do
+        rows = Enum.filter(result.rows, &(&1.model_identifier == model and &1.service_tier == tier))
+        assert rows != []
+        assert Enum.all?(rows, &(&1.availability == "priced"))
+        assert Enum.all?(rows, &(&1.pricing_applicability == model_data["pricing_applicability"]))
       end
     end
   end
