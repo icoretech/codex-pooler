@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T18:40:30.889868Z",
+  "generated_at": "2026-11-17T19:55:03.661699Z",
   "models": {
     "chat-latest": {
       "categories": [
@@ -2280,6 +2280,16 @@
           }
         }
       },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
+      },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
         "per_1m_tokens"
@@ -2517,6 +2527,16 @@
             "output": 50.0
           }
         }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
       },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
@@ -3148,6 +3168,21 @@
           }
         }
       },
+      "pricing_applicability": {
+        "tiers": {
+          "ultrafast_list": {
+            "mode": "skip",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          },
+          "ultrafast_promotion": {
+            "mode": "skip",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
+      },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
         "per_1m_tokens"
@@ -3196,6 +3231,16 @@
             "output": 40.0
           }
         }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
       },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
@@ -3369,6 +3414,21 @@
             "output": 30.0
           }
         }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "ultrafast_list": {
+            "mode": "skip",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          },
+          "ultrafast_promotion": {
+            "mode": "skip",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
       },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
@@ -3973,6 +4033,16 @@
           }
         }
       },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
+      },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
         "per_1m_tokens"
@@ -4013,6 +4083,16 @@
             "output": 25.0
           }
         }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "time_conditioned",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
       },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [

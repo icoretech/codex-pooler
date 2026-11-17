@@ -879,6 +879,44 @@ defmodule CodexPooler.Accounting.PricingTest do
     end
 
     @tag :ultrafast_service_tier
+    test "an ultrafast request with a default provider echo keeps ultrafast pricing" do
+      setup = accounting_setup()
+
+      ultrafast_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          config: pricing_config(%{"service_tier" => "ultrafast"}),
+          input_token_micros: Decimal.new(100),
+          output_token_micros: Decimal.new(200)
+        })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{
+                   "model" => setup.model.exposed_model_id,
+                   "service_tier" => "ultrafast",
+                   "max_output_tokens" => 1
+                 },
+                 %{correlation_id: "corr-ultrafast-default-echo"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{status: "usage_known", input_tokens: 2, output_tokens: 1, total_tokens: 3, service_tier: "default"},
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.pricing_snapshot_id == ultrafast_pricing.id
+      assert result.settlement.details["actual_service_tier"] == "default"
+      assert result.settlement.details["service_tier"] == "ultrafast"
+    end
+
+    @tag :ultrafast_service_tier
     test "actual ultrafast pricing overrides requested priority" do
       setup = accounting_setup()
 

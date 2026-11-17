@@ -239,6 +239,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
         |> validate_string_list(model["categories"], path <> ".categories")
         |> validate_string_list(model["pricing_types"], path <> ".pricing_types")
         |> validate_nonempty_map(model["prices"], path <> ".prices")
+        |> validate_pricing_applicability(model["pricing_applicability"], path)
         |> validate_model_identity(normalized_key, normalized_model, path)
         |> validate_optional_model_timestamp(model, generated_at, path)
         |> validate_pricing_types(model["pricing_type"], model["pricing_types"], path)
@@ -274,7 +275,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   defp model_fields(model, schema) when is_map(model) do
     fields = if Map.has_key?(model, "timestamp"), do: @model_fields, else: @model_fields -- ["timestamp"]
-    if schema == 2 and Map.has_key?(model, "context_pricing"), do: ["context_pricing" | fields], else: fields
+    fields = if schema == 2 and Map.has_key?(model, "context_pricing"), do: ["context_pricing" | fields], else: fields
+    if schema == 2 and Map.has_key?(model, "pricing_applicability"), do: ["pricing_applicability" | fields], else: fields
   end
 
   defp model_fields(_model, _schema), do: @model_fields
@@ -310,7 +312,24 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   defp context_rules(_state, model, []), do: if(Map.has_key?(model, "context_pricing"), do: :error, else: {:ok, %{}})
 
-  defp context_rules(state, model, tiers), do: ContextPricing.normalize(model["context_pricing"], tiers, model["prices"], state.source_url)
+  defp context_rules(state, model, tiers) do
+    model["context_pricing"]
+    |> drop_unsupported_context_tiers(model["pricing_applicability"], tiers)
+    |> ContextPricing.normalize(tiers, model["prices"], state.source_url)
+  end
+
+  defp drop_unsupported_context_tiers(%{"tiers" => rules} = context, applicability, tiers)
+       when is_map(rules) and is_map(applicability) do
+    unsupported =
+      applicability
+      |> Map.get("tiers", %{})
+      |> Enum.filter(fn {tier, rule} -> tier not in tiers and unsupported_applicability?(rule) end)
+      |> Enum.map(&elem(&1, 0))
+
+    Map.put(context, "tiers", Map.drop(rules, unsupported))
+  end
+
+  defp drop_unsupported_context_tiers(context, _applicability, _tiers), do: context
 
   defp validate_default_short_alias(state, rows, prices, path) do
     Enum.reduce(Enum.group_by(rows, & &1.raw_service_tier), state, fn {tier, tier_rows}, acc ->
@@ -338,6 +357,64 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       validate_trimmed_nonblank(acc, model[field], path <> ".#{field}")
     end)
   end
+
+  defp validate_pricing_applicability(state, nil, _path), do: state
+
+  defp validate_pricing_applicability(state, value, path) do
+    if valid_pricing_applicability?(value) do
+      state
+    else
+      add_error(
+        state,
+        :invalid_pricing_applicability,
+        "pricing applicability must describe unsupported tiers with a version and reason",
+        path <> ".pricing_applicability"
+      )
+    end
+  end
+
+  defp valid_pricing_applicability?(%{"version" => 1, "tiers" => tiers}) when is_map(tiers) do
+    Enum.all?(tiers, fn {tier, rule} ->
+      is_binary(tier) and tier == String.trim(tier) and tier != "" and
+        exact_keys?(rule, ~w(mode reason status)) and rule["mode"] in ["skip", "unavailable"] and
+        unsupported_applicability?(rule)
+    end)
+  end
+
+  defp valid_pricing_applicability?(_value), do: false
+
+  defp unsupported_applicability?(%{"status" => "unsupported", "reason" => reason})
+       when is_binary(reason) do
+    reason != "" and reason == String.trim(reason) and byte_size(reason) <= 80
+  end
+
+  defp unsupported_applicability?(_value), do: false
+
+  defp skip_applicability?(%{"pricing_applicability" => applicability}, tier)
+       when is_map(applicability) and is_binary(tier) do
+    applicability
+    |> Map.get("tiers", %{})
+    |> Map.get(tier)
+    |> case do
+      %{"mode" => "skip"} -> true
+      _rule -> false
+    end
+  end
+
+  defp skip_applicability?(_model, _tier), do: false
+
+  defp unavailable_applicability?(%{"pricing_applicability" => applicability}, tier)
+       when is_map(applicability) and is_binary(tier) do
+    applicability
+    |> Map.get("tiers", %{})
+    |> Map.get(tier)
+    |> case do
+      %{"mode" => "unavailable"} -> true
+      _rule -> false
+    end
+  end
+
+  defp unavailable_applicability?(_model, _tier), do: false
 
   defp classify_model(state, identifier, model, path) do
     case model["pricing_type"] do
@@ -371,17 +448,35 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
     tier_path = path <> ".prices.#{raw_tier}"
     state = validate_pricing_key(state, raw_tier, path <> ".prices")
 
-    if is_map(buckets) and map_size(buckets) > 0 and state.errors == [] do
-      tier = ServiceTier.canonicalize(raw_tier)
+    cond do
+      not is_map(buckets) or map_size(buckets) == 0 ->
+        add_error(state, :invalid_tier_shape, "tier prices must be a non-empty map", tier_path)
 
-      buckets
-      |> Enum.sort_by(&elem(&1, 0))
-      |> Enum.reduce(state, fn {bucket, values}, acc ->
-        classify_token_bucket(acc, identifier, model, raw_tier, tier, bucket, values, tier_path)
-      end)
-    else
-      add_error(state, :invalid_tier_shape, "tier prices must be a non-empty map", tier_path)
+      state.errors != [] ->
+        add_error(state, :invalid_tier_shape, "tier prices must be a non-empty map", tier_path)
+
+      skip_applicability?(model, raw_tier) ->
+        skip_unsupported_service_tier(
+          state,
+          identifier,
+          ServiceTier.canonicalize(raw_tier),
+          buckets,
+          tier_path
+        )
+
+      true ->
+        classify_supported_token_tier(state, identifier, model, raw_tier, buckets, tier_path)
     end
+  end
+
+  defp classify_supported_token_tier(state, identifier, model, raw_tier, buckets, tier_path) do
+    tier = ServiceTier.canonicalize(raw_tier)
+
+    buckets
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce(state, fn {bucket, values}, acc ->
+      classify_token_bucket(acc, identifier, model, raw_tier, tier, bucket, values, tier_path)
+    end)
   end
 
   defp classify_token_bucket(state, identifier, model, raw_tier, tier, bucket, values, tier_path) do
@@ -409,6 +504,20 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   defp classify_snapshot_bucket(state, identifier, model, raw_tier, tier, bucket, values, path) do
     cond do
+      unavailable_applicability?(model, raw_tier) ->
+        row = row(identifier, model, raw_tier, tier, bucket, "unavailable", %{})
+
+        state
+        |> add_row(row)
+        |> increment(:importable_rows)
+        |> increment(:unavailable_rows)
+        |> increment_bucket(bucket)
+        |> add_warning(
+          :unsupported_pricing_applicability,
+          "promotional pricing applicability is unsupported",
+          path
+        )
+
       values == %{"available" => false} ->
         row = row(identifier, model, raw_tier, tier, bucket, "unavailable", %{})
 
@@ -587,6 +696,20 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       ])
 
   defp descriptor_valid?(_bucket, _values), do: false
+
+  defp skip_unsupported_service_tier(state, identifier, tier, buckets, tier_path) do
+    Enum.reduce(buckets, state, fn {bucket, _values}, acc ->
+      path = tier_path <> ".#{bucket}"
+
+      acc
+      |> skip_bucket(identifier, tier, bucket)
+      |> add_warning(
+        :unsupported_service_tier,
+        "service tier applicability is unsupported",
+        path
+      )
+    end)
+  end
 
   defp priced_bucket?(values) when is_map(values) do
     keys = Map.keys(values)

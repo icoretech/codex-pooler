@@ -497,6 +497,33 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert_imported_target_settles("gpt-6.1-sol", ultrafast: "19440")
   end
 
+  test "the vendored target leaves ambiguous ultrafast and promotional rates unavailable" do
+    payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
+    assert {:ok, imported} = OpenAIPricingImporter.import_file(@target)
+
+    rows =
+      Repo.all(from row in PricingSnapshot, where: row.price_version == ^imported.price_version)
+
+    for {model, %{"pricing_applicability" => applicability}} <- payload["models"] do
+      for {tier, %{"mode" => "skip"}} <- applicability["tiers"] do
+        refute Enum.any?(rows, fn row ->
+                 row.model_identifier == model and row.config["service_tier"] == tier
+               end)
+      end
+
+      for {tier, %{"mode" => "unavailable"}} <- applicability["tiers"] do
+        model_rows =
+          Enum.filter(rows, fn row ->
+            row.model_identifier == model and row.config["service_tier"] == tier
+          end)
+
+        assert model_rows != []
+        assert Enum.all?(model_rows, &(&1.config["availability"] == "unavailable"))
+        assert Enum.all?(model_rows, &(is_nil(&1.input_token_micros) and is_nil(&1.output_token_micros)))
+      end
+    end
+  end
+
   test "malformed image modality rates reject the whole catalog without snapshot writes" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
     count = Repo.aggregate(PricingSnapshot, :count)

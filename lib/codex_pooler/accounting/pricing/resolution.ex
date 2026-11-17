@@ -694,8 +694,11 @@ defmodule CodexPooler.Accounting.PricingResolution do
   # Fast at a multiple of the standard credit rate and it uses included limits
   # faster (findings#127, findings#206 row 206-271). A `default` echo therefore
   # says nothing about a requested priority tier, and pricing keeps the tier
-  # that was requested; any other reported tier still outranks the request.
-  defp echo_hides_requested_tier?("priority", "default"), do: true
+  # that was requested. The same fail-closed rule applies to an explicit
+  # ultrafast request: an ambiguous `default` echo must not select Standard
+  # while the catalog has no applicable ultrafast generation. Any other
+  # reported tier still outranks the request.
+  defp echo_hides_requested_tier?(requested, "default") when requested in ["priority", "ultrafast"], do: true
   defp echo_hides_requested_tier?(_requested, _actual), do: false
 
   defp mapped_service_tier("batch", false), do: {:unpriced, "unpriced_batch_tier"}

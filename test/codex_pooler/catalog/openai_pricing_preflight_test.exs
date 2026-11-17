@@ -64,6 +64,51 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     end
   end
 
+  test "source-conditioned tiers and promotional models fail closed" do
+    payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
+    result = OpenAIPricingFormat.classify(payload)
+
+    assert result.compatible?
+
+    for {model, %{"pricing_applicability" => applicability}} <- payload["models"] do
+      for {tier, %{"mode" => "skip"}} <- applicability["tiers"] do
+        refute Enum.any?(result.rows, fn row ->
+                 row.model_identifier == model and row.service_tier == tier
+               end)
+
+        assert Enum.count(result.warnings, fn warning ->
+                 warning.code == :unsupported_service_tier and
+                   String.starts_with?(warning.path, "models.#{model}.prices.#{tier}.")
+               end) == map_size(payload["models"][model]["prices"][tier])
+      end
+
+      for {tier, %{"mode" => "unavailable"}} <- applicability["tiers"] do
+        rows = Enum.filter(result.rows, &(&1.model_identifier == model and &1.service_tier == tier))
+        assert rows != []
+        assert Enum.all?(rows, &(&1.availability == "unavailable"))
+
+        assert Enum.count(result.warnings, fn warning ->
+                 warning.code == :unsupported_pricing_applicability and
+                   String.starts_with?(warning.path, "models.#{model}.prices.#{tier}.")
+               end) == length(rows)
+      end
+    end
+  end
+
+  test "pricing applicability metadata is versioned and exact" do
+    payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
+    path = ["models", "gpt-6.2-astra", "pricing_applicability"]
+
+    for candidate <- [
+          put_in(payload, path ++ ["version"], 2),
+          put_in(payload, path ++ ["tiers", "ultrafast_list", "mode"], "select"),
+          put_in(payload, path ++ ["tiers", "ultrafast_list", "extra"], true),
+          put_in(payload, path ++ ["tiers", "ultrafast_list", "reason"], " ")
+        ] do
+      refute OpenAIPricingPreflight.validate_payload(candidate).compatible?
+    end
+  end
+
   test "classifies the immutable July 28 fixture with exact reviewed coverage" do
     result = OpenAIPricingPreflight.validate_file(@fixture)
 
