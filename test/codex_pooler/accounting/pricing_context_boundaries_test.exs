@@ -180,10 +180,12 @@ defmodule CodexPooler.Accounting.PricingContextBoundariesTest do
       )
 
     before = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-02-28 23:59:59Z])
-    after_pricing = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-03-01 08:00:00Z])
+    at_boundary = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-03-01 08:00:00Z])
+    after_boundary = lookup_at("gpt-effective-ultrafast", 10, "ultrafast", ~U[2027-03-01 08:00:01Z])
 
     assert before.snapshot.id == promotion.id
-    assert after_pricing.snapshot.id == listed.id
+    assert at_boundary.snapshot.id == listed.id
+    assert after_boundary.snapshot.id == listed.id
   end
 
   test "cached and written input count before rate decomposition and missing write rate cannot borrow" do
