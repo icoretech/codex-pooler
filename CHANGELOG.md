@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.16.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.1...codex-pooler-v0.16.0) (2026-11-17)
+
+
+### Features
+
+* **upstreams:** add a per-account usage cap ([31f561a](https://github.com/icoretech/codex-pooler/commit/31f561a75e5f65b7fa40ac341907db1ced6723ee))
+
+
+### Bug Fixes
+
+* **upstreams:** keep route filtering side-effect free without a usage cap ([1a08e98](https://github.com/icoretech/codex-pooler/commit/1a08e98cf144c783adab1597a7df8df300becb38))
+
+
+### Dependencies
+
+* refresh frontend, documentation and SDK dependencies ([4d61fe2](https://github.com/icoretech/codex-pooler/commit/4d61fe2b994f06ae01ec75dc6abcac059e786748))
+* update dependency @astrojs/starlight to v0.42.11 ([#630](https://github.com/icoretech/codex-pooler/issues/630)) ([3736f62](https://github.com/icoretech/codex-pooler/commit/3736f62c42fb49257d31373dfe1636e8d45ae48d))
+* update dependency sobelow to v0.19.0 ([#633](https://github.com/icoretech/codex-pooler/issues/633)) ([bf93f4f](https://github.com/icoretech/codex-pooler/commit/bf93f4fdd137c9535ebf1115f012f4471899e6af))
+* update helm release codex-pooler to v0.16.0 ([#634](https://github.com/icoretech/codex-pooler/issues/634)) ([e40161e](https://github.com/icoretech/codex-pooler/commit/e40161e352e5170358789bb768330cf24b9ddd51))
+
+
+### Tests
+
+* **v1:** cover translated Chat tool choices ([2966663](https://github.com/icoretech/codex-pooler/commit/29666633334a14d0270c57921f0409233632056c))
+
+
+### Miscellaneous Chores
+
+* release 0.16.0 ([f6c235f](https://github.com/icoretech/codex-pooler/commit/f6c235f8fd9044ff42d084f7cb546fc09d354785))
+
 ## [0.15.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.0...codex-pooler-v0.15.1) (2026-11-13)
 
 
