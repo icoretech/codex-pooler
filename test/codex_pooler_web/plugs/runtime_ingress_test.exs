@@ -225,7 +225,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   test "live ordinary JSON and multipart enforce independent byte boundaries on unknown and admin paths" do
     setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 16})
     port = start_parser_scope_endpoint!()
-    header_bytes = byte_size("content-disposition") + byte_size(~s(form-data; name="note"))
+    # Plug charges 36 bytes per part and 56 per header in addition to its name and value.
+    multipart_overhead = 36 + 56 + byte_size("content-disposition") + byte_size(~s(form-data; name="note"))
 
     for path <- ["/unknown-parser-route", "/admin/unknown-parser-route"] do
       for size <- [7_999_999, 8_000_000, 8_000_001] do
@@ -236,7 +237,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         assert json.json_decodes > 0 == (expected == 404)
         assert json.compressed_decodes == 0
 
-        multipart = parser_scope_request(port, :post, path, "multipart/form-data; boundary=scope-boundary", parser_multipart_body(size - header_bytes))
+        multipart = parser_scope_request(port, :post, path, "multipart/form-data; boundary=scope-boundary", parser_multipart_body(size - multipart_overhead))
         assert multipart.status == expected
         assert multipart.part_reads > 0
         assert multipart.compressed_decodes == 0
