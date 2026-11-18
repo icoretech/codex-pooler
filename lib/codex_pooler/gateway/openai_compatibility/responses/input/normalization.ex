@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     additional_tools
     agent_message
     web_search_call
+    image_generation_call
     configuration_update
     message
     reasoning
@@ -191,16 +192,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   # `<type>_<output_index>` (or `<type>` without an index; see
   # `PublicResponses.fallback_output_item_id/2`). Replayed into a `store:
   # false` turn, the Codex backend rejects that id for a message, a
-  # compaction or a web search call (400 `invalid_value` on `input[i].id`;
-  # a web search call wants an id that begins with `ws`) and accepts the item
-  # without one; provider ids are a short prefix plus an opaque suffix
-  # (`msg_`, `rs_`, `cmp_`, `fc_`, `ws_`) and never the item type itself. The input
+  # compaction, a web search call or an image generation call (400
+  # `invalid_value` on `input[i].id`; a web search call wants an id that
+  # begins with `ws`, an image generation call one that begins with `ig`) and
+  # accepts the item without one; provider ids are a short prefix plus an
+  # opaque suffix (`msg_`, `rs_`, `cmp_`, `fc_`, `ws_`, `ig_`) and never the
+  # item type itself. The input
   # adapter therefore drops exactly the item's own fallback id before
   # normalization, so the upstream receives the item as it produced it
   # (findings#254). A reasoning item keeps its id unless it carries encrypted
   # content, the only form that stays valid without one.
   defp drop_public_fallback_item_id(%{"type" => type, "id" => id} = item)
-       when type in ["message", "compaction", "web_search_call"] and is_binary(id) do
+       when type in ["message", "compaction", "web_search_call", "image_generation_call"] and is_binary(id) do
     if public_fallback_item_id?(type, id), do: Map.delete(item, "id"), else: item
   end
 
@@ -364,6 +367,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   # A replayed hosted web search; `Input.WebSearchCall` owns its exact shape.
   defp normalize_input_item(%{"type" => "web_search_call"} = item), do: {:ok, item}
+
+  # A replayed hosted image generation; `Input.ImageGenerationCall` owns its exact shape.
+  defp normalize_input_item(%{"type" => "image_generation_call"} = item), do: {:ok, item}
 
   # A replayed tool search call or output (findings#313); `Input.ToolSearch` owns their exact shape.
   defp normalize_input_item(%{"type" => type} = item) when type in ["tool_search_call", "tool_search_output"], do: {:ok, item}

@@ -2213,6 +2213,26 @@ defmodule CodexPooler.CompatibilityMatrix do
         continuation: %{stateless_history_replay: "accepted"},
         privacy: %{mode: "metadata_only", queries_persisted: false, sources_persisted: false}
       },
+      image_generation_call_history: %{
+        accepted_items: ["image_generation_call"],
+        item: %{
+          required: ["type", "result"],
+          optional: ["id", "status", "action", "background", "output_format", "quality", "size", "revised_prompt", "encrypted_content", "internal_chat_message_metadata_passthrough"],
+          result: "nonblank_string",
+          id: "nonblank_string_or_null",
+          status: "nonblank_string_or_null",
+          encrypted_content: "nonblank_string_or_null",
+          other_fields: "string_or_null"
+        },
+        provider_owned_values: ["action", "background", "output_format", "quality"],
+        public_fallback_id: "dropped",
+        forwarding: "unchanged_in_client_position",
+        refusal: %{status: 400, code: "invalid_request", param: "input", upstream_dispatch: false},
+        serving_modes: ["full", "lite"],
+        continuation: %{stateless_history_replay: "accepted"},
+        reservation_estimate: %{result_bytes: "excluded", image_allowance: 1},
+        privacy: %{mode: "metadata_only", result_persisted: false, revised_prompt_persisted: false}
+      },
       responses_truncation: %{
         accepted_values: ["auto", "disabled"],
         forwarded_upstream: false

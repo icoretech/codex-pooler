@@ -1034,6 +1034,38 @@ Any other shape is rejected before dispatch with `400 invalid_request` on
 `input`. Neither the search query nor the sources are persisted in request
 metadata, logs or operator views.
 
+### Hosted image generation history replay
+
+An `image_generation_call` item is what a Full-served model returns after it
+ran the hosted `image_generation` tool, with the generated image as base64 in
+`result`. A client that sends `response.output` back as the history of its next
+stateless request sends it in `input`, and Codex Pooler forwards it unchanged,
+in the position the client sent it, in Full and Lite serving mode alike. It
+admits the item the way upstream validates it:
+
+- The keys are `type`, `id`, `status`, `action`, `background`,
+  `output_format`, `quality`, `size`, `revised_prompt`, `result`,
+  `encrypted_content` and an optional
+  `internal_chat_message_metadata_passthrough` object. Every field except
+  `type` and `result` may be omitted or `null`.
+- `result` is required and must be a nonblank string. Upstream reads an item
+  without an inline result as a reference to a stored item, which a `/v1`
+  request cannot resolve.
+- `id`, `status` and `encrypted_content` are nonblank strings when present;
+  the other fields are strings. Upstream checks the values of `action`,
+  `background`, `output_format` and `quality` itself and its rejection reaches
+  the client as `400 invalid_value` with the field path.
+- An item the public stream named `image_generation_call` or
+  `image_generation_call_<n>`, because upstream sent it without an id, is
+  replayed without that id.
+
+Any other shape is rejected before dispatch with `400 invalid_request` on
+`input`. The input-token estimate that admits a request against the API key's
+token limits counts a replayed image as one image, with the same fixed
+allowance as an `input_image`, instead of reading its base64 text. Neither the
+image nor the revised prompt is persisted in request metadata, logs or operator
+views.
+
 ### Tool search with deferred tools
 
 `POST /v1/responses` and the Responses websocket accept the upstream's

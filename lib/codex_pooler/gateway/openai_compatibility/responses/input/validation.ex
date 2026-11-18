@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.ConfigurationUpdate
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.HostedShell
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.ImageGenerationCall
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.ToolSearch
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.WebSearchCall
   alias CodexPooler.Gateway.OpenAICompatibility.Validation, as: BoundaryValidation
@@ -81,6 +82,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_input_item(%{"type" => "web_search_call"} = item, _payload),
     do: WebSearchCall.validate_item(item)
+
+  defp validate_input_item(%{"type" => "image_generation_call"} = item, _payload),
+    do: ImageGenerationCall.validate_item(item)
 
   defp validate_input_item(%{"type" => type} = item, _payload) when type in ["tool_search_call", "tool_search_output"],
     do: ToolSearch.validate_item(item)
