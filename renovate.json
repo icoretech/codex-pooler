@@ -2,7 +2,9 @@
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
 	"extends": ["config:recommended"],
 	"ignorePresets": [":semanticPrefixFixDepsChoreOthers"],
-	"dependencyDashboard": true,
+	"dependencyDashboard": {
+		"enabled": true
+	},
 	"enabledManagers": [
 		"custom.regex",
 		"docker-compose",
