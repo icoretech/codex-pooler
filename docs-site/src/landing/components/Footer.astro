@@ -80,7 +80,7 @@ const columns = [
     </div>
 
     <div class="foot-bottom">
-      <p>© {new Date().getFullYear()} iCoreTech · Source available under the Elastic License 2.0</p>
+      <p>© {new Date().getFullYear()} <a href="https://icorete.ch">iCoreTech</a> · Source available under the Elastic License 2.0</p>
       <p>OpenAI and Codex are trademarks of OpenAI. All other product names, logos and brands shown on this site belong to their respective owners and appear only to show which tools Codex Pooler works with. Codex Pooler is an independent project, not affiliated with, sponsored or endorsed by OpenAI or by the makers of any tool shown here.</p>
     </div>
   </div>
@@ -180,6 +180,18 @@ const columns = [
     padding-top: 26px;
     font-size: 13.5px;
     color: var(--night-ink-3);
+  }
+
+  .foot-bottom a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--night-line);
+    text-underline-offset: 3px;
+  }
+
+  .foot-bottom a:hover {
+    color: var(--orange-2);
+    text-decoration-color: currentColor;
   }
 
   @media (max-width: 980px) {

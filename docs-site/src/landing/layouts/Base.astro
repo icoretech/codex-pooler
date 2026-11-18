@@ -27,7 +27,7 @@ const organization = `${SITE_URL}/#organization`;
 const structuredData = {
   "@context": "https://schema.org",
   "@graph": [
-    { "@type": "Organization", "@id": organization, name: "iCoreTech", url: "https://github.com/icoretech", sameAs: ["https://github.com/icoretech", X_URL] },
+    { "@type": "Organization", "@id": organization, name: "iCoreTech", legalName: "iCoreTech, Inc.", url: "https://icorete.ch/", sameAs: ["https://github.com/icoretech", X_URL] },
     { "@type": "WebSite", "@id": `${SITE_URL}/#website`, url: `${SITE_URL}/`, name: "Codex Pooler", inLanguage: "en", publisher: { "@id": organization } },
     {
       "@type": "SoftwareApplication",
