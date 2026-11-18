@@ -1,7 +1,7 @@
 defmodule CodexPooler.Accounting.ImageProjectionTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Accounting.PricingResolution.ImageProjection
+  alias CodexPooler.Accounting.PricingResolution.{ImageProjection, InputEstimate}
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OpenAICompatibility.{Chat, Images, Responses}
   alias CodexPooler.Gateway.Payloads.{PayloadNormalizer, RequestOptions}
@@ -166,6 +166,32 @@ defmodule CodexPooler.Accounting.ImageProjectionTest do
     part = %{image() | "image_url" => data_url}
     assert {projected, 1} = ImageProjection.project(%{"input" => [message([part])]}, %{})
     assert projected == %{"input" => [message([%{part | "image_url" => ""}])]}
+  end
+
+  # A client replays a hosted image generation with the image as base64 in `result`; the estimate counts it as one
+  # semantic image with the fixed allowance instead of reading the bytes as JSON text.
+  test "a replayed image generation counts one image allowance instead of its base64 bytes" do
+    bytes = Base.encode64(:binary.copy(<<137, 80, 78, 71>>, 300_000))
+    call = %{"type" => "image_generation_call", "id" => "ig_synthetic", "status" => "completed", "revised_prompt" => "synthetic prompt", "result" => bytes}
+    payload = %{"input" => [message([%{"type" => "input_text", "text" => "synthetic"}]), call]}
+    before = :erlang.term_to_binary(payload)
+
+    assert {projected, 1} = ImageProjection.project(payload, %{})
+    assert Enum.at(projected["input"], 1) == %{call | "result" => ""}
+    assert :erlang.term_to_binary(payload) == before
+
+    estimate = InputEstimate.estimate(payload, %{})
+    blank = InputEstimate.estimate(%{"input" => [hd(payload["input"]), %{call | "result" => ""}]}, %{})
+    assert estimate.input_tokens == blank.input_tokens + 1_600
+    assert estimate.image_estimate.image_count == 1
+
+    assert {atom_projected, 1} = ImageProjection.project(%{input: [%{type: "image_generation_call", result: bytes}]}, %{})
+    assert atom_projected == %{input: [%{type: "image_generation_call", result: ""}]}
+
+    for odd <- [nil, 7, "", "  ", %{"data" => bytes}] do
+      odd_payload = %{"input" => [%{call | "result" => odd}]}
+      assert ImageProjection.project(odd_payload, %{}) == {odd_payload, 0}
+    end
   end
 
   test "atom native image and mask keys obey the same exact field boundaries" do

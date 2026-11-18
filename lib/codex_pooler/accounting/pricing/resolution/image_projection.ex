@@ -40,12 +40,25 @@ defmodule CodexPooler.Accounting.PricingResolution.ImageProjection do
       value(item, :type) in [nil, "message"] and value(item, :role) in @message_roles ->
         project_field(item, :content, image_count, &project_parts/2)
 
+      value(item, :type) == "image_generation_call" ->
+        project_field(item, :result, image_count, &project_generated_image/2)
+
       true ->
         {item, image_count}
     end
   end
 
   defp project_item(item, image_count), do: {item, image_count}
+
+  # A replayed hosted image generation carries the generated image as base64 in `result`; read as JSON text, a
+  # 1.2 MB item reserved about 300k input tokens. It is one semantic image, estimated like an `input_image` with the
+  # fixed allowance (Codex budgets one resized image for it too). `gpt-6-luna` billed the replayed bytes as nothing
+  # (direct probe 2026-11-18), so the allowance only over-reserves, and settlement uses the reported usage.
+  defp project_generated_image(result, image_count) when is_binary(result) do
+    if String.trim(result) == "", do: {result, image_count}, else: {"", image_count + 1}
+  end
+
+  defp project_generated_image(result, image_count), do: {result, image_count}
 
   defp tool_result?(item) do
     # Match the gateway's semantic contract while accommodating internal atom keys.

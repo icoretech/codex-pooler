@@ -28,6 +28,24 @@ defmodule CodexPooler.Accounting.ImageReservationTest do
     end
   end
 
+  # A replayed hosted image generation is estimated as one image allowance, so a key with a per-request input limit
+  # admits the turn; read as JSON text, a 400 KB replay alone estimated about 133k tokens and was refused before
+  # dispatch (the provider billed a 1.2 MB replay as about 100 input tokens for the whole request, direct probe
+  # 2026-11-18).
+  test "a replayed image generation's base64 result does not count against a per-request input limit" do
+    setup = accounting_setup()
+    update_default_policy!(setup.api_key, %{max_input_tokens_per_request: 2_000, max_tokens_per_day: 10_000})
+    result = Base.encode64(:binary.copy(<<137, 80, 78, 71>>, 100_000))
+    call = %{"type" => "image_generation_call", "id" => "ig_synthetic", "status" => "completed", "revised_prompt" => "synthetic prompt", "result" => result}
+    payload = %{"model" => "gpt-accounting-mini", "input" => [%{"role" => "user", "content" => [%{"type" => "input_text", "text" => "synthetic"}]}, call]}
+
+    assert %{input_tokens: tokens, image_estimate: image_estimate} = Costing.input_estimate(payload)
+    assert tokens < 1_800
+    assert image_estimate == provenance(1)
+    assert {:ok, reserved} = Accounting.reserve(setup.auth, setup.model, payload, %{correlation_id: Ecto.UUID.generate()})
+    assert reserved.estimate.input_tokens == tokens
+  end
+
   test "ordinary text and image-looking arbitrary tool data retain their legacy estimate" do
     for payload <- [%{}, %{"model" => "sample-model", "stream" => true}, %{"input" => "ordinary text", "tools" => [%{"type" => "function", "parameters" => %{"image_url" => String.duplicate("a", 10_000)}}]}, %{"input" => [%{"type" => "function_call_output", "call_id" => "sample-call", "output" => %{"image_url" => String.duplicate("b", 10_000)}}]}] do
       expected = legacy_tokens(payload)
