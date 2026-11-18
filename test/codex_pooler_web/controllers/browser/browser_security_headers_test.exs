@@ -57,6 +57,20 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
     refute csp =~ "http://localhost:8400"
   end
 
+  # Our pipelines pass a custom CSP map to `Phoenix.Controller.put_secure_browser_headers/2`, which adds its
+  # defaults first and merges the map over them; replacing that call with a bare header write would drop them.
+  test "browser pipelines keep Phoenix's default secure headers beside the custom CSP", %{conn: conn} do
+    for path <- [~p"/login", ~p"/observatory/login"] do
+      conn = get(recycle(conn), path)
+
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "x-permitted-cross-domain-policies") == ["none"]
+      assert get_resp_header(conn, "referrer-policy") == ["strict-origin-when-cross-origin"]
+      assert [csp] = get_resp_header(conn, "content-security-policy")
+      assert csp_directives(csp)["frame-ancestors"] == "'self'"
+    end
+  end
+
   test "local Codex Desktop browser CSP allows annotation script injection", %{conn: conn} do
     conn =
       conn
