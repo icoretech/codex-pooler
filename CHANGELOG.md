@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.16.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.1...codex-pooler-v0.16.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* **accounting:** reserve a replayed generated image as one image, not its base64 text ([495af89](https://github.com/icoretech/codex-pooler/commit/495af896165fb95caaee5601b895491aecbdfe64))
+* **gateway:** follow the provider's 128 MiB websocket message limit ([72e11e4](https://github.com/icoretech/codex-pooler/commit/72e11e4634acf53746de3f3c703ebbedc54838a1))
+* **quota:** record reconciliation priming state on every assignment of the identity ([38e7e3d](https://github.com/icoretech/codex-pooler/commit/38e7e3d180d6a61a08e8569bfa77fe217bca14e8))
+* **repo:** check text files out with LF line endings on Windows ([3e4531e](https://github.com/icoretech/codex-pooler/commit/3e4531ec1f73c0109bd73c51c16f519ee711feb0))
+* **search:** match LIKE metacharacters in operator search literally ([2e5298e](https://github.com/icoretech/codex-pooler/commit/2e5298e1819ecebedab85d91a63c59634f37aa3e))
+* **v1:** accept replayed image_generation_call items ([29396fd](https://github.com/icoretech/codex-pooler/commit/29396fd9258dfd0a42de2d41c8467a8b107b14a3))
+* **v1:** refuse Responses background_options and image explicitly ([44d4481](https://github.com/icoretech/codex-pooler/commit/44d44814af01cb7c84bee3a01f0990672b4e49e6))
+
+
+### Dependencies
+
+* qualify the Codex 0.170.0 catalog decoder ([c177d7c](https://github.com/icoretech/codex-pooler/commit/c177d7caac0eee2cef3454b4825f2a70c7fdd09a))
+* update the Codex smoke image to 0.170.0 ([9a27d85](https://github.com/icoretech/codex-pooler/commit/9a27d8535aa8f443a14ae1bf1e46eeb8aa88e828))
+
+
+### Tests
+
+* **browser:** pin Phoenix's default secure headers beside the custom CSP ([ba19f42](https://github.com/icoretech/codex-pooler/commit/ba19f42d48f93b309e10e76395f63cc6464e8e1d))
+
 ## [0.16.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.0...codex-pooler-v0.16.1) (2026-11-18)
 
 
