@@ -1,0 +1,4 @@
+# Check text files out with LF endings on every platform, Windows included.
+# Elixir heredocs keep CRLF verbatim, so a CRLF checkout breaks code that
+# splits embedded SQL or text on "\n" (the initial migrations among them).
+* text=auto eol=lf
