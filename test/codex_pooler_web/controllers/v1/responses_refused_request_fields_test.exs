@@ -189,6 +189,63 @@ defmodule CodexPoolerWeb.V1.ResponsesRefusedRequestFieldsTest do
     end
   end
 
+  # openai-python 3.53.0 added two top-level Responses request fields with no Codex backend support evidence:
+  # `background_options` (`completion_window` `soonest`/`2h`/`8h` and `continuation_id`, which the public API ties to
+  # `background: true`, itself refused here) and `image` (`context_compression`). `/v1` refuses both explicitly with
+  # `unsupported_parameter` on the field, before any upstream work, instead of implying discounted windows,
+  # continuation priority or image compression on Codex-backed traffic (findings#597).
+  describe "background_options and image" do
+    @sdk_fields %{
+      "background_options" => %{"completion_window" => "2h", "continuation_id" => "cont_synthetic_0001"},
+      "image" => %{"context_compression" => "enabled"}
+    }
+
+    for {field, value} <- @sdk_fields, stream? <- [true, false] do
+      test "POST /v1/responses refuses #{field} before dispatch (stream #{stream?})", %{conn: conn} do
+        upstream = start_upstream(stream_success_sse())
+        setup = gateway_setup(upstream)
+        payload = %{"model" => setup.model.exposed_model_id, "input" => "synthetic", "stream" => unquote(stream?), unquote(field) => unquote(Macro.escape(value))}
+
+        response = conn |> auth(setup) |> post("/v1/responses", payload)
+
+        assert %{"error" => %{"type" => "invalid_request_error", "code" => "unsupported_parameter", "param" => unquote(field), "message" => "Unsupported parameter: " <> unquote(field)}} = json_response(response, 400)
+        assert FakeUpstream.count(upstream) == 0
+        assert no_requests?(setup)
+      end
+    end
+
+    test "POST /v1/responses refuses background_options beside background: true, flex service tier and non-streaming", %{conn: conn} do
+      upstream = start_upstream(stream_success_sse())
+      setup = gateway_setup(upstream)
+      payload = %{"model" => setup.model.exposed_model_id, "input" => "synthetic", "stream" => false, "service_tier" => "flex", "background" => true, "background_options" => %{"completion_window" => "8h"}}
+
+      response = conn |> auth(setup) |> post("/v1/responses", payload)
+
+      assert %{"error" => %{"code" => "unsupported_parameter", "param" => param}} = json_response(response, 400)
+      assert param in ["background", "background_options"]
+      assert FakeUpstream.count(upstream) == 0
+      assert no_requests?(setup)
+    end
+
+    for {field, value} <- @sdk_fields do
+      test "a websocket create carrying #{field} is refused before dispatch" do
+        upstream = start_upstream(FakeUpstream.websocket_text_frames([completed_frame("resp_never")]))
+        setup = gateway_setup(upstream)
+        client = connect!(setup)
+
+        try do
+          client = send_create!(client, setup, unquote(field), %{unquote(field) => unquote(Macro.escape(value))})
+          {_client, [text]} = receive_terminals!(client, 1)
+          assert %{"type" => "error", "status" => 400, "error" => %{"code" => "unsupported_parameter", "param" => unquote(field)}} = CodexPooler.JSON.decode!(text)
+          assert FakeUpstream.count(upstream) == 0
+          assert no_requests?(setup)
+        after
+          Mint.HTTP.close(client.conn)
+        end
+      end
+    end
+  end
+
   describe "web_search_preview" do
     for mode <- ["full", "lite"] do
       @tag mode: mode

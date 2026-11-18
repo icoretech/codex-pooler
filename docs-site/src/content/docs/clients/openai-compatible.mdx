@@ -510,6 +510,14 @@ permissions or routing identity. Other `user` shapes are rejected before
 upstream dispatch. The field is discarded before dispatch; it does not replace
 or populate `safety_identifier` or `prompt_cache_key`.
 
+These top-level Responses request fields are recognized and not supported:
+`background`, `background_options`, `context_management`, `conversation`,
+`image`, `max_tool_calls`, `prompt` and `top_logprobs`. A request that carries
+one, over HTTP or in a Responses websocket `response.create`, is rejected
+before upstream dispatch with `400 unsupported_parameter` and the field name in
+`param`; none of them is forwarded or silently dropped. A top-level field the
+adapter does not recognize is rejected the same way.
+
 ### Chat Completions request compatibility
 
 `POST /v1/chat/completions` accepts normal `messages` requests. It also accepts

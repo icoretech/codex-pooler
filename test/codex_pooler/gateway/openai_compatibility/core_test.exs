@@ -60,7 +60,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       ~w(audio frequency_penalty function_call functions logit_bias logprobs max_completion_tokens max_tokens messages metadata modalities model moderation n parallel_tool_calls prediction presence_penalty prompt_cache_key prompt_cache_options prompt_cache_retention reasoning_effort response_format safety_identifier seed service_tier stop store stream stream_options temperature tool_choice tools top_logprobs top_p user verbosity web_search_options)
 
     openai_responses_fields =
-      ~w(background context_management conversation include input instructions max_output_tokens metadata model moderation parallel_tool_calls previous_response_id prompt prompt_cache_key prompt_cache_options prompt_cache_retention reasoning safety_identifier service_tier store stream stream_options temperature text tool_choice tools top_logprobs top_p truncation user)
+      ~w(background background_options context_management conversation image include input instructions max_output_tokens metadata model moderation parallel_tool_calls previous_response_id prompt prompt_cache_key prompt_cache_options prompt_cache_retention reasoning safety_identifier service_tier store stream stream_options temperature text tool_choice tools top_logprobs top_p truncation user)
 
     assert MapSet.subset?(
              MapSet.new(openai_chat_fields),
@@ -1646,7 +1646,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                })
     end
 
-    for field <- ["background", "conversation", "prompt"] do
+    for field <- ["background", "background_options", "conversation", "image", "prompt"] do
       assert {:error, %{status: 400, code: "unsupported_parameter", param: ^field}} =
                Responses.coerce(%{
                  "model" => "gpt-fixture-text",
@@ -8737,7 +8737,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     unless actual == expected, do: flunk(message)
   end
 
+  defp unsupported_value("background_options"), do: %{"completion_window" => "2h", "continuation_id" => "cont_fixture"}
   defp unsupported_value("conversation"), do: "conv_fixture"
+  defp unsupported_value("image"), do: %{"context_compression" => "enabled"}
   defp unsupported_value("n"), do: 2
   defp unsupported_value("prediction"), do: %{"type" => "content", "content" => "synthetic"}
   defp unsupported_value("prompt"), do: %{"id" => "prompt_fixture"}

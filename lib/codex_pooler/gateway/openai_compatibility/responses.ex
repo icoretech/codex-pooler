@@ -22,7 +22,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   # The type-only built-ins an `allowed_tools` choice may name (Full only). `programmatic_tool_calling` and
   # `web_search_preview` left on 2026-10-06: the Codex backend refuses both tool types on a Full request (findings#333).
   @allowed_tools_builtin_types ~w(web_search image_generation)
-  @locally_unsupported_fields ~w(background context_management conversation max_tool_calls prompt top_logprobs)
+  # Public Responses request fields `/v1` recognizes and refuses with `unsupported_parameter` on the field. The Codex
+  # backend gives no evidence for their semantics, so none is forwarded or silently dropped: `background` and its
+  # `background_options` (`completion_window`, `continuation_id`; openai-python 3.53.0), `conversation`, `prompt`,
+  # `context_management` (server-side compaction, which the backend runs on Full only), `image` (request-level
+  # `context_compression`; openai-python 3.53.0), `max_tool_calls` and `top_logprobs`.
+  @locally_unsupported_fields ~w(background background_options context_management conversation image max_tool_calls prompt top_logprobs)
 
   # The hosted `web_search` tool keys the provider accepts, in Full and in the Lite manifest alike (direct probe,
   # 2026-10-06: every other key, `zz_probe_unknown_key` and the pre-0.144.0 Codex spelling `index_gated_web_access`
