@@ -35,12 +35,12 @@ const links = [
           stars !== null && (
             <span class="stars" aria-hidden="true">
               <svg viewBox="0 0 16 16"><path d="M8 1.2l2.05 4.16 4.6.67-3.33 3.24.79 4.57L8 11.68l-4.11 2.16.79-4.57L1.35 6.03l4.6-.67L8 1.2Z" /></svg>
-              {formatStars(stars)}
+              <span class="stars-n">{formatStars(stars)}</span>
             </span>
           )
         }
       </a>
-      <a class="btn btn-sm btn-primary start" href={QUICKSTART_URL}>Get started</a>
+      <a class="btn btn-sm btn-primary start" href={QUICKSTART_URL}><span class="start-label">Get started</span></a>
       <button class="menu-btn" type="button" aria-expanded="false" aria-controls="mobile-menu" data-menu-btn>
         <span class="visually-hidden">Menu</span>
         <span class="bars" aria-hidden="true"><i></i><i></i></span>
@@ -140,6 +140,14 @@ const links = [
   .gh {
     gap: 8px;
     padding-right: 6px;
+  }
+
+  /* Center the capitals rather than the font's ascent and descent: with Roboto Condensed's
+     metrics Chromium otherwise sets these labels about 1.3px above the icons. */
+  .gh-label,
+  .stars-n,
+  .start-label {
+    text-box: trim-both cap alphabetic;
   }
 
   .stars {
