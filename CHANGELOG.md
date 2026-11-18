@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.2...codex-pooler-v0.16.3) (2026-11-18)
+
+
+### Bug Fixes
+
+* **ingress:** raise installations still on the former default body limits ([a2e8bd9](https://github.com/icoretech/codex-pooler/commit/a2e8bd92bd9ef4bd30b88945b30df07ed0bb964b))
+
 ## [0.16.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.1...codex-pooler-v0.16.2) (2026-11-18)
 
 
