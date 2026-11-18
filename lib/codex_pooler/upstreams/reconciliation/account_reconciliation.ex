@@ -27,6 +27,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   @assignment_active AssignmentStatus.active_status()
   @assignment_paused AssignmentStatus.paused_status()
   @assignment_reauth_required AssignmentStatus.reauth_required_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
 
   @type orchestration_result :: {:ok, map()} | {:error, term()}
   @type operation_clock :: (-> DateTime.t())
@@ -683,14 +684,32 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       |> quota_priming_details(trigger_kind, summary)
       |> maybe_put_failure_reason(quota_step)
 
-    {:ok, assignment} =
-      assignment
-      |> PoolUpstreamAssignment.changeset(%{
-        metadata: Map.put(assignment.metadata || %{}, "quota_priming", details)
-      })
-      |> Repo.update()
+    {:ok, assignment} = put_quota_priming_details(assignment, details)
+    record_sibling_quota_priming!(assignment, identity, details)
 
     assignment
+  end
+
+  # Quota evidence belongs to the identity, and the reconciliation job is
+  # deduplicated per identity, so it runs for one assignment. Every other
+  # linked assignment records the same outcome instead of keeping a stale or
+  # missing priming state that no job will ever refresh.
+  defp record_sibling_quota_priming!(assignment, identity, details) do
+    identity.id
+    |> PoolAssignments.list_pool_assignments_for_identity()
+    |> Enum.reject(&(&1.id == assignment.id or &1.status == @assignment_deleted))
+    |> Enum.each(fn sibling ->
+      {:ok, sibling} = put_quota_priming_details(sibling, details)
+      broadcast_priming_state(sibling)
+    end)
+  end
+
+  defp put_quota_priming_details(assignment, details) do
+    assignment
+    |> PoolUpstreamAssignment.changeset(%{
+      metadata: Map.put(assignment.metadata || %{}, "quota_priming", details)
+    })
+    |> Repo.update()
   end
 
   # Stale and expired evidence is counted on the effective view, the one every
