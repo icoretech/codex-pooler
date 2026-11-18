@@ -242,6 +242,17 @@ defmodule CodexPooler.Access.InviteTest do
     assert row.locale == "zh-CN"
   end
 
+  test "email search matches LIKE metacharacters literally" do
+    pool = pool_fixture()
+    scope = fixture_owner_scope()
+    {:ok, %{invite: underscored}} = Access.create_invite(scope, pool, %{invited_email: "like_literal@example.com"})
+    {:ok, _dashed} = Access.create_invite(scope, pool, %{invited_email: "like-literal@example.com"})
+
+    assert {:ok, %{items: [row], total: 1}} = Access.list_invites(scope, filters: [pool_id: pool.id, email: " Like_Literal "])
+    assert row.id == underscored.id
+    assert {:ok, %{items: [], total: 0}} = Access.list_invites(scope, filters: [pool_id: pool.id, email: "%"])
+  end
+
   test "list_invites rejects invalid scope while visible invite listing falls back to an empty page" do
     assert {:error, %{code: :invalid_request}} = Access.list_invites(nil)
     assert {:error, %{code: :invalid_request}} = Access.list_invites(%{})

@@ -315,6 +315,16 @@ defmodule CodexPooler.AuditTest do
     assert listed_correlation.id == second_event.id
   end
 
+  test "text filters match LIKE metacharacters literally" do
+    {:ok, underscored} = Audit.record_system_event(%{action: "access.denied", target_type: "api_key", outcome: "failure", correlation_id: "like_literal-1", details: %{}})
+    {:ok, _dashed} = Audit.record_system_event(%{action: "access.denied", target_type: "api_key", outcome: "failure", correlation_id: "like-literal-1", details: %{}})
+
+    assert %{items: [row], total: 1} = Audit.list_events(nil, filters: [request: "like_literal"])
+    assert row.id == underscored.id
+    assert %{items: [], total: 0} = Audit.list_events(nil, filters: [request: "%"])
+    assert %{items: [], total: 0} = Audit.list_events(nil, filters: [target: "api%key"])
+  end
+
   test "does not record runtime request or file events in audit_events" do
     pool = pool_fixture(%{slug: "request-audit", name: "Request Audit"})
 

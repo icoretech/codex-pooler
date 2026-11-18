@@ -30,6 +30,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   }
 
   alias CodexPooler.Gateway.Persistence.SessionReadModel
+  alias CodexPooler.Platform.LikePattern
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -554,7 +555,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   defp maybe_filter_request_log_model(query, nil), do: query
 
   defp maybe_filter_request_log_model(query, model) do
-    pattern = "%#{model}%"
+    pattern = LikePattern.contains(model)
 
     from([request, ...] in query,
       where: ilike(request.requested_model, ^pattern)
@@ -575,7 +576,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
         )
 
       :error ->
-        pattern = "%#{trimmed}%"
+        pattern = LikePattern.contains(trimmed)
 
         from([request, ...] in query,
           where:

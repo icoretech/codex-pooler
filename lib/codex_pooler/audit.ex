@@ -8,6 +8,7 @@ defmodule CodexPooler.Audit do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Platform.LikePattern
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.Pool
@@ -377,7 +378,7 @@ defmodule CodexPooler.Audit do
   defp maybe_filter_actor(query, nil), do: query
 
   defp maybe_filter_actor(query, actor) do
-    pattern = "%#{actor}%"
+    pattern = LikePattern.contains(actor)
 
     from([event, user, _pool] in query,
       where:
@@ -396,7 +397,7 @@ defmodule CodexPooler.Audit do
   defp maybe_filter_target(query, nil), do: query
 
   defp maybe_filter_target(query, target) do
-    pattern = "%#{target}%"
+    pattern = LikePattern.contains(target)
 
     from([event, ...] in query,
       where:
@@ -408,7 +409,7 @@ defmodule CodexPooler.Audit do
   defp maybe_filter_request(query, nil), do: query
 
   defp maybe_filter_request(query, request) do
-    pattern = "%#{request}%"
+    pattern = LikePattern.contains(request)
 
     from([event, ...] in query,
       where:

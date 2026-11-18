@@ -3048,6 +3048,19 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute inspect(log) =~ raw_idempotency_key
   end
 
+  test "model and request text filters match LIKE metacharacters literally" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    underscored = request_fixture(%{pool: pool, api_key: api_key}, %{requested_model: "gpt_like-literal", correlation_id: "like_literal-1"})
+    dashed = request_fixture(%{pool: pool, api_key: api_key}, %{requested_model: "gpt-like-literal", correlation_id: "like-literal-1"})
+    refresh_request_log_facts([underscored, dashed])
+
+    assert %{items: [by_model], total: 1} = Accounting.list_request_logs(pool, filters: [model: "gpt_like"])
+    assert by_model.id == underscored.id
+    assert %{items: [by_request], total: 1} = Accounting.list_request_logs(pool, filters: [request_id: "like_literal"])
+    assert by_request.id == underscored.id
+    assert %{items: [], total: 0} = Accounting.list_request_logs(pool, filters: [model: "%"])
+  end
+
   defp refresh_request_log_facts(requests) do
     Enum.each(requests, fn request ->
       RequestLogFacts.record_request_created!(request)

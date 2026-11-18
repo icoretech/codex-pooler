@@ -5,6 +5,7 @@ defmodule CodexPooler.Access.Invites.ReadModel do
 
   alias CodexPooler.Access.{Invite, InviteAcceptance}
   alias CodexPooler.Accounts.{Scope, User}
+  alias CodexPooler.Platform.LikePattern
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -157,7 +158,7 @@ defmodule CodexPooler.Access.Invites.ReadModel do
   defp maybe_filter_email(query, ""), do: query
 
   defp maybe_filter_email(query, email) when is_binary(email) do
-    pattern = "%#{String.downcase(String.trim(email))}%"
+    pattern = email |> String.trim() |> String.downcase() |> LikePattern.contains()
 
     from [invite, ...] in query,
       where: fragment("lower(?) LIKE ?", invite.invited_email, ^pattern)
