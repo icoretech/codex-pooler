@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.NativeWebsocketSizeRecovery
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.BridgeSessionAlias
   alias CodexPooler.Repo
@@ -327,6 +328,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
     end
   end
 
+  # Codex 0.170.0 reads x-codex-websocket-max-message-bytes from the 101 and sends a larger request
+  # over HTTP; the provider's own 101 carries it on the native endpoint.
+  test "native upgrades advertise the websocket message limit capped by the inbound frame limit" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    port = start_public_endpoint!()
+    setup_runtime_ingress_override(%OperationalSettings{max_decompressed_body_bytes: 268_435_456, websocket_idle_timeout_ms: 60_000})
+
+    for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
+      assert advertised_message_limit(port, setup, path) == Integer.to_string(NativeWebsocketSizeRecovery.limit_bytes())
+    end
+
+    assert advertised_message_limit(port, setup, "/v1/responses") == nil
+
+    setup_runtime_ingress_override(%OperationalSettings{max_decompressed_body_bytes: 700, websocket_idle_timeout_ms: 60_000})
+    assert advertised_message_limit(port, setup, "/backend-api/codex/responses") == "700"
+
+    setup_runtime_ingress_override(%OperationalSettings{max_decompressed_body_bytes: 268_435_456, websocket_idle_timeout_ms: 60_000})
+    previous = CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Accounting.NativeWebsocketSizeRecovery)
+    Application.put_env(:codex_pooler, CodexPooler.Accounting.NativeWebsocketSizeRecovery, Keyword.delete(previous, :limit_bytes))
+    assert advertised_message_limit(port, setup, "/backend-api/codex/responses") == "134217728"
+  end
+
   test "backend Responses websocket rejects malformed API-key policy before upgrade or accounting",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
@@ -608,6 +631,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
       conn
     after
       Mint.HTTP.close(conn)
+    end
+  end
+
+  defp advertised_message_limit(port, setup, path) do
+    {conn, _websocket, _ref, response_headers} =
+      public_websocket_connect_with_headers!(port, setup, "message-limit-#{System.unique_integer([:positive])}", path)
+
+    Mint.HTTP.close(conn)
+
+    case List.keyfind(response_headers, "x-codex-websocket-max-message-bytes", 0) do
+      {_name, value} -> value
+      nil -> nil
     end
   end
 

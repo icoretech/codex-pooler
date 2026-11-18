@@ -107,6 +107,10 @@ config :codex_pooler, CodexPoolerWeb.Endpoint,
 # takes precedence.
 config :codex_pooler, CodexPooler.Gateway.Transports.Websocket.RolloutDrain, shutdown_timeout_ms: 1_000
 
+# Native websocket size-recovery fixtures cross a 16 MiB bound instead of the provider's 128 MiB
+# one, so no test builds a message that large. Tests that pin the production bound clear this.
+config :codex_pooler, CodexPooler.Accounting.NativeWebsocketSizeRecovery, limit_bytes: 16_777_216
+
 config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Test
 config :codex_pooler, dev_features_build_enabled: true
 

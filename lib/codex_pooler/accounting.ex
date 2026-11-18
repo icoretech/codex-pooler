@@ -88,6 +88,9 @@ defmodule CodexPooler.Accounting do
   @spec native_websocket_size_recovery(auth(), String.t()) :: CodexPooler.Accounting.NativeWebsocketSizeRecovery.lookup_result()
   defdelegate native_websocket_size_recovery(auth, digest), to: CodexPooler.Accounting.NativeWebsocketSizeRecovery, as: :recent
 
+  @spec native_websocket_message_limit_bytes() :: pos_integer()
+  defdelegate native_websocket_message_limit_bytes(), to: CodexPooler.Accounting.NativeWebsocketSizeRecovery, as: :limit_bytes
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   defdelegate record_denied_request(auth, model_or_id, opts \\ %{}), to: RequestLifecycle
 

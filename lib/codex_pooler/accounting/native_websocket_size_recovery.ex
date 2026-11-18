@@ -9,7 +9,12 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecovery do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
 
-  @limit 16_777_216
+  # The Codex backend's whole-message websocket limit. Its `101` advertises the
+  # value in `x-codex-websocket-max-message-bytes`, and a text message one byte
+  # larger gets Close 1009 before any text frame (direct provider probe on
+  # `gpt-6-luna`, Full, fresh uncompressed connections). Test configuration may
+  # lower it so fixtures above the bound stay small; nothing else sets it.
+  @provider_limit 134_217_728
   @reason "native_websocket_message_too_large"
   @endpoint "/backend-api/codex/responses"
   @type marker :: %{
@@ -18,13 +23,24 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecovery do
   @type result :: {:ok, :native_websocket_size_recovery} | {:error, :storage_unavailable}
   @type lookup_result :: {:ok, boolean()} | {:error, :storage_unavailable}
 
-  @spec marker(String.t(), pos_integer()) :: marker() | nil
-  def marker(digest, bytes), do: sanitize(%{"version" => 1, "window_digest" => digest, "limit_bytes" => @limit, "message_bytes" => bytes, "serving_mode" => "full", "decision" => "preclaim"})
+  @doc "The largest native websocket message, in bytes, a provider connection accepts."
+  @spec limit_bytes() :: pos_integer()
+  def limit_bytes do
+    case Keyword.get(Application.get_env(:codex_pooler, __MODULE__, []), :limit_bytes) do
+      limit when is_integer(limit) and limit > 0 -> limit
+      _unset -> @provider_limit
+    end
+  end
 
+  @spec marker(String.t(), pos_integer()) :: marker() | nil
+  def marker(digest, bytes), do: sanitize(%{"version" => 1, "window_digest" => digest, "limit_bytes" => limit_bytes(), "message_bytes" => bytes, "serving_mode" => "full", "decision" => "preclaim"})
+
+  # A marker records the bound it was refused under; one recorded under another
+  # bound (an earlier release's) grants no recovery.
   @spec sanitize(term()) :: marker() | nil
-  def sanitize(%{"version" => 1, "window_digest" => digest, "limit_bytes" => @limit, "message_bytes" => bytes, "serving_mode" => "full", "decision" => "preclaim"} = marker)
-      when map_size(marker) == 6 and is_binary(digest) and is_integer(bytes) and bytes > @limit and bytes <= 9_223_372_036_854_775_807 do
-    if Regex.match?(~r/\A[0-9a-f]{64}\z/, digest), do: marker
+  def sanitize(%{"version" => 1, "window_digest" => digest, "limit_bytes" => limit, "message_bytes" => bytes, "serving_mode" => "full", "decision" => "preclaim"} = marker)
+      when map_size(marker) == 6 and is_binary(digest) and is_integer(limit) and is_integer(bytes) and bytes > limit and bytes <= 9_223_372_036_854_775_807 do
+    if limit == limit_bytes() and Regex.match?(~r/\A[0-9a-f]{64}\z/, digest), do: marker
   end
 
   def sanitize(_marker), do: nil
@@ -98,12 +114,16 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecovery do
   end
 
   defp matching_marker(query, digest) do
+    limit = limit_bytes()
+    limit_text = Integer.to_string(limit)
+    smallest_refused = limit + 1
+
     from r in query,
       where: r.endpoint == @endpoint and r.transport == "websocket" and r.status == "rejected" and r.usage_status == "not_applicable" and r.last_error_code == ^@reason,
-      where: fragment("?->'native_websocket_size_recovery' = jsonb_build_object('version', 1, 'window_digest', ?::text, 'limit_bytes', 16777216, 'message_bytes', ?->'native_websocket_size_recovery'->'message_bytes', 'serving_mode', 'full', 'decision', 'preclaim')", r.request_metadata, ^digest, r.request_metadata),
-      where: fragment("?->'native_websocket_size_recovery'->>'version' = '1' AND ?->'native_websocket_size_recovery'->>'limit_bytes' = '16777216'", r.request_metadata, r.request_metadata),
+      where: fragment("?->'native_websocket_size_recovery' = jsonb_build_object('version', 1, 'window_digest', ?::text, 'limit_bytes', ?::bigint, 'message_bytes', ?->'native_websocket_size_recovery'->'message_bytes', 'serving_mode', 'full', 'decision', 'preclaim')", r.request_metadata, ^digest, ^limit, r.request_metadata),
+      where: fragment("?->'native_websocket_size_recovery'->>'version' = '1' AND ?->'native_websocket_size_recovery'->>'limit_bytes' = ?::text", r.request_metadata, r.request_metadata, ^limit_text),
       where: fragment("jsonb_typeof(?->'native_websocket_size_recovery'->'message_bytes') = 'number'", r.request_metadata),
-      where: fragment("CASE WHEN (?->'native_websocket_size_recovery'->>'message_bytes') ~ '^[0-9]{1,19}$' THEN (?->'native_websocket_size_recovery'->>'message_bytes')::numeric BETWEEN 16777217 AND 9223372036854775807 ELSE false END", r.request_metadata, r.request_metadata),
+      where: fragment("CASE WHEN (?->'native_websocket_size_recovery'->>'message_bytes') ~ '^[0-9]{1,19}$' THEN (?->'native_websocket_size_recovery'->>'message_bytes')::numeric BETWEEN ?::bigint AND 9223372036854775807 ELSE false END", r.request_metadata, r.request_metadata, ^smallest_refused),
       limit: 1,
       select: true
   end

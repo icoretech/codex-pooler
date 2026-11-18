@@ -17,6 +17,7 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecoveryTest do
 
   @endpoint "/backend-api/codex/responses"
   @limit 16_777_216
+  @provider_limit 134_217_728
 
   setup do
     {:ok, owned} = Agent.start(fn -> %{pools: [], owners: []} end)
@@ -293,6 +294,29 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecoveryTest do
     end)
   end
 
+  # The provider's `101` advertises 134,217,728 bytes in x-codex-websocket-max-message-bytes, and a
+  # direct probe gets Close 1009 at one byte more and validation at exactly that size.
+  test "production bound is the provider's advertised limit and a marker of another bound grants no recovery", %{auth: auth} do
+    unboxed(fn ->
+      assert {:ok, :native_websocket_size_recovery} = Denials.record_native_websocket_size_recovery(context(auth), @limit + 1)
+      assert {:ok, true} = lookup(auth)
+
+      use_production_bound()
+
+      assert RecoveryMarker.limit_bytes() == @provider_limit
+      assert NativeWebsocketSizeRecovery.limit_bytes() == @provider_limit
+      assert {:ok, false} = lookup(auth)
+      assert RecoveryMarker.sanitize(marker()) == nil
+      assert RecoveryMarker.marker(marker()["window_digest"], @provider_limit) == nil
+
+      assert {:ok, :native_websocket_size_recovery} = Denials.record_native_websocket_size_recovery(context(auth), @provider_limit + 1)
+      assert {:ok, true} = lookup(auth)
+
+      markers = Repo.all(from r in Request, where: r.pool_id == ^auth.pool.id, select: r.request_metadata["native_websocket_size_recovery"])
+      assert Enum.sort(Enum.map(markers, &{&1["limit_bytes"], &1["message_bytes"]})) == [{@limit, @limit + 1}, {@provider_limit, @provider_limit + 1}]
+    end)
+  end
+
   test "marker sanitizer rejects invalid schemas and removes unknown fields" do
     assert Accounting.sanitize_metadata(%{"native_websocket_size_recovery" => marker()}) == %{"native_websocket_size_recovery" => marker()}
 
@@ -309,6 +333,11 @@ defmodule CodexPooler.Accounting.NativeWebsocketSizeRecoveryTest do
   defp marker do
     {:ok, digest} = NativeWebsocketSizeRecovery.window_digest([{"x-codex-window-id", "synthetic-window"}])
     %{"version" => 1, "window_digest" => digest, "limit_bytes" => @limit, "message_bytes" => @limit + 1, "serving_mode" => "full", "decision" => "preclaim"}
+  end
+
+  defp use_production_bound do
+    previous = CodexPooler.TestAppEnv.restore_on_exit(RecoveryMarker)
+    Application.put_env(:codex_pooler, RecoveryMarker, Keyword.delete(previous, :limit_bytes))
   end
 
   defp lookup(auth), do: Accounting.native_websocket_size_recovery(auth, marker()["window_digest"])

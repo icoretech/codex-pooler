@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
   alias CodexPooler.Gateway.Metadata.CatalogRepresentation
   alias CodexPooler.Gateway.Metadata.CodexCatalog
+  alias CodexPooler.Gateway.NativeWebsocketSizeRecovery
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
   alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
@@ -244,7 +245,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     if native_size_check?(payload, endpoint, options) and RequestOptions.native_websocket_size_recovery_history?(options, payload) and is_nil(SessionContinuity.hard_pin_metadata(options, model)) do
       candidates = Enum.uniq_by(candidates, fn {assignment, _identity} -> assignment.id end)
 
-      case PreparedNativePayloads.prepare(payload, model, endpoint, options, candidates, 16_777_216) do
+      case PreparedNativePayloads.prepare(payload, model, endpoint, options, candidates, NativeWebsocketSizeRecovery.limit_bytes()) do
         {:ok, payloads} ->
           {:ok, Map.put(prepared, :prepared_native_payloads, payloads)}
 

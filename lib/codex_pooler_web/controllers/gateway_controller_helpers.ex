@@ -216,12 +216,15 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
     with :ok <- NativeWebsocketSizeRecovery.handshake(auth, conn.request_path, request_options),
          {:ok, conn} <- maybe_put_websocket_models_etag(conn, auth, request_options) do
+      upgrade_opts = websocket_upgrade_opts()
+
       conn
       |> put_resp_header("x-codex-turn-state", turn_state)
+      |> maybe_put_websocket_message_limit(upgrade_opts)
       |> WebSockAdapter.upgrade(
         CodexPoolerWeb.CodexResponsesSocket,
         %{auth: auth, opts: request_options, firewall_client_ip: conn.remote_ip},
-        websocket_upgrade_opts()
+        upgrade_opts
       )
       |> halt()
     else
@@ -241,6 +244,13 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         code: "websocket_upgrade_required",
         message: Exception.message(error)
       })
+  end
+
+  defp maybe_put_websocket_message_limit(conn, upgrade_opts) do
+    case NativeWebsocketSizeRecovery.advertised_limit_bytes(conn.request_path, Keyword.fetch!(upgrade_opts, :max_frame_size)) do
+      nil -> conn
+      limit -> put_resp_header(conn, "x-codex-websocket-max-message-bytes", Integer.to_string(limit))
+    end
   end
 
   defp maybe_put_websocket_models_etag(conn, auth, %RequestOptions{} = request_options) do
