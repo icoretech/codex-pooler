@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@ai-sdk/openai": "4.0.118",
-    "ai": "7.0.173",
+    "@ai-sdk/openai": "4.0.121",
+    "ai": "7.0.176",
     "effect": "4.1.4",
     "zod": "4.6.7"
   },
