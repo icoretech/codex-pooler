@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.16.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.0...codex-pooler-v0.16.1) (2026-11-18)
+
+
+### Features
+
+* **pricing:** apply effective ultrafast windows ([4e20b4f](https://github.com/icoretech/codex-pooler/commit/4e20b4f392d5a37f2f8a07e1808c36758211327b))
+
+
+### Bug Fixes
+
+* **pricing:** fail closed on source-conditioned rates ([5fe608a](https://github.com/icoretech/codex-pooler/commit/5fe608ad618d2cd6fcaf8893fc33d81ff64308b6))
+
+
+### Dependencies
+
+* qualify the Codex 0.169.1 catalog decoder ([38c663f](https://github.com/icoretech/codex-pooler/commit/38c663f2e54675a8d6df017ef47c49f3fecf8039))
+* refresh the docs lockfile and Helm chart examples ([6dba398](https://github.com/icoretech/codex-pooler/commit/6dba398db4ae30817ee19c225769f983b81e3717))
+* update ApexCharts to 8.9.0 and daisyUI to 5.8.1 ([fca4706](https://github.com/icoretech/codex-pooler/commit/fca4706186b7fbc8a2203c1e7d67851b7536428a))
+* update Bandit, Plug, NimblePool and Telemetry ([2d4c906](https://github.com/icoretech/codex-pooler/commit/2d4c9067c4f330ce38b603f31ad76a5852435a2d))
+* update the AI SDK and OpenAI adapter used by contract probes ([8daa4dc](https://github.com/icoretech/codex-pooler/commit/8daa4dc5e1e2629598ae4a0d8e1ba8d579577436))
+* update the Codex smoke image to 0.169.1 ([05499bb](https://github.com/icoretech/codex-pooler/commit/05499bb5601b21363c95be932e21aaf75c610f80))
+
+
+### Tests
+
+* **pricing:** cover the exact ultrafast cutover boundary ([3f81350](https://github.com/icoretech/codex-pooler/commit/3f813505a8babff1bda7c2f81d4b4ec000cc299e))
+
+
+### Miscellaneous Chores
+
+* **pricing:** refresh bundled openai pricing catalog ([6d554ac](https://github.com/icoretech/codex-pooler/commit/6d554accf6de1463c80ccfc70f0d758f0087f493))
+* **renovate:** migrate the dependency dashboard setting ([9123eb6](https://github.com/icoretech/codex-pooler/commit/9123eb6f1b812ac82386188577fb66afc771dea7))
+
 ## [0.16.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.15.1...codex-pooler-v0.16.0) (2026-11-17)
 
 
