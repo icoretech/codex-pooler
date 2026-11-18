@@ -229,9 +229,10 @@ cannot resolve a Pooler `413 compressed_request_too_large` or
 bytes** (`ingress.max_compressed_body_bytes`) and **Max decompressed bytes**
 (`ingress.max_decompressed_body_bytes`) on **System > Firewall**, then retry the
 blocked request. The current defaults in bytes are `134217728` and `268435456`.
-Existing installations retain their saved limits after an upgrade, including
-the former 32 MiB / 64 MiB defaults. An owner must save the larger values to
-adopt them. New HTTP requests use saved limits without a restart; websocket
+An upgrade raises an installation that still holds the earlier default pair of
+32 MiB / 64 MiB (`33554432` / `67108864`) to the current defaults; any other
+saved limit, including a pair where only one value equals the earlier default,
+stays as saved. New HTTP requests use saved limits without a restart; websocket
 connections capture their limits on upgrade and must reconnect to pick up a change.
 
 **Max decompressed bytes** also caps every websocket frame and message, and the
@@ -239,8 +240,8 @@ native Codex websocket routes advertise it to clients in the
 `x-codex-websocket-max-message-bytes` upgrade response header when it is
 smaller than the provider's 128 MiB websocket message limit. A Codex client that
 reads the header sends a larger request over HTTP, where the same limit applies,
-so on an installation that keeps a 64 MiB limit a Codex request above 64 MiB
-ends in a `413` until an owner raises the limit.
+so with a saved limit of 64 MiB a Codex request above 64 MiB ends in a `413`
+until an owner raises the limit.
 
 Choose limits for the memory available at the expected concurrent request count:
 compressed bodies, decompressed JSON, and parsed input coexist during decoding.
