@@ -315,7 +315,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       })
       |> maybe_put_transport_failure_metadata(reason)
 
-    finalize_dispatch_error_after_route_failure(
+    finalize_dispatch_error(
       reason,
       context,
       latency,
@@ -521,7 +521,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       )
   end
 
-  defp finalize_dispatch_error_after_route_failure(
+  defp finalize_dispatch_error(
          reason,
          %SelectedCandidateContext{} = context,
          latency,
@@ -535,13 +535,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       endpoint: endpoint
     } = context
 
+    before_finalize = fn -> record_dispatch_error_route_health(reason, code, context) end
+
     if retry_dispatch_error?(allow_retry?, endpoint, reason) do
       case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
              last_error_code: code,
              error_message: Metadata.safe_reason(reason),
              latency_ms: latency,
              attempt_metadata: attempt_metadata,
-             before_finalize: fn -> record_dispatch_route_failure(code, context) end
+             before_finalize: before_finalize
            }) do
         {:stale_generation, finalized} -> {:ok, finalized}
         {:ok, _attempt} -> {:retry, code}
@@ -558,7 +560,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
                Metadata.safe_reason(reason),
                attempt_metadata,
                latency_ms: latency,
-               before_finalize: fn -> record_dispatch_route_failure(code, context) end
+               before_finalize: before_finalize
              ),
              context.request_options.runtime.session_owner_witness
            ) do
@@ -616,6 +618,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       {:error, gateway_error} -> {:error, gateway_error}
     end
   end
+
+  defp record_dispatch_error_route_health(%{failure_origin: :local_http_pool}, _code, context),
+    do: DispatchLifecycle.neutral_completion(context)
+
+  defp record_dispatch_error_route_health(_reason, code, context),
+    do: record_dispatch_route_failure(code, context)
 
   defp record_client_error_route_health(401, %SelectedCandidateContext{} = context) do
     record_dispatch_route_failure("upstream_unauthorized", context)

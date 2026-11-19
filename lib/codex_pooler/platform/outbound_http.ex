@@ -57,9 +57,9 @@ defmodule CodexPooler.Platform.OutboundHTTP do
   307 and 308 preserve the method and body. Presigned file uploads disable
   redirects, so neither their signed destination nor their PUT method is rewritten.
 
-  `pool_max_idle_time` stays unset, so no instance is ever stopped: stopping an
-  idle per-origin pool can race a request that has just looked it up, and stale
-  connections are already dropped at checkout. Req refuses `finch:` together
+  `pool_max_idle_time` stays unset. The per-origin HTTP/1 pool remains
+  available between requests, and `conn_max_idle_time` retires stale sockets
+  at checkout. Req refuses `finch:` together
   with `connect_options:`, so connection options travel under `conn_opts`.
   Plain HTTP forward-proxy sockets are passive for Finch's synchronous receive
   loop; CONNECT and direct WebSocket sockets remain active for Mint's message
@@ -68,6 +68,7 @@ defmodule CodexPooler.Platform.OutboundHTTP do
 
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.Platform.OutboundHTTP.FinchAdapter
 
   @conn_max_idle_time_default_ms 45_000
   @conn_max_idle_time_min_ms 1_000
@@ -204,6 +205,7 @@ defmodule CodexPooler.Platform.OutboundHTTP do
       |> Req.new(options)
       |> attach_proxy_selection()
 
+    request = if request.adapter == Req.Finch, do: %{request | adapter: FinchAdapter}, else: request
     Req.request(%{request | method: method})
   end
 

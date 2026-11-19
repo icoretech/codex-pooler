@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
   alias Ecto.Adapters.SQL.Sandbox, as: Sandbox
+  alias Finch.Pool.Manager, as: FinchPoolManager
 
   import Ecto.Query
   import ExUnit.CaptureLog
@@ -6198,6 +6199,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
     refute inspect(request.request_metadata) =~ "retryable transport body token"
     refute inspect(request.request_metadata) =~ "secret-header-value"
+  end
+
+  for {transport, stream?, route_class} <- [{"http_json", false, "proxy_http"}, {"http_sse", true, "proxy_stream"}] do
+    test "a cold upstream pool timeout settles the #{transport} request and releases its half-open probe", %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{}))
+      setup = gateway_setup(upstream)
+      circuit = half_open_circuit!(setup, setup.assignment) |> Ecto.Changeset.change(route_class: unquote(route_class)) |> Repo.update!()
+      finch = start_gateway_finch!(upstream)
+      manager = FinchPoolManager.manager_name(finch)
+      payload = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("cold pool fixture"), "stream" => unquote(stream?)}
+
+      :ok = :sys.suspend(manager)
+
+      try do
+        {conn, logs} = with_log(fn -> conn |> auth(setup) |> post("/backend-api/codex/responses", payload) end)
+        assert_local_pool_failure!(conn, logs, setup, unquote(transport), "pool_not_available", "cold pool fixture")
+      after
+        :ok = :sys.resume(manager)
+      end
+
+      assert FakeUpstream.count(upstream) == 0
+
+      # Admission creates the generation. A neutral completion keeps it and relinquishes just this request's slot.
+      assert %{status: "half_open", failure_count: 1, success_count: 0, probe_admission_ids: [], probe_generation: generation, metadata: %{"probe_in_flight_count" => 0}} = Repo.reload!(circuit)
+      assert is_binary(generation)
+    end
+  end
+
+  for {transport, stream?} <- [{"http_json", false}, {"http_sse", true}] do
+    test "an exhausted HTTP/1 pool settles the #{transport} request without sending it upstream", %{conn: conn} do
+      release_ref = make_ref()
+      held = FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref)
+      upstream = start_upstream(FakeUpstream.strict_sequence([held, {:raw_body, 204, "", []}]))
+      setup = gateway_setup(upstream)
+      fallback_upstream = start_upstream(FakeUpstream.json_response(%{}))
+      fallback = gateway_upstream(setup.pool, fallback_upstream, "upstream-token-pool-fallback", compact?: false)
+      prime_routing_quota!(fallback.identity)
+      use_routing_strategy!(setup.pool, "bridge_ring", 2)
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      request_id = seed_with_assignment_order([setup.assignment.id, fallback.assignment.id])
+      finch = start_gateway_finch!(upstream, size: 1, count: 1)
+      url = FakeUpstream.url(upstream)
+      options = [finch: [name: finch], retry: false, receive_timeout: @detection_timeout_ms]
+
+      # Hold the only connection through response headers and keep it checked out through the gateway's deadline.
+      {:ok, occupant} = Req.get(url, [into: :self] ++ options)
+      assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, handler, ^release_ref}, @detection_timeout_ms
+      on_exit(fn -> send(handler, {:fake_upstream_release_timeout, release_ref}) end)
+
+      try do
+        payload = %{"model" => setup.model.exposed_model_id, "input" => native_text_input("pool checkout fixture"), "stream" => unquote(stream?)}
+        {conn, logs} = with_log(fn -> conn |> put_req_header("x-request-id", request_id) |> auth(setup) |> post("/backend-api/codex/responses", payload) end)
+        assert_local_pool_failure!(conn, logs, setup, unquote(transport), "pool_checkout_timeout", "pool checkout fixture")
+        assert FakeUpstream.count(upstream) == 1
+        assert FakeUpstream.count(fallback_upstream) == 0
+        refute Repo.exists?(from(c in RoutingCircuitState, where: c.pool_id == ^setup.pool.id))
+      after
+        send(handler, {:fake_upstream_release_timeout, release_ref})
+      end
+
+      assert Enum.to_list(occupant.body) == []
+      assert {:ok, %Req.Response{status: 204}} = Req.get(url, options)
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
   end
 
   test "POST /backend-api/codex/responses keeps pre-header receive timeout as network error" do
@@ -15161,6 +15226,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end)
 
     transport_failure
+  end
+
+  defp assert_local_pool_failure!(conn, logs, setup, transport, reason, private_input) do
+    assert %{"error" => %{"code" => "upstream_request_failed", "message" => "upstream request failed"}} = json_response(conn, 502)
+    refute conn.resp_body =~ reason
+    assert logs =~ "reason=#{reason}"
+    refute logs =~ private_input
+
+    assert [%Request{status: "failed", transport: ^transport, retry_count: 0, last_error_code: "upstream_network_error"} = request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [%Attempt{status: "failed", network_error_code: "upstream_network_error"} = attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert_transport_failure_metadata!(attempt, %{"phase" => "request", "reason" => reason})
+    refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
+  end
+
+  defp start_gateway_finch!(upstream, pool_overrides \\ []) do
+    # A distinct connect timeout gives these requests a dedicated Req pool name.
+    connect_timeout = 20_000 + System.unique_integer([:positive])
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
+    settings = %{OperationalSettings.current() | upstream_connect_timeout_ms: connect_timeout, upstream_pool_timeout_ms: 25}
+    Application.put_env(:codex_pooler, OperationalSettings, settings: settings)
+    pool_options = OperationalSettings.upstream_http_pool_options(FakeUpstream.url(upstream), transport_opts: [timeout: connect_timeout])
+    options = Keyword.merge(Req.Finch.pool_options([]), pool_options)
+    finch = Req.Finch.pool_name(options)
+    start_supervised!({Finch, name: finch, pools: %{default: Keyword.merge(options, pool_overrides)}})
+    finch
   end
 
   defp assert_safe_transport_failure_metadata!(attempt, forbidden_values) do

@@ -86,6 +86,32 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
     assert_raise FunctionClauseError, fn -> OutboundHTTP.pool_options(-1) end
   end
 
+  test "the next POST uses a fresh connection while the timed-out response is still pending" do
+    release_ref = make_ref()
+    scenario = FakeUpstream.strict_sequence([FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref), {:raw_body, 201, "", []}])
+    name = __MODULE__.HeldResponseUpstream
+
+    on_exit(fn ->
+      if pid = Process.whereis(name), do: FakeUpstream.stop(%FakeUpstream{supervisor: pid})
+    end)
+
+    {:ok, upstream} = FakeUpstream.start_link(scenario, supervisor_name: name)
+    Process.unlink(upstream.supervisor)
+    url = FakeUpstream.url(upstream)
+    options = [body: "", retry: false, finch: [size: 1, count: 1]]
+
+    assert {:error, %Req.TransportError{reason: :timeout}} = OutboundHTTP.post(url, [receive_timeout: 200] ++ options)
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, handler, ^release_ref}, 15_000
+
+    try do
+      # HTTP/1 cannot serve this response on the original socket while its first response is held.
+      assert {:ok, %Req.Response{status: 201}} = OutboundHTTP.post(url, [receive_timeout: 2_000] ++ options)
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      send(handler, {:fake_upstream_release_timeout, release_ref})
+    end
+  end
+
   test "parses HTTP proxies and Basic credentials without retaining raw userinfo" do
     assert OutboundHTTP.parse_proxy_url!(nil) == []
     assert OutboundHTTP.parse_proxy_url!("") == []
@@ -112,6 +138,54 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
       refute Exception.message(error) =~ "password"
     end
   end
+
+  test "a response collector's exception propagates through the pooled adapter" do
+    url = start_upstream!({:raw_body, 200, "chunk", []})
+
+    assert_raise RuntimeError, "collector failed", fn ->
+      OutboundHTTP.get(url, retry: false, into: fn {:data, _chunk}, _acc -> raise "collector failed" end)
+    end
+  end
+
+  test "a caller trapping exits receives only the queued stream's error and can stream again" do
+    ref = make_ref()
+    held = FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: ref)
+    url = start_upstream!(FakeUpstream.strict_sequence([held, {:raw_body, 200, "recovered", []}]))
+    options = [into: :self, retry: false, finch: [size: 1, count: 1]]
+    queued_options = Keyword.merge(options, finch: [size: 1, count: 1, pool_timeout: 25], finch_private: [test_checkout: ref])
+    assert {:ok, occupant} = OutboundHTTP.get(url, options)
+    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, handler, ^ref}, 15_000
+    on_exit(fn -> send(handler, {:fake_upstream_release_timeout, ref}) end)
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+    :ok = :telemetry.attach(ref, [:finch, :queue, :start], &__MODULE__.report_checkout_worker/4, {self(), ref})
+    previous = Process.flag(:trap_exit, true)
+
+    try do
+      for _ <- 1..2 do
+        assert {:error, %Req.TransportError{reason: :pool_checkout_timeout}} =
+                 OutboundHTTP.get(url, queued_options)
+
+        assert_receive {:checkout_worker, ^ref, worker}, 15_000
+        monitor = Process.monitor(worker)
+        assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, 15_000
+        refute_received {:EXIT, ^worker, _reason}
+      end
+
+      send(handler, {:fake_upstream_release_timeout, ref})
+      assert Enum.to_list(occupant.body) == []
+      assert {:ok, recovered} = OutboundHTTP.get(url, options)
+      assert Enum.join(recovered.body) == "recovered"
+    after
+      Process.flag(:trap_exit, previous)
+    end
+  end
+
+  def report_checkout_worker(_event, _measurements, %{request: %{private: %{test_checkout: ref}}}, {owner, ref}) do
+    send(owner, {:checkout_worker, ref, self()})
+  end
+
+  def report_checkout_worker(_event, _measurements, _metadata, _config), do: :ok
 
   test "selects proxies for HTTP, HTTPS, WS, and WSS while honoring no_proxy" do
     http_proxy = [proxy: {:http, "http-proxy.example.com", 8080, []}]
@@ -345,8 +419,8 @@ defmodule CodexPooler.Platform.OutboundHTTPTest do
     assert_started_alive(initial, 3)
   end
 
-  defp start_upstream! do
-    {:ok, upstream} = FakeUpstream.start_link({:raw_body, 304, "", [{"etag", "\"feed-v1\""}]})
+  defp start_upstream!(scenario \\ {:raw_body, 304, "", [{"etag", "\"feed-v1\""}]}) do
+    {:ok, upstream} = FakeUpstream.start_link(scenario)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     FakeUpstream.url(upstream) <> "/feed.rss"
   end

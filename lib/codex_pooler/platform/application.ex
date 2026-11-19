@@ -6,6 +6,7 @@ defmodule CodexPooler.Application do
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Platform.ExecutionProofPublisher
   alias CodexPooler.Platform.InstancePresence.Identity
+  alias CodexPooler.Platform.OutboundHTTP.FinchAdapter
   alias CodexPooler.Telemetry.RelayRuntime
 
   @impl true
@@ -15,6 +16,7 @@ defmodule CodexPooler.Application do
     # so the incarnation is what makes the previous VM's presence row go stale
     # on schedule instead of being refreshed by its successor.
     _boot_id = Identity.mint_boot_id!()
+    :ok = FinchAdapter.attach()
 
     children = [
       CodexPooler.Platform.ExecutionRegistry,
