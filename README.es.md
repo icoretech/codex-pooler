@@ -155,8 +155,8 @@ de la instancia trabajan solo con los Pools que tienen asignados.
 ## Configuración de clientes
 
 Necesitas una instancia de Codex Pooler en funcionamiento, una clave API de Pool
-y un cliente instalado. Los ejemplos incluyen `gpt-6-luna`, `gpt-6.1-sol` y
-`gpt-6-astra`, con Sol seleccionado de forma predeterminada. Conserva los modelos
+y un cliente instalado. Los ejemplos incluyen `gpt-6-luna`, `gpt-6.2-sol` y
+`gpt-6.2-astra`, con Sol seleccionado de forma predeterminada. Conserva los modelos
 disponibles para tu Pool. Sustituye `<pool-api-key>` por tu clave y ejecuta el
 comando correspondiente a tu terminal antes de iniciar el cliente.
 
@@ -218,7 +218,7 @@ Si has definido `CODEX_HOME`, usa el archivo de esa carpeta. Conserva
 del catálogo está habilitado por defecto; `model_catalog_url` lo dirige a tu Pool.
 
 ```toml
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_provider = "codex-pooler-ws"
 
 [model_providers.codex-pooler-ws]
@@ -259,7 +259,7 @@ configuración de tu versión de OpenCode que aparece a continuación.
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "codex-pooler/gpt-6.1-sol",
+  "model": "codex-pooler/gpt-6.2-sol",
   "agents": {
     "title": {
       "model": "codex-pooler/gpt-6-luna"
@@ -290,8 +290,8 @@ configuración de tu versión de OpenCode que aparece a continuación.
             "reasoningSummary": "auto"
           }
         },
-        "gpt-6.1-sol": {
-          "modelID": "gpt-6.1-sol",
+        "gpt-6.2-sol": {
+          "modelID": "gpt-6.2-sol",
           "capabilities": {
             "tools": true,
             "input": ["text", "image"],
@@ -303,8 +303,8 @@ configuración de tu versión de OpenCode que aparece a continuación.
             "reasoningSummary": "auto"
           }
         },
-        "gpt-6-astra": {
-          "modelID": "gpt-6-astra",
+        "gpt-6.2-astra": {
+          "modelID": "gpt-6.2-astra",
           "capabilities": {
             "tools": true,
             "input": ["text", "image"],
@@ -329,7 +329,7 @@ configuración de tu versión de OpenCode que aparece a continuación.
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-6.1-sol",
+  "model": "openai/gpt-6.2-sol",
   "small_model": "openai/gpt-6-luna",
   "provider": {
     "openai": {
@@ -359,9 +359,9 @@ configuración de tu versión de OpenCode que aparece a continuación.
           },
           "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
-        "gpt-6.1-sol": {
-          "id": "gpt-6.1-sol",
-          "name": "GPT-6.1 Sol",
+        "gpt-6.2-sol": {
+          "id": "gpt-6.2-sol",
+          "name": "GPT-6.2 Sol",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -378,9 +378,9 @@ configuración de tu versión de OpenCode que aparece a continuación.
           },
           "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
-        "gpt-6-astra": {
-          "id": "gpt-6-astra",
-          "name": "GPT-6 Astra",
+        "gpt-6.2-astra": {
+          "id": "gpt-6.2-astra",
+          "name": "GPT-6.2 Astra",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -426,7 +426,7 @@ Abre `openclaw.json` en la ruta correspondiente a tu sistema y añade esta confi
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-6.1-sol",
+        primary: "openai/gpt-6.2-sol",
         list: [{ id: "background", model: "openai/gpt-6-luna" }],
       },
       compaction: { reserveTokens: 128000 },
@@ -452,8 +452,8 @@ Abre `openclaw.json` en la ruta correspondiente a tu sistema y añade esta confi
             maxTokens: 128000,
           },
           {
-            id: "gpt-6.1-sol",
-            name: "GPT-6.1 Sol via Codex Pooler",
+            id: "gpt-6.2-sol",
+            name: "GPT-6.2 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -461,8 +461,8 @@ Abre `openclaw.json` en la ruta correspondiente a tu sistema y añade esta confi
             maxTokens: 128000,
           },
           {
-            id: "gpt-6-astra",
-            name: "GPT-6 Astra via Codex Pooler",
+            id: "gpt-6.2-astra",
+            name: "GPT-6.2 Astra via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 828400,
@@ -507,7 +507,7 @@ Añade esto a `config.yaml` en la misma carpeta y reinicia Hermes:
 
 ```yaml
 model:
-  default: gpt-6.1-sol
+  default: gpt-6.2-sol
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
@@ -581,8 +581,8 @@ Abre `models.json` en la ruta correspondiente a tu sistema y añade esta configu
           "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
-          "id": "gpt-6.1-sol",
-          "name": "GPT-6.1 Sol via Codex Pooler",
+          "id": "gpt-6.2-sol",
+          "name": "GPT-6.2 Sol via Codex Pooler",
           "reasoning": true,
           "input": ["text", "image"],
           "contextWindow": 828400,
@@ -590,8 +590,8 @@ Abre `models.json` en la ruta correspondiente a tu sistema y añade esta configu
           "thinkingLevelMap": { "xhigh": "xhigh" }
         },
         {
-          "id": "gpt-6-astra",
-          "name": "GPT-6 Astra via Codex Pooler",
+          "id": "gpt-6.2-astra",
+          "name": "GPT-6.2 Astra via Codex Pooler",
           "reasoning": true,
           "input": ["text", "image"],
           "contextWindow": 828400,
@@ -609,11 +609,11 @@ Añade estos valores predeterminados a `settings.json` en la misma carpeta:
 ```json
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gpt-6.2-sol",
   "enabledModels": [
     "codex-pooler/gpt-6-luna",
-    "codex-pooler/gpt-6.1-sol",
-    "codex-pooler/gpt-6-astra"
+    "codex-pooler/gpt-6.2-sol",
+    "codex-pooler/gpt-6.2-astra"
   ],
   "compaction": { "reserveTokens": 128000 }
 }
@@ -665,16 +665,16 @@ providers:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-6.1-sol
-        name: GPT-6.1 Sol via Codex Pooler
+      - id: gpt-6.2-sol
+        name: GPT-6.2 Sol via Codex Pooler
         reasoning: true
         input: [text, image]
         compat:
           streamIdleTimeoutMs: 300000
         contextWindow: 828400
         maxTokens: 128000
-      - id: gpt-6-astra
-        name: GPT-6 Astra via Codex Pooler
+      - id: gpt-6.2-astra
+        name: GPT-6.2 Astra via Codex Pooler
         reasoning: true
         input: [text, image]
         compat:
@@ -690,21 +690,21 @@ startup:
   setupWizard: false
 enabledModels:
   - codex-pooler/gpt-6-luna
-  - codex-pooler/gpt-6.1-sol
-  - codex-pooler/gpt-6-astra
+  - codex-pooler/gpt-6.2-sol
+  - codex-pooler/gpt-6.2-astra
 modelProviderOrder:
   - codex-pooler
 modelRoles:
-  default: codex-pooler/gpt-6.1-sol:high
+  default: codex-pooler/gpt-6.2-sol:high
   smol: codex-pooler/gpt-6-luna:low
   tiny: codex-pooler/gpt-6-luna:minimal
-  slow: codex-pooler/gpt-6-astra:xhigh
-  plan: codex-pooler/gpt-6-astra:xhigh
-  task: codex-pooler/gpt-6.1-sol:high
-  vision: codex-pooler/gpt-6.1-sol:high
-  advisor: codex-pooler/gpt-6.1-sol:medium
+  slow: codex-pooler/gpt-6.2-astra:xhigh
+  plan: codex-pooler/gpt-6.2-astra:xhigh
+  task: codex-pooler/gpt-6.2-sol:high
+  vision: codex-pooler/gpt-6.2-sol:high
+  advisor: codex-pooler/gpt-6.2-sol:medium
   commit: codex-pooler/gpt-6-luna:minimal
-  designer: codex-pooler/gpt-6-astra:high
+  designer: codex-pooler/gpt-6.2-astra:high
 compaction:
   enabled: true
   thresholdPercent: 80
@@ -751,9 +751,9 @@ Integra este proveedor en `models.json`, conservando los proveedores existentes:
       "apiKey": "$CODEX_POOLER_API_KEY",
       "authHeader": true,
       "models": [
-        { "id": "gpt-6.1-sol", "reasoning": true, "defaultThinkingLevel": "medium", "input": ["text"] },
+        { "id": "gpt-6.2-sol", "reasoning": true, "defaultThinkingLevel": "medium", "input": ["text"] },
         { "id": "gpt-6-luna", "reasoning": true, "defaultThinkingLevel": "low", "input": ["text"] },
-        { "id": "gpt-6-astra", "reasoning": true, "defaultThinkingLevel": "high", "input": ["text"] }
+        { "id": "gpt-6.2-astra", "reasoning": true, "defaultThinkingLevel": "high", "input": ["text"] }
       ]
     }
   }
@@ -764,7 +764,7 @@ Conserva el `$` en la referencia a la clave API y sustituye la URL de ejemplo po
 la URL `/v1` de tu Pooler. Conserva solo los modelos disponibles para tu Pool. Empieza con Sol:
 
 ```bash
-omo --provider codex-pooler --model gpt-6.1-sol --thinking medium
+omo --provider codex-pooler --model gpt-6.2-sol --thinking medium
 ```
 
 Esta configuración cubre las solicitudes de texto. La guía incluye valores
@@ -811,7 +811,7 @@ Abre `kilo.jsonc` en la ruta correspondiente a tu sistema y añade esta configur
 ```jsonc
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "codex-pooler/gpt-6.1-sol",
+  "model": "codex-pooler/gpt-6.2-sol",
   "enabled_providers": ["codex-pooler"],
   "provider": {
     "codex-pooler": {
@@ -832,8 +832,8 @@ Abre `kilo.jsonc` en la ruta correspondiente a tu sistema y añade esta configur
           },
           "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
-        "gpt-6.1-sol": {
-          "name": "GPT-6.1 Sol via Codex Pooler",
+        "gpt-6.2-sol": {
+          "name": "GPT-6.2 Sol via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -844,8 +844,8 @@ Abre `kilo.jsonc` en la ruta correspondiente a tu sistema y añade esta configur
           },
           "limit": { "context": 828400, "input": 828400, "output": 64000 }
         },
-        "gpt-6-astra": {
-          "name": "GPT-6 Astra via Codex Pooler",
+        "gpt-6.2-astra": {
+          "name": "GPT-6.2 Astra via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -880,7 +880,7 @@ Inicia sesión en Trae, abre **Settings → Models** y añade un modelo personal
 | Formato de API | OpenAI Chat Completions |
 | URL de solicitud personalizada (Custom Request URL) | `http://localhost:4000/v1` |
 | URL completa (Full URL) | Desactivada |
-| ID del modelo (Model ID) | `gpt-6.1-sol` |
+| ID del modelo (Model ID) | `gpt-6.2-sol` |
 | Clave API | Tu clave API de Pool |
 | Serie de modelos (Model Series) | Predeterminada (Default) |
 
@@ -908,7 +908,7 @@ en el selector de modelos del agente y selecciónalo en **Custom Models**.
 Abre `.aider.conf.yml` en la ruta correspondiente a tu sistema y añade estos ajustes:
 
 ```yaml
-model: openai/gpt-6.1-sol
+model: openai/gpt-6.2-sol
 openai-api-base: http://localhost:4000/v1
 ```
 
@@ -970,9 +970,9 @@ models:
       maxTokens: 128000
     roles: [chat, edit, apply, summarize]
     capabilities: [tool_use, image_input]
-  - name: GPT-6.1 Sol via Codex Pooler
+  - name: GPT-6.2 Sol via Codex Pooler
     provider: openai
-    model: gpt-6.1-sol
+    model: gpt-6.2-sol
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -980,9 +980,9 @@ models:
       maxTokens: 128000
     roles: [chat, edit, apply, summarize]
     capabilities: [tool_use, image_input]
-  - name: GPT-6 Astra via Codex Pooler
+  - name: GPT-6.2 Astra via Codex Pooler
     provider: openai
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -1014,13 +1014,13 @@ cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl http://localhost:4000/v1 \
-  --modelid gpt-6.1-sol
+  --modelid gpt-6.2-sol
 ```
 
 **Windows PowerShell**
 
 ```powershell
-cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl http://localhost:4000/v1 --modelid gpt-6.1-sol
+cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl http://localhost:4000/v1 --modelid gpt-6.2-sol
 ```
 
 Inicia Cline y usa el modelo guardado. En la extensión del IDE, elige
@@ -1048,7 +1048,7 @@ Abre `config.yaml` en la ruta correspondiente a tu sistema y añade esta configu
 
 ```yaml
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-6.1-sol
+GOOSE_MODEL: gpt-6.2-sol
 OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 828400
@@ -1104,14 +1104,14 @@ sistema y añade lo siguiente. Si has definido `DSH_HOME`, usa su carpeta `profi
         models:
           - id: gpt-6-luna
             contextWindow: 828400
-          - id: gpt-6.1-sol
+          - id: gpt-6.2-sol
             contextWindow: 828400
-          - id: gpt-6-astra
+          - id: gpt-6.2-astra
             contextWindow: 828400
 - id: agent-default-model
   config:
     provider: codex-pooler
-    model: gpt-6.1-sol
+    model: gpt-6.2-sol
 ```
 
 Conserva los ajustes existentes en estas entradas al añadir la configuración.
@@ -1149,11 +1149,11 @@ providers:
     resource_path: u/<owner>/codex_pooler
     models:
       - gpt-6-luna
-      - gpt-6.1-sol
-      - gpt-6-astra
+      - gpt-6.2-sol
+      - gpt-6.2-astra
 default_model:
   provider: customai
-  model: gpt-6.1-sol
+  model: gpt-6.2-sol
 metadata_model:
   provider: customai
   model: gpt-6-luna
@@ -1233,7 +1233,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-6.1-sol",
+    model="gpt-6.2-sol",
     input="Write a one-sentence status update.",
 )
 
@@ -1263,7 +1263,7 @@ const client = new OpenAI({
 });
 
 const response = await client.responses.create({
-  model: "gpt-6.1-sol",
+  model: "gpt-6.2-sol",
   input: "Write a one-sentence status update.",
 });
 
@@ -1294,7 +1294,7 @@ const pooler = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: pooler.responses("gpt-6.1-sol"),
+  model: pooler.responses("gpt-6.2-sol"),
   prompt: "Write a one-sentence status update.",
 });
 

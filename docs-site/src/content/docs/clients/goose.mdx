@@ -55,7 +55,7 @@ Add the provider settings to `config.yaml`:
 
 ```yaml title="config.yaml" frame="code"
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-6.1-sol
+GOOSE_MODEL: gpt-6.2-sol
 OPENAI_HOST: https://codex-pooler.example.com
 OPENAI_BASE_PATH: v1/responses
 GOOSE_CONTEXT_LIMIT: 828400
@@ -82,7 +82,7 @@ export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
 goose run \
   --no-session \
   --provider openai \
-  --model gpt-6.1-sol \
+  --model gpt-6.2-sol \
   --with-builtin developer \
   --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
@@ -91,7 +91,7 @@ goose run \
 
 ```powershell
 $env:OPENAI_API_KEY = "$env:CODEX_POOLER_API_KEY"
-goose run --no-session --provider openai --model gpt-6.1-sol --with-builtin developer --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
+goose run --no-session --provider openai --model gpt-6.2-sol --with-builtin developer --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
 
 Confirm that `goose-ok.txt` contains the expected text. In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.

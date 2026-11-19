@@ -57,7 +57,7 @@ In the Web UI, open **Settings → Models** and choose **Add a custom provider**
 
 ![DeepSeek Harness Settings Models page showing configured providers in a localhost demo.](/deepseek-harness-models.png)
 
-Choose provider ID `codex-pooler`, optionally enter a display name, set the Base URL to `https://codex-pooler.example.com/v1`, select `openai-responses`, enter the Pool API key, and add model IDs `gpt-6-luna`, `gpt-6.1-sol`, and `gpt-6-astra`. The wizard screenshot is an unsubmitted localhost preview with a blank API-key field; it contains no credential.
+Choose provider ID `codex-pooler`, optionally enter a display name, set the Base URL to `https://codex-pooler.example.com/v1`, select `openai-responses`, enter the Pool API key, and add model IDs `gpt-6-luna`, `gpt-6.2-sol`, and `gpt-6.2-astra`. The wizard screenshot is an unsubmitted localhost preview with a blank API-key field; it contains no credential.
 
 ![DeepSeek Harness custom-provider wizard with a localhost Base URL, OpenAI Responses protocol, and blank API-key field.](/deepseek-harness-provider.png)
 
@@ -100,9 +100,9 @@ For a deployed Pooler, use:
         models:
           - id: gpt-6-luna
             contextWindow: 828400
-          - id: gpt-6.1-sol
+          - id: gpt-6.2-sol
             contextWindow: 828400
-          - id: gpt-6-astra
+          - id: gpt-6.2-astra
             contextWindow: 828400
 - id: agent-default-model
   config:

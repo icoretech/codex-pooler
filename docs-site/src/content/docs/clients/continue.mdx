@@ -45,9 +45,9 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-6.1 Sol via Codex Pooler
+  - name: GPT-6.2 Sol via Codex Pooler
     provider: openai
-    model: gpt-6.1-sol
+    model: gpt-6.2-sol
     apiBase: https://codex-pooler.example.com/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -77,9 +77,9 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: GPT-6 Astra via Codex Pooler
+  - name: GPT-6.2 Astra via Codex Pooler
     provider: openai
-    model: gpt-6-astra
+    model: gpt-6.2-astra
     apiBase: https://codex-pooler.example.com/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
     contextLength: 828400
@@ -99,7 +99,7 @@ For local setup, change `apiBase` to `http://localhost:4000/v1` in every model e
 
 ## Choose a model
 
-The configuration defines GPT-6.1 Sol, GPT-6 Luna, and GPT-6 Astra separately so they are available in Continue's model selector. Select the model you want to use and keep only entries available to your Pool. Keep the documented `roles` and `capabilities` with each model entry, and check each model's context limit independently.
+The configuration defines GPT-6.2 Sol, GPT-6 Luna, and GPT-6.2 Astra separately so they are available in Continue's model selector. Select the model you want to use and keep only entries available to your Pool. Keep the documented `roles` and `capabilities` with each model entry, and check each model's context limit independently.
 
 Continue uses `contextLength` for request pruning and `defaultCompletionOptions.maxTokens` for the completion budget. The `828400` value above is a long-profile example for a model whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use `/v1/models.context_length` as the authoritative `contextLength`, not the raw ceiling. For the long-profile example, Continue leaves 699400 tokens for input after its 128000-token completion cap and fixed 1000-token counting buffer.
 

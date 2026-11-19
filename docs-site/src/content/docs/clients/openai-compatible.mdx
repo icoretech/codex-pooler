@@ -51,6 +51,8 @@ $env:CODEX_POOLER_API_KEY = "<pool-api-key>"
 
 These commands apply to the current terminal. If the application runs as a service, configure the same variable in that service's environment. The Python, JavaScript and TypeScript examples below use the same code on all supported operating systems.
 
+Check the authenticated `GET /v1/models` response before selecting a model. The examples use `gpt-6.2-sol`. To use `gpt-6.2-astra` or another model, pass its exact `data[].id` as advertised by the Pool.
+
 ## Service tier compatibility
 
 Use `service_tier: "priority"` for priority processing. `fast` is an accepted
@@ -123,7 +125,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-6.1-sol",
+    model="gpt-6.2-sol",
     input="Write a short setup confirmation.",
 )
 
@@ -141,7 +143,7 @@ const client = new OpenAI({
 });
 
 const response = await client.responses.create({
-  model: "gpt-6.1-sol",
+  model: "gpt-6.2-sol",
   input: "Write a short setup confirmation.",
 });
 
@@ -160,7 +162,7 @@ const pooler = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: pooler.responses("gpt-6.1-sol"),
+  model: pooler.responses("gpt-6.2-sol"),
   allowSystemInMessages: true,
   providerOptions: {
     openai: {
@@ -227,7 +229,7 @@ effort unchanged and retain earlier update messages when replaying history:
 
 ```ts
 const result = await generateText({
-  model: pooler.responses("gpt-6.1-sol"),
+  model: pooler.responses("gpt-6.2-sol"),
   reasoning: "low",
   allowSystemInMessages: true,
   providerOptions: { openai: { store: false } },
@@ -265,7 +267,7 @@ on every generation that participates in the tool loop:
 
 ```ts
 const result = await generateText({
-  model: pooler.responses("gpt-6.1-sol"),
+  model: pooler.responses("gpt-6.2-sol"),
   providerOptions: {
     openai: { store: false },
   },
@@ -443,7 +445,7 @@ const pooler = createOpenAI({
 });
 
 const result = await generateText({
-  model: pooler.responses("gpt-6.1-sol"),
+  model: pooler.responses("gpt-6.2-sol"),
   providerOptions: {
     openai: {
       store: false,

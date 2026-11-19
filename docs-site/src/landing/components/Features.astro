@@ -51,7 +51,7 @@ const statBars = [18, 22, 20, 26, 34, 48, 62, 71, 76, 70, 74, 80, 77, 69, 72, 78
           </div>
           <div class="k-row k-revoke">
             <span class="k-name"><i class="k-ico"></i>Contractor<small>Temporary</small></span>
-            <span>gpt-6-luna, gpt-6.1-sol</span>
+            <span>gpt-6-luna, gpt-6.2-sol</span>
             <span>60 requests/min</span>
             <span>In 6 days</span>
             <span class="k-status"><span class="pill ok swap-a">Active</span><span class="pill bad swap-b">Revoked</span></span>
@@ -149,9 +149,9 @@ const statBars = [18, 22, 20, 26, 34, 48, 62, 71, 76, 70, 74, 80, 77, 69, 72, 78
           <div class="log-head"><span>Client</span><span>Account</span><span>Model</span><span>Tokens</span><span>Cost</span></div>
           <div class="log-body" data-live-log>
             <div class="log-row"><span><i class="logo" style="--src:url(/logos/opencode.svg)"></i>opencode<span class="ver"> 2.0.0</span></span><span>Account C</span><span>gpt-6-luna</span><span>72.1k</span><span>$0.08</span></div>
-            <div class="log-row"><span><i class="logo" style="--src:url(/logos/codex.svg)"></i>codex_cli_rs<span class="ver"> 0.160.0</span></span><span>Account A</span><span>gpt-6.1-sol</span><span>55.0k</span><span>$0.06</span></div>
+            <div class="log-row"><span><i class="logo" style="--src:url(/logos/codex.svg)"></i>codex_cli_rs<span class="ver"> 0.160.0</span></span><span>Account A</span><span>gpt-6.2-sol</span><span>55.0k</span><span>$0.06</span></div>
             <div class="log-row"><span><i class="logo" style="--src:url(/logos/python.svg)"></i>OpenAI/Python<span class="ver"> 2.8.1</span></span><span>Account B</span><span>gpt-6-luna</span><span>46.7k</span><span>$0.05</span></div>
-            <div class="log-row"><span><i class="logo" style="--src:url(/logos/goose.svg)"></i>goose<span class="ver"> 1.12.0</span></span><span>Account C</span><span>gpt-6-astra</span><span>31.9k</span><span>$0.03</span></div>
+            <div class="log-row"><span><i class="logo" style="--src:url(/logos/goose.svg)"></i>goose<span class="ver"> 1.12.0</span></span><span>Account C</span><span>gpt-6.2-astra</span><span>31.9k</span><span>$0.03</span></div>
           </div>
         </div>
       </article>
@@ -1331,7 +1331,7 @@ const statBars = [18, 22, 20, 26, 34, 48, 62, 71, 76, 70, 74, 80, 77, 69, 72, 78
       { logo: "openhands", ua: "openhands 0.59.0" },
     ];
     const accounts = ["Account A", "Account B", "Account C", "Account D", "Account E"];
-    const models = ["gpt-6-luna", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"];
+    const models = ["gpt-6-luna", "gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"];
     const kpi = (name: string) => document.querySelector<HTMLElement>(`[data-kpi="${name}"]`);
     const shown = { requests: kpi("requests"), tokens: kpi("tokens"), cost: kpi("cost") };
     let requests = 1572;

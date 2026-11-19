@@ -102,9 +102,9 @@ $env:CODEX_POOLER_API_KEY = "<pool-api-key>"
             "output": 64000
           }
         },
-        "gpt-6.1-sol": {
-          "id": "gpt-6.1-sol",
-          "name": "GPT-6.1 Sol via Codex Pooler",
+        "gpt-6.2-sol": {
+          "id": "gpt-6.2-sol",
+          "name": "GPT-6.2 Sol via Codex Pooler",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -128,9 +128,9 @@ $env:CODEX_POOLER_API_KEY = "<pool-api-key>"
             "output": 64000
           }
         },
-        "gpt-6-astra": {
-          "id": "gpt-6-astra",
-          "name": "GPT-6 Astra via Codex Pooler",
+        "gpt-6.2-astra": {
+          "id": "gpt-6.2-astra",
+          "name": "GPT-6.2 Astra via Codex Pooler",
           "family": "gpt",
           "attachment": true,
           "reasoning": true,
@@ -187,107 +187,107 @@ If you automate OpenCode from scripts, use OpenCode's own documented headless co
 
 If you use Oh My OpenAgent, keep the native `openai` provider configuration above and add model overrides in `oh-my-openagent.jsonc` in the same config folder. Keep the `openai/` prefix on every OMO model so delegated agents continue to use the same Codex Pooler provider.
 
-This example assigns Luna to lightweight and background work, GPT-6.1 Sol to daily agent work, and Astra to planning and deep-reasoning roles. Each explicit fallback stays inside the model ids assigned to the Pool and preserves the primary reasoning variant.
+This example assigns Luna to lightweight and background work, GPT-6.2 Sol to daily agent work, and Astra to planning and deep-reasoning roles. Each explicit fallback stays inside the model ids assigned to the Pool and preserves the primary reasoning variant.
 
 ```jsonc title="oh-my-openagent.jsonc" frame="code"
 {
   "agents": {
     "sisyphus": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "high" }]
     },
     "hephaestus": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "xhigh" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "xhigh" }]
     },
     "oracle": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "high" }]
     },
     "librarian": {
       "model": "openai/gpt-6-luna",
       "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "low" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "low" }]
     },
     "explore": {
       "model": "openai/gpt-6-luna",
       "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "low" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "low" }]
     },
     "multimodal-looker": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "medium" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "medium" }]
     },
     "prometheus": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "high" }]
     },
     "metis": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "high" }]
     },
     "momus": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "xhigh" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "xhigh" }]
     },
     "atlas": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "medium" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "medium" }]
     },
     "sisyphus-junior": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "medium" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "medium" }]
     }
   },
   "categories": {
     "visual-engineering": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "high" }]
     },
     "ultrabrain": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "xhigh" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "xhigh" }]
     },
     "deep": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "medium" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "medium" }]
     },
     "artistry": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6.2-astra",
       "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "xhigh" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "xhigh" }]
     },
     "quick": {
       "model": "openai/gpt-6-luna",
       "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "low" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "low" }]
     },
     "unspecified-low": {
       "model": "openai/gpt-6-luna",
       "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-6.1-sol", "variant": "low" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-sol", "variant": "low" }]
     },
     "unspecified-high": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "high" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "high" }]
     },
     "writing": {
-      "model": "openai/gpt-6.1-sol",
+      "model": "openai/gpt-6.2-sol",
       "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-6-astra", "variant": "medium" }]
+      "fallback_models": [{ "model": "openai/gpt-6.2-astra", "variant": "medium" }]
     }
   }
 }

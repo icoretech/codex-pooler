@@ -30,13 +30,13 @@ cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl https://codex-pooler.example.com/v1 \
-  --modelid gpt-6.1-sol
+  --modelid gpt-6.2-sol
 ```
 
 **Windows PowerShell**
 
 ```powershell
-cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl https://codex-pooler.example.com/v1 --modelid gpt-6.1-sol
+cline auth --provider openai --apikey "$env:CODEX_POOLER_API_KEY" --baseurl https://codex-pooler.example.com/v1 --modelid gpt-6.2-sol
 ```
 
 For local setup, change `--baseurl` to `http://localhost:4000/v1`.
@@ -55,7 +55,7 @@ Check the headless CLI path after saving auth:
 
 ```bash
 cline --provider openai \
-  --model gpt-6.1-sol \
+  --model gpt-6.2-sol \
   --json \
   --auto-approve false \
   'Reply with exactly: cline ok'
@@ -64,7 +64,7 @@ cline --provider openai \
 **Windows PowerShell**
 
 ```powershell
-cline --provider openai --model gpt-6.1-sol --json --auto-approve false 'Reply with exactly: cline ok'
+cline --provider openai --model gpt-6.2-sol --json --auto-approve false 'Reply with exactly: cline ok'
 ```
 
 In Codex Pooler's request logs, match the request time, API key, model, and final status to your test. A reply alone does not confirm that the client used your Pooler instance.

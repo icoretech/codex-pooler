@@ -63,7 +63,7 @@ Merge this provider into `models.json`, preserving any other providers:
       "authHeader": true,
       "models": [
         {
-          "id": "gpt-6.1-sol",
+          "id": "gpt-6.2-sol",
           "reasoning": true,
           "defaultThinkingLevel": "medium",
           "input": ["text"]
@@ -75,7 +75,7 @@ Merge this provider into `models.json`, preserving any other providers:
           "input": ["text"]
         },
         {
-          "id": "gpt-6-astra",
+          "id": "gpt-6.2-astra",
           "reasoning": true,
           "defaultThinkingLevel": "high",
           "input": ["text"]
@@ -97,12 +97,12 @@ Keep only models exposed by your Pool. Merge the following defaults into `settin
 ```json title="settings.json" frame="code"
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gpt-6.2-sol",
   "defaultThinkingLevel": "medium",
   "enabledModels": [
-    "codex-pooler/gpt-6.1-sol",
+    "codex-pooler/gpt-6.2-sol",
     "codex-pooler/gpt-6-luna",
-    "codex-pooler/gpt-6-astra"
+    "codex-pooler/gpt-6.2-astra"
   ]
 }
 ```
@@ -110,7 +110,7 @@ Keep only models exposed by your Pool. Merge the following defaults into `settin
 Select another configured model with `/model` or pass the provider and model explicitly when starting OMO:
 
 ```bash
-omo --provider codex-pooler --model gpt-6.1-sol --thinking medium
+omo --provider codex-pooler --model gpt-6.2-sol --thinking medium
 ```
 
 The model definitions above keep Senpi's default context and output budgets. To set `contextWindow`, use the selected model's `context_length` from authenticated `GET /v1/models`; ask your operator for the supported output budget before increasing `maxTokens`. Do not copy a larger context ceiling from another Pool or account.
@@ -128,7 +128,7 @@ omo --list-models codex-pooler
 Then run a single text request with tools and saved sessions disabled. The same one-line command works in a POSIX shell and PowerShell:
 
 ```bash
-omo --provider codex-pooler --model gpt-6.1-sol --thinking medium --mode json --no-session --no-tools --no-skills --no-context-files --omo-senpi-memory-disabled --omo-senpi-onboarding-disabled --no-model-fallback --print -- "Reply with a short greeting."
+omo --provider codex-pooler --model gpt-6.2-sol --thinking medium --mode json --no-session --no-tools --no-skills --no-context-files --omo-senpi-memory-disabled --omo-senpi-onboarding-disabled --no-model-fallback --print -- "Reply with a short greeting."
 ```
 
 Keep `--` immediately before the prompt so it is treated as input rather than a value for an extension flag. Expect a completed assistant message, an `agent_end` event and exit status 0; startup output or a zero exit status alone does not prove a model request completed.

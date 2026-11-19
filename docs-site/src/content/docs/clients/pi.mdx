@@ -99,8 +99,8 @@ For a deployed instance, add:
           "maxTokens": 128000
         },
         {
-          "id": "gpt-6.1-sol",
-          "name": "GPT-6.1 Sol via Codex Pooler",
+          "id": "gpt-6.2-sol",
+          "name": "GPT-6.2 Sol via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -110,8 +110,8 @@ For a deployed instance, add:
           "maxTokens": 128000
         },
         {
-          "id": "gpt-6-astra",
-          "name": "GPT-6 Astra via Codex Pooler",
+          "id": "gpt-6.2-astra",
+          "name": "GPT-6.2 Astra via Codex Pooler",
           "reasoning": true,
           "thinkingLevelMap": {
             "xhigh": "xhigh"
@@ -143,12 +143,12 @@ If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults
 ```json title="settings.json" frame="code"
 {
   "defaultProvider": "codex-pooler",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gpt-6.2-sol",
   "defaultThinkingLevel": "xhigh",
   "enabledModels": [
     "codex-pooler/gpt-6-luna",
-    "codex-pooler/gpt-6.1-sol",
-    "codex-pooler/gpt-6-astra"
+    "codex-pooler/gpt-6.2-sol",
+    "codex-pooler/gpt-6.2-astra"
   ],
   "compaction": {
     "reserveTokens": 128000
@@ -166,7 +166,7 @@ Run a one-shot prompt from the repository you want Pi to inspect:
 
 ```bash
 pi --provider codex-pooler \
-  --model gpt-6.1-sol \
+  --model gpt-6.2-sol \
   --no-session \
   --no-context-files \
   --tools bash \
@@ -176,7 +176,7 @@ pi --provider codex-pooler \
 **Windows PowerShell**
 
 ```powershell
-pi --provider codex-pooler --model gpt-6.1-sol --no-session --no-context-files --tools bash -p 'Reply with exactly: pi ok'
+pi --provider codex-pooler --model gpt-6.2-sol --no-session --no-context-files --tools bash -p 'Reply with exactly: pi ok'
 ```
 
 `--no-session` keeps the check ephemeral. `--no-context-files` keeps it independent from local project instructions. For normal interactive use, omit those flags if you want Pi to load `AGENTS.md`, skills, sessions, and project settings.

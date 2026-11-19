@@ -54,7 +54,7 @@ For a deployed instance, add these settings to `kilo.jsonc` at the path for your
 ```jsonc title="kilo.jsonc" frame="code"
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "codex-pooler/gpt-6.1-sol",
+  "model": "codex-pooler/gpt-6.2-sol",
   "enabled_providers": ["codex-pooler"],
   "provider": {
     "codex-pooler": {
@@ -79,8 +79,8 @@ For a deployed instance, add these settings to `kilo.jsonc` at the path for your
             "output": 64000
           }
         },
-        "gpt-6.1-sol": {
-          "name": "GPT-6.1 Sol via Codex Pooler",
+        "gpt-6.2-sol": {
+          "name": "GPT-6.2 Sol via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -95,8 +95,8 @@ For a deployed instance, add these settings to `kilo.jsonc` at the path for your
             "output": 64000
           }
         },
-        "gpt-6-astra": {
-          "name": "GPT-6 Astra via Codex Pooler",
+        "gpt-6.2-astra": {
+          "name": "GPT-6.2 Astra via Codex Pooler",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -146,7 +146,7 @@ validation_dir="$(mktemp -d)"
 cd "$validation_dir"
 
 kilo run \
-  --model codex-pooler/gpt-6.1-sol \
+  --model codex-pooler/gpt-6.2-sol \
   --pure \
   --auto \
   --format json \
@@ -161,7 +161,7 @@ $validationDir = Join-Path ([System.IO.Path]::GetTempPath()) ("kilo-check-" + [g
 New-Item -ItemType Directory -Path $validationDir | Out-Null
 Set-Location $validationDir
 
-kilo run --model codex-pooler/gpt-6.1-sol --pure --auto --format json --dir "$validationDir" 'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
+kilo run --model codex-pooler/gpt-6.2-sol --pure --auto --format json --dir "$validationDir" 'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
 ```
 
 `--pure` keeps external plugins out of the check. `--auto` is only for trusted isolated automation, because it lets Kilo Code approve tool permissions automatically.

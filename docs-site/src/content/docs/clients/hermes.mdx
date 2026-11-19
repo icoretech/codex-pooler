@@ -62,7 +62,7 @@ Then point `config.yaml` at the same `/v1` base URL and use the Responses transp
 
 ```yaml title="config.yaml" frame="code"
 model:
-  default: gpt-6.1-sol
+  default: gpt-6.2-sol
   provider: openai-api
   base_url: https://codex-pooler.example.com/v1
   api_mode: codex_responses
@@ -100,7 +100,7 @@ Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends `service_tier: prio
 
   ```yaml title="config.yaml" frame="code"
   model:
-    default: gpt-6.1-sol
+    default: gpt-6.2-sol
     provider: codex-pooler
     base_url: https://codex-pooler.example.com/v1
     api_mode: codex_responses
@@ -231,7 +231,7 @@ Set the provider in `config.yaml`. `context_length` is required here:
 
 ```yaml title="config.yaml" frame="code"
 model:
-  default: gpt-6.1-sol
+  default: gpt-6.2-sol
   provider: openai-codex
   base_url: https://codex-pooler.example.com/v1
   context_length: 828400
