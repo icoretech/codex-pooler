@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.16.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.3...codex-pooler-v0.16.4) (2026-11-19)
+
+
+### Bug Fixes
+
+* **gateway:** settle HTTP pool checkout timeouts before upstream dispatch ([627c9fd](https://github.com/icoretech/codex-pooler/commit/627c9fd3ea550a035c0bb9b8756137e791496ecb))
+* **pricing:** validate GPT-Live session rates during catalog refresh ([01be430](https://github.com/icoretech/codex-pooler/commit/01be430c8924275c9481d61c3c48dded83f306bd))
+* **site:** center the header button labels on their capitals ([d609921](https://github.com/icoretech/codex-pooler/commit/d60992193979094f3239bae88eeeb1e1a66b5e73))
+
+
+### Dependencies
+
+* update astro monorepo ([#645](https://github.com/icoretech/codex-pooler/issues/645)) ([d83a984](https://github.com/icoretech/codex-pooler/commit/d83a98498386975d1fb4ef6f0be462dd56495124))
+* update dependency apexcharts to v8.9.1 ([#646](https://github.com/icoretech/codex-pooler/issues/646)) ([24e0a2a](https://github.com/icoretech/codex-pooler/commit/24e0a2a500c825d7849a5b3c836f6edc6c387e49))
+* update dependency finch to v0.25.0 ([#643](https://github.com/icoretech/codex-pooler/issues/643)) ([f4976fd](https://github.com/icoretech/codex-pooler/commit/f4976fd363af7892a98b3c616d7a0c776e7534bf))
+* update helm release codex-pooler to v0.17.2 ([#642](https://github.com/icoretech/codex-pooler/issues/642)) ([dd8a8c0](https://github.com/icoretech/codex-pooler/commit/dd8a8c098909e697f2b05a7c6f6dc5ab7ca5a9c2))
+* update Swoosh to 1.30.0 and idna to 8.0.0 ([9813a15](https://github.com/icoretech/codex-pooler/commit/9813a151b531ad0f4e9478c74df8dd9820546172))
+
+
+### Miscellaneous Chores
+
+* **pricing:** refresh bundled GPT-Live duration descriptors ([ef963c9](https://github.com/icoretech/codex-pooler/commit/ef963c941ee2bb113d05b3e0fd78f9b5f6b93edb))
+
 ## [0.16.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.2...codex-pooler-v0.16.3) (2026-11-18)
 
 
