@@ -551,6 +551,64 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     end
   end
 
+  test "active and standby session rates require matching schema, model, billing conditions and alias" do
+    rates = %{"active_rate" => 0.05, "standby_rate" => 0.02}
+
+    billing = %{
+      "version" => 1,
+      "currency" => "USD",
+      "rate_unit" => "minute",
+      "billing_increment_seconds" => 1,
+      "standby_requires" => %{"transport" => "webrtc", "inference" => "paused"}
+    }
+
+    model = ["models", "sample-session"]
+    price = model ++ ["prices", "standard", "default"]
+    rule = model ++ ["session_billing"]
+
+    published =
+      unsupported_payload("sample-session", "per_minute", ["per_minute"], %{"standard" => %{"default" => rates}})
+      |> Map.put("schema_version", 2)
+      |> put_in(model ++ ["category"], "realtime_audio")
+      |> put_in(model ++ ["categories"], ["realtime_audio"])
+
+    current = published |> put_in(price ++ ["price_per_minute"], 0.05) |> put_in(rule, billing)
+
+    for payload <- [published, current] do
+      assert %{compatible?: true, rows: [], warnings: [%{code: :unsupported_pricing_type}], summary: %{skipped_models: 1}} = OpenAIPricingFormat.classify(payload)
+    end
+
+    invalid = [
+      Map.delete(published, "schema_version"),
+      Map.delete(current, "schema_version"),
+      put_in(published, model ++ ["category"], "audio_transcription"),
+      put_in(current, model ++ ["categories"], ["language_model"]),
+      put_in(published, price ++ ["standby_rate"], nil),
+      put_in(current, price ++ ["active_rate"], "0.05"),
+      put_in(current, price ++ ["standby_rate"], -1),
+      put_in(current, price ++ ["price_per_minute"], 0.02),
+      put_in(current, price ++ ["unit"], "minute"),
+      put_in(current, model ++ ["prices", "priority"], %{"default" => rates}),
+      put_in(current, model ++ ["prices", "standard", "default"], %{"price_per_minute" => 0.05}),
+      put_in(published, rule, billing),
+      put_in(published, price ++ ["price_per_minute"], 0.05),
+      put_in(current, rule, nil),
+      put_in(current, rule ++ ["version"], 2),
+      put_in(current, rule ++ ["billing_increment_seconds"], 1.0),
+      put_in(current, rule ++ ["currency"], "EUR"),
+      put_in(current, rule ++ ["rate_unit"], "second"),
+      put_in(current, rule ++ ["standby_requires", "transport"], "websocket"),
+      put_in(current, rule ++ ["standby_requires"], %{"inference" => "paused"}),
+      put_in(current, rule ++ ["standby_requires", "inference"], "active"),
+      put_in(current, rule ++ ["extra"], true),
+      put_in(context_payload(), ["models", "future-model", "session_billing"], billing)
+    ]
+
+    for payload <- invalid do
+      refute OpenAIPricingPreflight.validate_payload(payload).compatible?, inspect(payload["models"])
+    end
+  end
+
   test "accepts the reviewed live per-minute flat-rate descriptors as validated skips" do
     candidates = [
       unsupported_payload("future-live-transcribe", "per_minute", ["per_minute"], %{

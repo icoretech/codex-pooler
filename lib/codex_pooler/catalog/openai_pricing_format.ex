@@ -12,6 +12,13 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   @snapshot_buckets ~w(default short_context long_context)
   @price_fields ~w(input cached_input cache_write cache_write_30m cache_write_12h output reasoning)
   @pricing_type "per_1m_tokens"
+  @session_billing %{
+    "version" => 1,
+    "currency" => "USD",
+    "rate_unit" => "minute",
+    "billing_increment_seconds" => 1,
+    "standby_requires" => %{"transport" => "webrtc", "inference" => "paused"}
+  }
 
   defmodule Row do
     @moduledoc false
@@ -279,8 +286,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   defp model_fields(model, schema) when is_map(model) do
     fields = if Map.has_key?(model, "timestamp"), do: @model_fields, else: @model_fields -- ["timestamp"]
-    fields = if schema == 2 and Map.has_key?(model, "context_pricing"), do: ["context_pricing" | fields], else: fields
-    if schema == 2 and Map.has_key?(model, "pricing_applicability"), do: ["pricing_applicability" | fields], else: fields
+    optional = if model["pricing_type"] == "per_minute", do: ~w(context_pricing pricing_applicability session_billing), else: ~w(context_pricing pricing_applicability)
+    if schema == 2, do: fields ++ Map.keys(Map.take(model, optional)), else: fields
   end
 
   defp model_fields(_model, _schema), do: @model_fields
@@ -602,9 +609,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   end
 
   defp classify_unsupported_prices(state, model, path) do
-    valid? = unsupported_prices_valid?(model["pricing_type"], model["prices"])
-
-    if valid? do
+    if valid_unsupported_model?(model, state.catalog_schema_version) do
       state
       |> increment(:skipped_models)
       |> add_warning(
@@ -620,6 +625,24 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
         path <> ".prices"
       )
     end
+  end
+
+  defp valid_unsupported_model?(
+         %{"pricing_type" => "per_minute", "category" => "realtime_audio", "categories" => ["realtime_audio"], "prices" => %{"standard" => %{"default" => rates} = buckets} = prices} = model,
+         2
+       )
+       when map_size(prices) == 1 and map_size(buckets) == 1 do
+    case Map.fetch(model, "session_billing") do
+      :error ->
+        numeric_key_set?(rates, [~w(price_per_minute), ~w(active_rate standby_rate)])
+
+      {:ok, billing} ->
+        billing === @session_billing and exact_numeric_keys?(rates, ~w(active_rate standby_rate price_per_minute)) and rates["price_per_minute"] == rates["active_rate"]
+    end
+  end
+
+  defp valid_unsupported_model?(model, _schema) do
+    not Map.has_key?(model, "session_billing") and unsupported_prices_valid?(model["pricing_type"], model["prices"])
   end
 
   defp unsupported_prices_valid?("mixed", %{"standard" => buckets} = prices)

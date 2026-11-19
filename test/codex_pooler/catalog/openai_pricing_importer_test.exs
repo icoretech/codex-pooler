@@ -405,6 +405,40 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "imports token pricing alongside both generations of active and standby session rates" do
+    token = "sample-token-model"
+    published = "sample-session-pair"
+    current = "sample-session-with-conditions"
+    rates = %{"active_rate" => 0.05, "standby_rate" => 0.02}
+
+    session = %{
+      "categories" => ["realtime_audio"],
+      "category" => "realtime_audio",
+      "model" => published,
+      "pricing_types" => ["per_minute"],
+      "pricing_type" => "per_minute",
+      "prices" => %{"standard" => %{"default" => rates}}
+    }
+
+    qualified =
+      session
+      |> Map.put("model", current)
+      |> put_in(["prices", "standard", "default", "price_per_minute"], 0.05)
+      |> Map.put("session_billing", %{
+        "version" => 1,
+        "currency" => "USD",
+        "rate_unit" => "minute",
+        "billing_increment_seconds" => 1,
+        "standby_requires" => %{"transport" => "webrtc", "inference" => "paused"}
+      })
+
+    payload = v2_payload(token) |> Map.put("models_count", 3) |> put_in(["models", published], session) |> put_in(["models", current], qualified)
+    path = write_json!(payload)
+    assert {:ok, %{inserted: 1, skipped: 2, total: 3, price_version: version}} = OpenAIPricingImporter.import_file(path)
+    assert {:ok, %{inserted: 0, skipped: 2}} = OpenAIPricingImporter.import_file(path)
+    assert [^token] = Repo.all(from row in PricingSnapshot, where: row.price_version == ^version, select: row.model_identifier)
+  end
+
   test "malformed URL strings return bounded errors without writes" do
     before_count = Repo.aggregate(PricingSnapshot, :count)
 
