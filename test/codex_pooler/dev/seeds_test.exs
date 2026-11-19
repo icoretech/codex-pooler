@@ -200,8 +200,8 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert Enum.map(result.models, & &1.exposed_model_id) == [
              "gpt-6-luna",
-             "gpt-6.1-sol",
-             "gpt-6-astra"
+             "gpt-6.2-sol",
+             "gpt-6.2-astra"
            ]
 
     assert Enum.all?(result.models, fn model ->
@@ -218,7 +218,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              from(state in RoutingCircuitState,
                where:
                  state.status == "closed" and is_nil(state.api_key_id) and
-                   state.model_identifier == "gpt-6-astra"
+                   state.model_identifier == "gpt-6.2-astra"
              ),
              :count
            ) == 12
@@ -797,9 +797,9 @@ defmodule CodexPooler.Dev.SeedsTest do
                row.available?
              }
            end) == [
-             {"gpt-6.1-sol", "full", "full", true},
+             {"gpt-6.2-sol", "full", "full", true},
+             {"gpt-6.2-astra", "auto", "full", true},
              {"gpt-6-luna", "auto", "lite", true},
-             {"gpt-6-astra", "auto", "full", true},
              {"gpt-5.5-pro", "lite", "lite", false}
            ]
 

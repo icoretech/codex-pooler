@@ -41,8 +41,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
   # no_compatible_backend`), so the seed declares what the provider declares.
   @provider_service_tiers %{
     "gpt-6-luna" => %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"},
-    "gpt-6.1-sol" => %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"},
-    "gpt-6-astra" => %{"id" => "priority", "name" => "Fast", "description" => "2x speed, increased usage"}
+    "gpt-6.2-sol" => %{"id" => "priority", "name" => "Fast", "description" => "2x speed, increased usage"},
+    "gpt-6.2-astra" => %{"id" => "priority", "name" => "Fast", "description" => "2x speed, increased usage"}
   }
 
   @spec run(%{
@@ -180,7 +180,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     revoked = create_api_key!(scope, pool, "Dev revoked key", %{labels: ["dev", "revoked"]})
 
     update_api_key!(limited, %{
-      allowed_model_identifiers: ["gpt-6-luna", "gpt-6.1-sol"],
+      allowed_model_identifiers: ["gpt-6-luna", "gpt-6.2-sol"],
       enforced_reasoning_effort: "medium",
       enforced_service_tier: "priority"
     })
@@ -499,14 +499,14 @@ defmodule CodexPooler.Dev.Seeds.Full do
           absent_id => observed_source_metadata("gpt-6-luna")
         }
       ),
-      model_attrs(pool, "gpt-6.1-sol", "GPT 6.1 Sol", "active",
+      model_attrs(pool, "gpt-6.2-sol", "GPT 6.2 Sol", "active",
         source_assignment_models: %{
-          active_id => observed_source_metadata("gpt-6.1-sol"),
-          ready_id => observed_source_metadata("gpt-6.1-sol")
+          active_id => observed_source_metadata("gpt-6.2-sol"),
+          ready_id => observed_source_metadata("gpt-6.2-sol")
         },
         missing_sync_assignment_ids: [active_id]
       ),
-      model_attrs(pool, "gpt-6-astra", "GPT 6 Astra", "active", source_assignment_models: %{active_id => observed_source_metadata("gpt-6-astra")}),
+      model_attrs(pool, "gpt-6.2-astra", "GPT 6.2 Astra", "active", source_assignment_models: %{active_id => observed_source_metadata("gpt-6.2-astra")}),
       model_attrs(pool, "gpt-5.5-pro", "GPT 5.5 Pro", "stale", stale_at: minutes_ago(45)),
       model_attrs(pool, "codex-image", "Codex Image", "suppressed", suppressed_at: minutes_ago(15))
     ]
@@ -627,9 +627,9 @@ defmodule CodexPooler.Dev.Seeds.Full do
       ),
       quota_attrs(
         active,
-        quota_window_spec("secondary", 10_080, "gpt-6.1-sol", 500, 95, "81", "fresh"),
-        display_label: "GPT 6.1 Sol",
-        model: "gpt-6.1-sol"
+        quota_window_spec("secondary", 10_080, "gpt-6.2-sol", 500, 95, "81", "fresh"),
+        display_label: "GPT 6.2 Sol",
+        model: "gpt-6.2-sol"
       ),
       quota_attrs(ready, quota_window_spec("primary", 300, "account", 1000, 720, "28", "fresh")),
       quota_attrs(

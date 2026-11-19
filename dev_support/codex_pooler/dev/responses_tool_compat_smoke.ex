@@ -36,6 +36,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   @receipt_root Path.join(@root, "receipts")
   @manifest_name "manifest.json"
   @catalog_worker "Elixir.CodexPooler.Jobs.CatalogSyncWorker"
+  @certification_model_priority %{"gpt-6.2-sol" => 0, "gpt-6.1-sol" => 1}
   @identity_count 3
   @run_id_pattern ~r/\A[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\z/
   @identity_label_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\z/
@@ -815,15 +816,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   defp aggregate_probe_status([status]), do: status
   defp aggregate_probe_status(statuses), do: statuses |> Enum.sort() |> Enum.join("+")
 
-  # The certified model is the one the Pool both stores and advertises among the
-  # gpt-6 family or exact gpt-6.1-sol: gpt-6.1-sol when it qualifies, otherwise the first by id.
+  # Certify the advertised GPT-6.2 Sol when it qualifies, then GPT-6.1 Sol
+  # for older catalogs, then the first qualifying GPT-6 model by id.
   @doc false
   @spec select_certification_model(URI.t(), map()) :: {:ok, Model.t()} | {:error, String.t()}
   def select_certification_model(base_url, fixture) do
     with {:ok, candidates} <- certification_models(base_url, fixture) do
       selected =
         Enum.min_by(candidates, fn model ->
-          {if(model.exposed_model_id == "gpt-6.1-sol", do: 0, else: 1), model.exposed_model_id}
+          id = model.exposed_model_id
+          {Map.get(@certification_model_priority, id, 2), id}
         end)
 
       {:ok, selected}
@@ -867,7 +869,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       model.supports_responses and model.supports_streaming and model.supports_tools
   end
 
-  defp certification_family?(id), do: id in ["gpt-6", "gpt-6.1-sol"] or String.starts_with?(id, "gpt-6-")
+  defp certification_family?(id), do: id in ["gpt-6", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"] or String.starts_with?(id, "gpt-6-")
 
   defp optional_model_id?(:error, _id), do: true
   defp optional_model_id?({:ok, value}, id), do: is_binary(value) and value == id

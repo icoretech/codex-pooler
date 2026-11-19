@@ -32,7 +32,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     pool = Repo.get!(Pool, setup["pool_id"])
     key = Repo.get!(APIKey, setup["created"]["api_key_id"])
     assignment = Repo.get!(PoolUpstreamAssignment, setup["created"]["assignment_id"])
-    model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: "gpt-6.1-sol")
+    model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: "gpt-6.2-sol")
     request = request_fixture(%{pool: pool, api_key: key}, %{model_id: model.id})
     attempt = attempt_fixture(request, assignment)
 
@@ -114,7 +114,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
              supports_reasoning: true,
              metadata: text_metadata
            } =
-             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-6.1-sol")
+             Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-6.2-sol")
 
     assert %{"source_assignment_models" => source_models} = text_metadata
 
@@ -138,7 +138,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert %{"visibility" => "hide", "priority" => 0} = ModelMetadata.metadata(decoy)
 
     assert %{"visibility" => "list", "priority" => 20} =
-             ModelMetadata.metadata(Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-6.1-sol"))
+             ModelMetadata.metadata(Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-6.2-sol"))
 
     assert %Model{
              supports_responses: true,
@@ -187,7 +187,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
 
     assert %Pool{} = pool = Repo.get_by(Pool, slug: @pool_slug)
 
-    model = Repo.get_by(Model, pool_id: pool.id, exposed_model_id: "gpt-6.1-sol")
+    model = Repo.get_by(Model, pool_id: pool.id, exposed_model_id: "gpt-6.2-sol")
     assert %Model{} = model
 
     assignment = Repo.get(PoolUpstreamAssignment, setup["created"]["assignment_id"])
@@ -228,15 +228,9 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
   end
 
-  # The tier the released Codex client sends for these models when nothing
-  # configures one: `default_service_tier` of gpt-6-sol and gpt-6-luna in the
-  # client's bundled `codex-rs/models-manager/models.json` (0.156.1). The
-  # runtime filter refuses a non-default tier the assignment's model metadata
-  # does not declare, so without it the fixture answered `503
-  # no_compatible_backend` to every such Codex turn (findings#206).
-  @bundled_client_default_service_tier "priority"
+  @priority_service_tier "priority"
 
-  test "fixture text models admit the service tier the released Codex client sends by default", context do
+  test "fixture text models admit a Codex turn explicitly requesting priority", context do
     assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(context.options)
 
     setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
@@ -244,9 +238,9 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assignment = Repo.get!(PoolUpstreamAssignment, setup["created"]["assignment_id"])
     identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
 
-    for exposed_model_id <- ["gpt-6.1-sol", "gpt-6-luna"] do
+    for exposed_model_id <- ["gpt-6.2-sol", "gpt-6-luna"] do
       model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: exposed_model_id)
-      payload = %{"model" => exposed_model_id, "service_tier" => @bundled_client_default_service_tier}
+      payload = %{"model" => exposed_model_id, "service_tier" => @priority_service_tier}
       request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
       assert {:ok, [{%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{}}]} =
@@ -261,7 +255,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
 
       assert assignment_id == assignment.id
       source_metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
-      assert Enum.map(source_metadata["service_tiers"], & &1["id"]) == [@bundled_client_default_service_tier]
+      assert Enum.map(source_metadata["service_tiers"], & &1["id"]) == [@priority_service_tier]
     end
 
     assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
@@ -285,7 +279,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
       assert snapshot.undecodable_models == [], inspect(representation)
 
       served = Map.new(snapshot.body["models"], &{&1["slug"], &1})
-      assert ["fixture-review-host", "gpt-4o-transcribe", "gpt-6-luna", "gpt-6.1-sol", "gpt-image-1"] -- Map.keys(served) == [], inspect(representation)
+      assert ["fixture-review-host", "gpt-4o-transcribe", "gpt-6-luna", "gpt-6.2-sol", "gpt-image-1"] -- Map.keys(served) == [], inspect(representation)
 
       for {slug, entry} <- served do
         violations = CodexModelDecodeContract.violations(entry)

@@ -15,11 +15,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots.Traffic do
     {"goose/1.0.0", "http_sse", "/v1/chat/completions"}
   ]
   @cache_hit_rates [9580, 9730, 9860, 9920, 9670, 9810, 9950]
-  # Speed mix for the request-log Speed column. `ultrafast` is a literal tier of
-  # its own, priced only for gpt-6-astra, never an alias of `priority`. Tiers are
-  # dealt per model in recency order so the first rows of every page show normal,
-  # fast and ultrafast requests, and cost follows the catalog ratio of each tier.
-  @ultrafast_model "gpt-6-astra"
+  # The synthetic mix uses Astra for Ultrafast examples. Tiers are dealt per
+  # model in recency order so the first rows show normal, Fast and Ultrafast.
+  @ultrafast_model "gpt-6.2-astra"
   @ultrafast_cycle ["ultrafast", "default", "priority", "default"]
   @priority_cycle ["default", "priority", "default", "default"]
   @tier_cost_multipliers %{"default" => 1, "priority" => 2, "ultrafast" => 6}

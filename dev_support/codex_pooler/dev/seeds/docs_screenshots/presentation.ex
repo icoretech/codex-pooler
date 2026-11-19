@@ -210,7 +210,7 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots.Presentation do
       {35, owner, "auth.login", "session", nil, nil, "success", %{}, "203.0.113.24"},
       {58, owner, "upstream_account.provider_credits_policy_update", "upstream_account", code_review.id, production, "success", %{"label" => code_review.account_label, "allow_provider_credits" => false, "previous_allow_provider_credits" => true}, nil},
       {96, admin, "api_key.update", "api_key", release_key.id, production, "success", api_key_update_details(release_key), nil},
-      {140, owner, "pool.model_serving_modes_update", "pool", production.id, production, "success", %{"pool_name" => production.name, "changed_models" => ["gpt-6.1-sol"], "to_mode" => "full"}, nil},
+      {140, owner, "pool.model_serving_modes_update", "pool", production.id, production, "success", %{"pool_name" => production.name, "changed_models" => ["gpt-6.2-sol"], "to_mode" => "full"}, nil},
       {205, admin, "upstream_account.refresh_enqueue", "upstream_account", exhausted.id, production, "failure", %{"label" => exhausted.account_label, "reason" => "a token refresh is already queued for this account"}, nil},
       {260, owner, "upstream_account.saved_reset_policy_update", "upstream_account", primary.id, production, "success", %{"label" => primary.account_label, "saved_reset_auto_redeem_enabled" => true, "trigger_mode" => "blocked", "resets_to_keep" => 1}, nil},
       {410, owner, "upstream_account.pause", "upstream_account", identity.("Example Paused Account").id, production, "success", %{"label" => "Example Paused Account"}, nil},

@@ -10,14 +10,12 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  # The tiers the provider's catalog declares for the fixture's text models, in
-  # the shape the upstream sync stores. The released Codex client sends its
-  # bundled default tier (`priority` for gpt-6-sol and gpt-6-luna) when nothing
-  # configures one, and the runtime filter refuses a non-default tier the
-  # assignment does not declare (`503 no_compatible_backend`).
-  @fast_tier %{"id" => "priority", "name" => "Fast", "description" => "1.5x speed"}
-  @provider_service_tiers Map.new(["gpt-6.1-sol", "gpt-6-luna"], fn id ->
-                            {id, %{"service_tiers" => [@fast_tier], "default_service_tier" => nil, "additional_speed_tiers" => ["fast"]}}
+  # The runtime filters priority requests against the selected assignment's
+  # declared service tiers. Keep the fixture's Fast labels aligned with the
+  # provider catalog so either text model can exercise that path.
+  @provider_service_tiers Map.new(%{"gpt-6.2-sol" => "2x speed, increased usage", "gpt-6-luna" => "1.5x speed"}, fn {id, description} ->
+                            tier = %{"id" => "priority", "name" => "Fast", "description" => description}
+                            {id, %{"service_tiers" => [tier], "default_service_tier" => nil, "additional_speed_tiers" => ["fast"]}}
                           end)
 
   @synthetic_instructions "Synthetic OpenAI V1 fixture instructions."
@@ -97,8 +95,8 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
 
   defp text_attributes(assignment) do
     model_attributes(
-      "gpt-6.1-sol",
-      "GPT 6.1 Sol",
+      "gpt-6.2-sol",
+      "GPT 6.2 Sol",
       true,
       true,
       true,

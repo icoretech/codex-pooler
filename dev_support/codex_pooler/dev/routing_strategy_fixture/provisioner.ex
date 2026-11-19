@@ -17,8 +17,8 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture.Provisioner do
   # more assignments: truncation is the only situation where the strategies
   # differ in the selected assignment rather than only in the ordered tail.
   @bridge_ring_size 3
-  @exposed_model_id "gpt-6.1-sol-routing"
-  @upstream_model_id "provider-gpt-6.1-sol-routing"
+  @exposed_model_id "gpt-6.2-sol-routing"
+  @upstream_model_id "provider-gpt-6.2-sol-routing"
 
   # Differentiation keys. The quota ladder ascends with the assignment index
   # while the success ladder ages with it, so `quota_first` ranks 1..N and

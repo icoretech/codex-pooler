@@ -23,7 +23,7 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots.Observatory do
   @key_prefix "sk-cxp-docs00000001"
   @secret "docs-observatory-sample-secret"
   @weekend_factor 0.45
-  @model_mix ~w(gpt-6-luna gpt-6-luna gpt-6-luna gpt-6-luna gpt-6-luna gpt-6.1-sol gpt-6.1-sol gpt-6.1-sol gpt-6-astra gpt-6-astra)
+  @model_mix ~w(gpt-6-luna gpt-6-luna gpt-6-luna gpt-6-luna gpt-6-luna gpt-6.2-sol gpt-6.2-sol gpt-6.2-sol gpt-6.2-astra gpt-6.2-astra)
 
   # {status, response status, error code, attempt network error code}; the roll picks one per failed request.
   @failures [
@@ -165,9 +165,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots.Observatory do
 
     [priority_a, listing_1, listing_2, listing_3, listing_4, ultrafast, priority_b, limited] = times
 
-    priced!(context, model.("gpt-6.1-sol"), 1, priority_a, "priority", "high")
+    priced!(context, model.("gpt-6.2-sol"), 1, priority_a, "priority", "high")
     Enum.each([listing_1, listing_2, listing_3, listing_4], &listing!(context, &1))
-    priced!(context, model.("gpt-6-astra"), 2, ultrafast, "ultrafast", "xhigh")
+    priced!(context, model.("gpt-6.2-astra"), 2, ultrafast, "ultrafast", "xhigh")
     priced!(context, model.("gpt-6-luna"), 3, priority_b, "priority", "medium")
     limited!(context, model.("gpt-6-luna"), 4, limited)
   end

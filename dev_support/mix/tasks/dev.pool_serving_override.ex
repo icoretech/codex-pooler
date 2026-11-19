@@ -2,9 +2,9 @@ defmodule Mix.Tasks.Dev.PoolServingOverride do
   @moduledoc """
   Sets or clears one model's Full/Lite serving override on a named Pool.
 
-      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.1-sol --mode full
-      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.1-sol --mode auto
-      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.1-sol --mode lite --target-database codex_pooler_replica
+      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.2-sol --mode full
+      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.2-sol --mode auto
+      MIX_ENV=dev mix dev.pool_serving_override --pool dev-perf-pool --model gpt-6.2-sol --mode lite --target-database codex_pooler_replica
 
   The write goes through `Pools.update_model_serving_modes/4` with the instance
   owner's scope (audited like the operator Pools page). `auto` clears the

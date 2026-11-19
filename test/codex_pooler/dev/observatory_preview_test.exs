@@ -15,7 +15,7 @@ defmodule CodexPooler.Dev.ObservatoryPreviewTest do
     key = key |> Ecto.Changeset.change(dashboard_access: true) |> Repo.update!()
     other = api_key_fixture(pool)
     unrelated = request_fixture(other)
-    for model <- ~w(gpt-6-astra gpt-6-luna gpt-6.1-sol), do: model_fixture(pool, %{exposed_model_id: model})
+    for model <- ~w(gpt-6.2-astra gpt-6-luna gpt-6.2-sol), do: model_fixture(pool, %{exposed_model_id: model})
     original_key = Repo.get!(APIKey, key.id)
     jobs_before = Repo.aggregate(Oban.Job, :count)
 
