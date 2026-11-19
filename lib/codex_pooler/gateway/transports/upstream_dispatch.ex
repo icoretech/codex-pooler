@@ -509,7 +509,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       |> ProviderCreditsAdmission.attach_http_receipt(receipt)
     end
   rescue
+    # Finch.async_request/3 raises Finch.Error when the pool lookup times out before SSE headers.
     exception in [
+      Finch.Error,
       Req.TransportError,
       Req.HTTPError,
       Finch.TransportError,
@@ -1875,7 +1877,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp upstream_transport_error(reason) do
-    TransportFailureReason.upstream_transport_error(reason, %{phase: :request})
+    error = TransportFailureReason.upstream_transport_error(reason, %{phase: :request})
+
+    # Finch can fail before it acquires a connection. Preserve that local origin
+    # for route health while we still have the typed exception.
+    case reason do
+      %Req.TransportError{reason: :pool_checkout_timeout} -> Map.put(error, :failure_origin, :local_http_pool)
+      %module{reason: :pool_not_available} when module in [Req.HTTPError, Finch.Error] -> Map.put(error, :failure_origin, :local_http_pool)
+      _other -> error
+    end
   end
 
   defp log_upstream_transport_exception(exception, identity, opts) do

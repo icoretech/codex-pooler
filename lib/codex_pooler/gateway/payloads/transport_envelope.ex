@@ -122,9 +122,8 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   # here rather than carried in `TimeoutConfig`: that struct travels inside
   # versioned websocket owner requests whose field set is validated exactly
   # across nodes, and an owner never opens a Finch HTTP connection.
-  # `pool_max_idle_time` stays unset: stopping an idle per-origin pool can race
-  # a request that has just looked it up, and stale connections are already
-  # dropped at checkout.
+  # Leave `pool_max_idle_time` unset to keep the per-origin pool available.
+  # The connection idle bound retires stale sockets at checkout.
   @spec req_timeout_options(TimeoutConfig.t() | timeout_settings(), String.t() | nil) :: keyword()
   def req_timeout_options(timeouts, url \\ nil) do
     pool_options =
