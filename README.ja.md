@@ -27,13 +27,13 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a>
+  <a href="README.md">🇺🇸 English</a>
   ·
-  <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.zh-CN.md">🇨🇳 简体中文</a>
   ·
-  <a href="README.es.md">Español</a>
+  <a href="README.es.md">🇪🇸 Español</a>
   ·
-  <strong>日本語</strong>
+  <strong>🇯🇵 日本語</strong>
 </p>
 
 <p align="center">
@@ -56,6 +56,7 @@
 
 <p align="center">
   <a href="https://trendshift.io/repositories/53664?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-53664" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/53664/daily?language=Elixir" alt="icoretech%2Fcodex-pooler | Trendshift" width="250" height="55"/></a>
+  <a href="https://www.producthunt.com/products/codex-pooler?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-codex-pooler" target="_blank" rel="noopener noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1161452&amp;theme=dark"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1161452&amp;theme=light" alt="Product Hunt の Codex Pooler" width="250" height="54"></picture></a>
 </p>
 
 <p align="center">
