@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   string in the tolerant selectors (`tool_mode`, `multi_agent_version`) and
   positional (array-encoded) structs are accepted, and fields added inside the window
   (`available_access_programs`, `supports_reasoning_effort_updates`,
-  `supports_experimental_context`, `guardian`, and `content_filter_guidance`
+  `supports_experimental_context`, `guardian`, `multi_agent_tools_in_code_mode`, and `content_filter_guidance`
   inside `model_messages`) and the nested `model_messages` sub-structures
   are not checked. The contract is therefore never stricter
   than a client inside the window; a client outside it is not judged at all
@@ -28,7 +28,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContract do
   @verified_since {0, 154, 0}
   # Advance only after released-binary and complete-tag decoder verification,
   # independently of the managed client version and runtime overrides.
-  @verified_through {0, 170, 0}
+  @verified_through {0, 171, 0}
 
   @i32_range -2_147_483_648..2_147_483_647
   @i64_range -9_223_372_036_854_775_808..9_223_372_036_854_775_807

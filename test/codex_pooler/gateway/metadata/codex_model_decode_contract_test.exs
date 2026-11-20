@@ -46,6 +46,17 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContractTest do
   end
 
   describe "violations/1" do
+    test "the checked catalog preserves the multi-agent code mode flag across decoder versions" do
+      slug = "sample-code-mode-model"
+      source = CodexCatalogShapes.synced_source(slug)
+
+      for flag <- [nil, true, false, "unrecognized"] do
+        entry = Map.put(source, "multi_agent_tools_in_code_mode", flag)
+        assert {:ok, catalog} = build([{model(slug), entry}], :decode_checked)
+        assert [%{"multi_agent_tools_in_code_mode" => ^flag}] = catalog.body["models"]
+      end
+    end
+
     test "the common decoder ignores current-only guidance while preserving its value" do
       for guidance <- [nil, "Synthetic guidance", 7, false, %{}] do
         entry = "sample-guidance-model" |> CodexCatalogShapes.synced_source() |> put_in(["model_messages", "content_filter_guidance"], guidance)
