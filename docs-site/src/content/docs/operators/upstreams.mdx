@@ -138,9 +138,9 @@ Once that window reads the capped share used, the account behaves for the Pool l
 - **No current reading.** An account without a current weekly or 30-day reading cannot be measured against the cap: one the provider reports as available without any usage percentage, or one whose window has just reset and has not been read again. The cap stays saved but has no effect until such a reading arrives, and the account card and cockpit say so.
 - **Saved resets.** For [automatic redemption](#automatic-redemption) a capped account counts as paused. It never holds another account's banked reset back: when the Pool's other accounts run out, their resets are redeemed as if the capped account were not in the Pool. Pool traffic never spends the capped account's own banked resets, not even while a running turn finishes on it.
 - **Usage reported to clients.** The Codex usage endpoints describe an uncapped account of the Pool. When every account is capped they report the provider's figures for one of them unchanged, so a client can see usage below its limit while its requests receive the usage-limit answer.
-- **Readiness and alerts.** While the cap holds, the account card shows **Held by usage cap** instead of a ready state. Pool capacity counts and alerts still treat the account as available capacity.
+- **Readiness and alerts.** When the cap holds an otherwise ready account, the card's **Routing** status and the cockpit both show **Held by usage cap**. Pool capacity counts and alerts still treat the account as available capacity.
 
-The meter of the window the cap is read from, weekly or 30-day, marks the cap on the account card and in the cockpit, and shows **Usage cap reached** while it is in force. Open **Usage cap** from the card action menu or the cockpit to set or clear it; leave the field empty for no cap.
+The weekly or 30-day meter marks the configured cap on the account card and in the cockpit. For example, an 80% usage cap puts the marker at 20% remaining. Open **Usage cap** from the card action menu or the cockpit to change it. Leave the field empty to clear the cap.
 
 ## Saved resets
 

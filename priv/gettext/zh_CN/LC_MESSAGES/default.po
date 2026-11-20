@@ -1161,7 +1161,7 @@ msgstr "%{label}文档"
 msgid "%{label} for %{route_class}"
 msgstr "%{route_class}的%{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:231
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:225
 #, elixir-autogen, elixir-format
 msgid "%{label} included Codex quota remaining %{percent}"
 msgstr "%{label} 套餐内 Codex 配额剩余 %{percent}"
@@ -1172,12 +1172,12 @@ msgstr "%{label} 套餐内 Codex 配额剩余 %{percent}"
 msgid "%{label} reauthorized"
 msgstr "%{label} 已重新授权"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:234
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:228
 #, elixir-autogen, elixir-format
 msgid "%{label} remaining %{percent}"
 msgstr "%{label} 剩余 %{percent}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:228
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:222
 #, elixir-autogen, elixir-format
 msgid "%{label} remaining %{percent}; %{detail}"
 msgstr "%{label} 剩余 %{percent}；%{detail}"
@@ -7568,7 +7568,7 @@ msgid "Model reported at end"
 msgstr "结束时报告的模型"
 
 #: lib/codex_pooler_web/live/admin/components/pages/alerts/page_components/rules.ex:233
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:549
 #, elixir-autogen, elixir-format
 msgid "Model scope"
 msgstr "模型范围"
@@ -9938,7 +9938,7 @@ msgstr "未报告配额证据"
 
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:52
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:206
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
 #, elixir-autogen, elixir-format
 msgid "Quota exhausted"
 msgstr "配额已耗尽"
@@ -9950,7 +9950,7 @@ msgstr "配额优先"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:410
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:208
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
 #, elixir-autogen, elixir-format
 msgid "Quota missing"
 msgstr "缺少配额"
@@ -11830,12 +11830,12 @@ msgstr "所有文件端点共享；独立于代理流量。"
 msgid "Short"
 msgstr "简短"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:272
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:266
 #, elixir-autogen, elixir-format
 msgid "Show %{label} quota observations"
 msgstr "显示 %{label} 配额观测记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:270
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:264
 #, elixir-autogen, elixir-format
 msgid "Show %{label} quota observations; %{percent} remaining; %{detail}"
 msgstr "显示 %{label} 配额观测记录；剩余 %{percent}；%{detail}"
@@ -14086,7 +14086,7 @@ msgstr "将在保存时移除"
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/filters.ex:17
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:179
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:621
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:619
 #, elixir-autogen, elixir-format
 msgid "Window"
 msgstr "窗口"
@@ -14558,13 +14558,13 @@ msgstr "已丢弃"
 msgid "display_name"
 msgstr "显示名称"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:100
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:97
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:327
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:412
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:428
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/usage_poll_pause.ex:28
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:919
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:994
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:992
 #, elixir-autogen, elixir-format
 msgid "due"
 msgstr "已到期"
@@ -15093,8 +15093,8 @@ msgstr "未记录"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:17
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:477
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:42
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:703
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:788
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:701
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:786
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:975
 #, elixir-autogen, elixir-format
 msgid "not reported"
@@ -16052,7 +16052,7 @@ msgid "%{count} more open target"
 msgid_plural "%{count} more open targets"
 msgstr[0] "另外 %{count} 个待处理目标"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:799
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:797
 #, elixir-autogen, elixir-format
 msgid "%{credits} credit"
 msgid_plural "%{credits} credits"
@@ -16063,12 +16063,12 @@ msgstr[0] "%{credits} 额度"
 msgid "%{flow_kind} flow"
 msgstr "%{flow_kind} 流程"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:526
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:524
 #, elixir-autogen, elixir-format
 msgid "%{label} %{window}"
 msgstr "%{label} %{window}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:516
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:514
 #, elixir-autogen, elixir-format
 msgid "%{label} (%{identity})"
 msgstr "%{label}（%{identity}）"
@@ -16079,8 +16079,8 @@ msgstr "%{label}（%{identity}）"
 msgid "%{rate}/min"
 msgstr "%{rate}/分钟"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:794
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:816
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:792
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:814
 #, elixir-autogen, elixir-format
 msgid "%{remaining} / %{total} credit"
 msgid_plural "%{remaining} / %{total} credits"
@@ -16148,8 +16148,8 @@ msgstr "账号待处理"
 msgid "Actions for %{title}"
 msgstr "%{title} 的操作"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:537
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:642
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:535
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:640
 #, elixir-autogen, elixir-format
 msgid "Additional limit"
 msgstr "附加限制"
@@ -16180,8 +16180,8 @@ msgid "Availability is conditional on the request model, transport and serving m
 msgstr "可用性取决于请求模型、传输方式和服务模式。账号摘要不代表所有模型或路由均已获准。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:211
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery pending"
 msgstr "储备重置恢复待确认"
@@ -16229,7 +16229,7 @@ msgid "Complete account setup and reconciliation."
 msgstr "请完成账号设置和状态同步。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:210
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
 #, elixir-autogen, elixir-format
 msgid "Conditional provider availability"
 msgstr "服务商有条件可用"
@@ -16281,12 +16281,12 @@ msgstr "立即入队"
 msgid "Failure detail"
 msgstr "失败详情"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:578
 #, elixir-autogen, elixir-format
 msgid "Family %{value}"
 msgstr "系列 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:553
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
 #, elixir-autogen, elixir-format
 msgid "Feature scope"
 msgstr "功能范围"
@@ -16431,7 +16431,7 @@ msgstr "实时更新已暂停"
 msgid "Measurement status"
 msgstr "测量状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:582
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
 #, elixir-autogen, elixir-format
 msgid "Model %{value}"
 msgstr "模型 %{value}"
@@ -16573,17 +16573,17 @@ msgstr "待处理的上游账号在设置完成之前不会参与模型路由。
 msgid "Pool assignment"
 msgstr "Pool 分配"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:598
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:596
 #, elixir-autogen, elixir-format
 msgid "Primary"
 msgstr "主窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
 #, elixir-autogen, elixir-format
 msgid "Priming blocked"
 msgstr "初始化受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:115
 #, elixir-autogen, elixir-format
 msgid "Priming pending"
 msgstr "初始化待处理"
@@ -16594,15 +16594,15 @@ msgid "Priority"
 msgstr "优先级"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:205
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
 #, elixir-autogen, elixir-format
 msgid "Provider available"
 msgstr "服务商可用"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:213
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1012
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
 #, elixir-autogen, elixir-format
 msgid "Provider credit capacity unverified"
 msgstr "服务商额度容量未验证"
@@ -16613,8 +16613,8 @@ msgid "Provider credit-dependent admission is disabled; independently valid incl
 msgstr "依赖服务商额度的请求准入已禁用；独立有效的套餐内容量、普通服务商权限和授权的储备重置恢复仍单独评估。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:212
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1011
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
 #, elixir-autogen, elixir-format
 msgid "Provider credits disabled"
 msgstr "服务商额度已禁用"
@@ -16630,7 +16630,7 @@ msgid "Queued. Nothing has been sent to the provider yet."
 msgstr "已排队。尚未向服务商发送任何内容。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:209
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Quota blocked"
 msgstr "配额受阻"
@@ -16651,12 +16651,12 @@ msgstr "配额确认超时"
 msgid "Quota confirmed"
 msgstr "配额已确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
 #, elixir-autogen, elixir-format
 msgid "Quota expired"
 msgstr "配额已过期"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
 #, elixir-autogen, elixir-format
 msgid "Quota failed"
 msgstr "配额失败"
@@ -16672,7 +16672,7 @@ msgstr "配额仍被阻止。"
 msgid "Quota is still unavailable"
 msgstr "配额仍不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
 #, elixir-autogen, elixir-format
 msgid "Quota known"
 msgstr "配额已知"
@@ -16683,18 +16683,18 @@ msgid "Quota readiness blocks model routing: %{label}."
 msgstr "配额状态阻止模型路由：%{label}。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:203
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:999
 #, elixir-autogen, elixir-format
 msgid "Quota ready"
 msgstr "配额就绪"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:207
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
 #, elixir-autogen, elixir-format
 msgid "Quota refresh needed"
 msgstr "需要刷新配额"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
 #, elixir-autogen, elixir-format
 msgid "Quota reset missing"
 msgstr "缺少配额重置时间"
@@ -16704,12 +16704,12 @@ msgstr "缺少配额重置时间"
 msgid "Quota role"
 msgstr "配额用途"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
 #, elixir-autogen, elixir-format
 msgid "Quota stale"
 msgstr "配额已陈旧"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:125
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
 #, elixir-autogen, elixir-format
 msgid "Quota unprimed"
 msgstr "配额未初始化"
@@ -16734,7 +16734,7 @@ msgstr "请重新认证或替换已存储的凭据。"
 msgid "Reauthentication is required before this account can be selected for model routing."
 msgstr "此账号需要重新认证后才能参与模型路由。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
 #, elixir-autogen, elixir-format
 msgid "Reconciling quota"
 msgstr "正在同步配额"
@@ -16881,13 +16881,13 @@ msgstr "路由前请恢复上游账号。"
 msgid "Retained measurement"
 msgstr "保留的测量值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
 #, elixir-autogen, elixir-format
 msgid "Retained measurement awaits confirmation"
 msgstr "保留的测量值等待确认"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:244
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
 #, elixir-autogen, elixir-format
 msgid "Retained measurement; newer provider measurement awaits confirmation"
 msgstr "保留的测量值；较新的服务商测量值等待确认"
@@ -16903,7 +16903,7 @@ msgid "Routing ready"
 msgstr "可路由"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:187
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
 #, elixir-autogen, elixir-format
 msgid "Routing ready via credits"
 msgstr "可通过服务商额度路由"
@@ -16943,7 +16943,7 @@ msgstr "定时 · 长窗口配额已耗尽"
 msgid "Scheduled · quota threshold"
 msgstr "定时 · 配额阈值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:579
 #, elixir-autogen, elixir-format
 msgid "Scope %{value}"
 msgstr "范围 %{value}"
@@ -17044,12 +17044,12 @@ msgstr "令牌刷新失败；在凭据恢复之前，此账号不会参与模型
 msgid "Token refresh is due before this account can be selected for model routing."
 msgstr "此账号需要刷新令牌后才能参与模型路由。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:583
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
 #, elixir-autogen, elixir-format
 msgid "Upstream model %{value}"
 msgstr "上游模型 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:552
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:550
 #, elixir-autogen, elixir-format
 msgid "Upstream model scope"
 msgstr "上游模型范围"
@@ -17109,19 +17109,19 @@ msgstr "正在等待最新的配额检查结果。"
 msgid "Waiting for the provider's answer."
 msgstr "正在等待服务商答复。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:223
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:605
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:222
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:603
 #, elixir-autogen, elixir-format
 msgid "Weekly"
 msgstr "每周"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:204
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1000
 #, elixir-autogen, elixir-format
 msgid "Weekly quota probe"
 msgstr "每周配额探测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
 #, elixir-autogen, elixir-format
 msgid "Weekly-only probe"
 msgstr "仅每周配额探测"
@@ -17276,7 +17276,7 @@ msgstr "目录同步在完成前超时"
 msgid "credentials changed after import preparation; submit the current auth data again"
 msgstr "导入准备后凭据已更改；请重新提交当前授权数据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
 #, elixir-autogen, elixir-format
 msgid "current"
 msgstr "当前"
@@ -17296,12 +17296,12 @@ msgstr "已禁用的账号无法兑换已保存的重置"
 msgid "elapsed"
 msgstr "已结束"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
 #, elixir-autogen, elixir-format
 msgid "evidence current"
 msgstr "证据为当前状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
 #, elixir-autogen, elixir-format
 msgid "evidence stale; showing the last reported value"
 msgstr "证据已陈旧；显示上次报告的值"
@@ -17331,8 +17331,8 @@ msgstr "功能"
 msgid "fresh quota evidence reused"
 msgstr "已复用新鲜配额证据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:706
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
 #, elixir-autogen, elixir-format
 msgid "freshness unknown"
 msgstr "新鲜度未知"
@@ -17343,7 +17343,7 @@ msgid "imported %{time}"
 msgstr "已导入 %{time}"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:54
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:915
 #, elixir-autogen, elixir-format
 msgid "in %{duration}"
 msgstr "%{duration} 后"
@@ -17358,17 +17358,17 @@ msgstr "推断"
 msgid "just now"
 msgstr "刚刚"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
 #, elixir-autogen, elixir-format
 msgid "last reported"
 msgstr "上次报告"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:965
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:963
 #, elixir-autogen, elixir-format
 msgid "last reported %{relative_time}"
 msgstr "上次报告于 %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
 #, elixir-autogen, elixir-format
 msgid "last reported reset is unconfirmed because quota evidence is stale"
 msgstr "配额证据已陈旧，上次报告的重置时间未确认"
@@ -17409,7 +17409,7 @@ msgid "not elapsed"
 msgstr "未结束"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:814
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:175
 #, elixir-autogen, elixir-format
 msgid "not run"
 msgstr "未运行"
@@ -17419,18 +17419,18 @@ msgstr "未运行"
 msgid "observed"
 msgstr "观测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:966
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:964
 #, elixir-autogen, elixir-format
 msgid "observed %{relative_time}"
 msgstr "观测于 %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:970
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:968
 #, elixir-autogen, elixir-format
 msgid "observed %{timestamp}"
 msgstr "观测时间 %{timestamp}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:710
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:975
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:973
 #, elixir-autogen, elixir-format
 msgid "observed time not reported"
 msgstr "未报告观测时间"
@@ -17445,12 +17445,12 @@ msgstr "准备好的导入必须作为一个完整批次提交"
 msgid "primary"
 msgstr "主窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:897
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:895
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling seven-day window until use starts"
 msgstr "服务商报告在开始使用前为滚动七天窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:900
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:898
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling window until use starts"
 msgstr "服务商报告在开始使用前为滚动窗口"
@@ -17460,12 +17460,12 @@ msgstr "服务商报告在开始使用前为滚动窗口"
 msgid "provider usage authentication was rejected"
 msgstr "服务商用量认证被拒绝"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
 #, elixir-autogen, elixir-format
 msgid "quota evidence freshness was not reported"
 msgstr "未报告配额证据新鲜度"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:709
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:707
 #, elixir-autogen, elixir-format
 msgid "quota evidence was not reported"
 msgstr "未报告配额证据"
@@ -17520,12 +17520,12 @@ msgstr "缺少刷新令牌"
 msgid "refresh token was revoked"
 msgstr "刷新令牌已撤销"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
 #, elixir-autogen, elixir-format
 msgid "reset unconfirmed"
 msgstr "重置未确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:924
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:922
 #, elixir-autogen, elixir-format
 msgid "resets %{timestamp}"
 msgstr "重置时间 %{timestamp}"
@@ -17566,8 +17566,8 @@ msgstr "次窗口"
 msgid "started %{time}"
 msgstr "已开始 %{time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:830
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:875
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:828
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:873
 #, elixir-autogen, elixir-format
 msgid "starts on use"
 msgstr "使用时开始"
@@ -17831,42 +17831,42 @@ msgid "%{count} usage record"
 msgid_plural "%{count} usage records"
 msgstr[0] "%{count} 条用量记录"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
 #, elixir-autogen, elixir-format
 msgid "A balance or unknown observation grants no new routing capacity. Current included evidence and permitted banked-reset recovery are evaluated independently."
 msgstr "余额或未知观测不会增加路由容量。当前包含的额度证据和允许的储备重置恢复会独立评估。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
 #, elixir-autogen, elixir-format
 msgid "A provider workspace or model denial remains in force. Provider credits do not bypass that denial."
 msgstr "服务商对工作区或模型的拒绝仍然有效。服务商额度不能绕过该拒绝。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery unavailable"
 msgstr "储备重置恢复不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
 #, elixir-autogen, elixir-format
 msgid "Capacity basis unknown"
 msgstr "容量依据未知"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
 #, elixir-autogen, elixir-format
 msgid "Compatible included capacity is considered first, then usable provider credits, before blocked-request banked-reset recovery. Each request still checks its model, transport and serving mode; this does not establish a credit debit."
 msgstr "先考虑兼容的包含额度，再考虑可用的服务商额度，最后才是请求受阻时的储备重置恢复。每个请求仍会检查模型、传输方式和服务模式；这不代表已扣除服务商额度。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
 #, elixir-autogen, elixir-format
 msgid "Current evidence permits routing independently of the credit option. The account summary does not establish the billing source or permission for every model, transport and serving mode."
 msgstr "当前证据允许独立于额度选项进行路由。账号摘要不能确定每种模型、传输方式和服务模式的计费来源或使用权限。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
 #, elixir-autogen, elixir-format
 msgid "Existing reset recovery restrictions remain in force; a provider credit balance cannot clear the recovery latch."
 msgstr "现有重置恢复限制仍然有效；服务商额度余额不能解除恢复锁定。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
 #, elixir-autogen, elixir-format
 msgid "Legacy provider availability is preserved with this policy enabled. It does not prove included quota or provider credit capacity for every model or transport."
 msgstr "启用此策略时会保留原有的服务商可用性。这不能证明每种模型或传输方式都有包含配额或服务商额度容量。"
@@ -17881,32 +17881,32 @@ msgstr "过去 5 分钟内没有请求。"
 msgid "OAuth relink requires a Pool assignment"
 msgstr "OAuth 重新关联需要分配到 Pool"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
 #, elixir-autogen, elixir-format
 msgid "Observed balance remains separate. Independently valid included capacity, exact-model allowances and permitted banked-reset recovery remain available."
 msgstr "观测到的余额保持独立。独立有效的包含额度、精确模型许可和允许的储备重置恢复仍可使用。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
 #, elixir-autogen, elixir-format
 msgid "Provider capacity blocked"
 msgstr "服务商容量受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
 #, elixir-autogen, elixir-format
 msgid "Provider credits available"
 msgstr "服务商额度可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
 #, elixir-autogen, elixir-format
 msgid "Provider permission available"
 msgstr "服务商权限可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
 #, elixir-autogen, elixir-format
 msgid "Recovery is not yet confirmed. Provider credits on this identity cannot confirm included quota restoration."
 msgstr "恢复尚未确认。此身份的服务商额度不能确认包含配额已恢复。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
 #, elixir-autogen, elixir-format
 msgid "The observed balance does not grant routing. Current evidence does not establish usable provider credit permission; included capacity, ordinary provider permission and authorized reset recovery are evaluated separately."
 msgstr "观测到的余额不授予路由权限。当前证据不能确定服务商额度权限可用；包含额度、常规服务商权限和已授权的重置恢复会分别评估。"
@@ -18695,17 +18695,12 @@ msgstr "用量上限（占每周或 30 天额度的百分比）"
 msgid "Usage cap could not be changed; access to every Pool is required"
 msgstr "无法更改用量上限；需要拥有每个 Pool 的访问权限"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:51
-#, elixir-autogen, elixir-format
-msgid "Usage cap reached"
-msgstr "已达用量上限"
-
 #: lib/codex_pooler_web/live/admin/pages/usage_cap_workflow.ex:55
 #, elixir-autogen, elixir-format
 msgid "Usage cap updated"
 msgstr "用量上限已更新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:134
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:128
 #, elixir-autogen, elixir-format
 msgid "Usage cap: %{percent}%"
 msgstr "用量上限：%{percent}%"

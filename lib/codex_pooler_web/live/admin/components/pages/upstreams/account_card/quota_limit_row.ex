@@ -47,12 +47,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         <span data-role="upstream-limit-title" class="min-w-0 truncate font-medium text-base-content">
           {@limit.label}
         </span>
-        <span class="flex shrink-0 items-center gap-2">
-          <span :if={usage_capped?(@limit)} id={"#{@id}-usage-cap-reached"} data-role="usage-cap-reached" class="badge badge-warning badge-sm">{gettext("Usage cap reached")}</span>
-          <span class={quota_limit_percent_class(@limit)}>{@limit.percent_label}</span>
-        </span>
+        <span class={[quota_limit_percent_class(@limit), "shrink-0"]}>{@limit.percent_label}</span>
       </div>
-      <div class="relative">
+      <div class="relative grid">
         <progress
           id={"#{@id}-progress"}
           data-role="upstream-limit-progress"
@@ -127,9 +124,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
 
   defp usage_cap_percent(%{usage_cap_percent: cap}) when is_integer(cap) and cap in 1..99, do: cap
   defp usage_cap_percent(_limit), do: nil
-
-  defp usage_capped?(%{usage_capped?: true}), do: true
-  defp usage_capped?(_limit), do: false
 
   defp usage_cap_label(limit), do: gettext("Usage cap: %{percent}%", percent: usage_cap_percent(limit))
 
