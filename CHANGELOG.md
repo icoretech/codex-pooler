@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.16.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.4...codex-pooler-v0.16.5) (2026-11-20)
+
+
+### Bug Fixes
+
+* **admin:** tighten quota meter spacing and remove the duplicate cap badge ([d921df0](https://github.com/icoretech/codex-pooler/commit/d921df057baa21f87d316799d752d59541f6f5ed))
+
+
+### Dependencies
+
+* qualify the Codex 0.171.0 catalog decoder and client identity ([adbe6cd](https://github.com/icoretech/codex-pooler/commit/adbe6cd57254013fd035b7f8b439bb3c329c76d2))
+* update ghcr.io/icoretech/codex-docker docker tag to v0.171.0 ([#647](https://github.com/icoretech/codex-pooler/issues/647)) ([a3309e0](https://github.com/icoretech/codex-pooler/commit/a3309e0d820c55386d54ee1860146033e25bad7a))
+
+
+### Miscellaneous Chores
+
+* sync published quota meter fix with local main ([329d53c](https://github.com/icoretech/codex-pooler/commit/329d53ceb378e019b00bdde84631b64b6be9d219))
+
 ## [0.16.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.3...codex-pooler-v0.16.4) (2026-11-19)
 
 
