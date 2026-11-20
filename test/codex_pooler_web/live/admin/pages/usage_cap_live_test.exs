@@ -12,7 +12,6 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
-  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow
 
   @detection_timeout_ms 15_000
 
@@ -38,8 +37,7 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
     assert has_element?(list, "#flash-info", "Usage cap updated")
 
     await_element!(cockpit, "#upstream-quota-limit-weekly-usage-cap-marker[data-cap-percent='80'][style*='left: 20%']")
-    assert has_element?(list, "#upstream-account-#{identity.id}-limit-weekly-usage-cap-marker[data-cap-percent='80'][style*='left: 20%'][title='Usage cap: 80%']")
-    refute has_element?(cockpit, "[data-role='usage-cap-reached']")
+    assert has_element?(list, "#upstream-account-#{identity.id}-limit-weekly-usage-cap-marker[data-cap-percent='80'][style*='left: 20%'][aria-label='Usage cap: 80%'][title='Usage cap: 80%']")
 
     events = Repo.all(from audit in AuditEvent, where: audit.action == "upstream_account.usage_cap_policy_update", select: audit.pool_id)
     assert Enum.sort(events) == Enum.sort([fixture.a.id, fixture.b.id])
@@ -52,16 +50,15 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
     refute has_element?(cockpit, "#upstream-quota-limit-weekly-usage-cap-marker")
   end
 
-  test "a cap at or below the weekly usage shows the reached badge", %{conn: conn, scope: scope} do
+  test "a reached weekly cap appears in the routing footer and cockpit verdict", %{conn: conn, scope: scope} do
     fixture = shared_account!()
     assert {:ok, _} = CodexPooler.Upstreams.update_usage_cap_policy_for_scope(scope, fixture.identity.id, %{usage_cap_percent: 10})
     {:ok, list, _} = live(conn, ~p"/admin/upstreams")
     {:ok, cockpit, _} = live(conn, ~p"/admin/upstreams/#{fixture.identity.id}")
-    assert has_element?(list, "#upstream-account-#{fixture.identity.id}-limit-weekly-usage-cap-reached", "Usage cap reached")
-    assert has_element?(cockpit, "#upstream-quota-limit-weekly-usage-cap-reached", "Usage cap reached")
+    assert has_element?(list, "#upstream-account-#{fixture.identity.id} [data-role='upstream-routing-cell']", "Held by usage cap")
+    assert has_element?(cockpit, "#upstream-routing-verdict", "Held by usage cap")
     assert has_element?(cockpit, "#upstream-quota-limit-weekly-usage-cap-marker[style*='left: 90%']")
-    assert has_element?(list, "#upstream-account-#{fixture.identity.id}-routing-readiness-state", "usage_cap_reached")
-    assert has_element?(list, "#upstream-account-#{fixture.identity.id}-routing-readiness-label", "Held by usage cap")
+    refute has_element?(list, "#upstream-account-#{fixture.identity.id}-limit-weekly [data-role='usage-cap-reached']")
   end
 
   test "a plan without a weekly window carries the cap on its 30-day row", %{conn: conn} do
@@ -78,7 +75,7 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
     {:ok, list, _} = live(conn, ~p"/admin/upstreams?#{%{"pool_id" => pool.id}}")
 
     assert has_element?(list, "#upstream-account-#{identity.id}-limit-primary_30d-usage-cap-marker[data-cap-percent='30'][style*='left: 70%']")
-    assert has_element?(list, "#upstream-account-#{identity.id}-limit-primary_30d-usage-cap-reached", "Usage cap reached")
+    assert has_element?(list, "#upstream-account-#{identity.id} [data-role='upstream-routing-cell']", "Held by usage cap")
     refute has_element?(list, "#upstream-account-#{identity.id}-usage-cap-unmeasurable")
   end
 
@@ -139,53 +136,6 @@ defmodule CodexPoolerWeb.Admin.UsageCapLiveTest do
 
     assert is_nil(Repo.reload!(fixture.identity).usage_cap_percent)
     assert Repo.aggregate(from(audit in AuditEvent, where: audit.action == "upstream_account.usage_cap_policy_update"), :count) == 0
-  end
-
-  describe "quota limit row" do
-    test "the marker sits at the remaining-quota position of the cap" do
-      html = render_component(&QuotaLimitRow.quota_limit_row/1, id: "row", account_label: "Synthetic", limit: limit(%{usage_cap_percent: 80, usage_capped?: false}))
-      assert html =~ ~s(data-role="usage-cap-marker")
-      assert html =~ "left: 20%"
-      assert html =~ ~s(aria-label="Usage cap: 80%")
-      assert html =~ ~s(title="Usage cap: 80%")
-      refute html =~ "Usage cap reached"
-    end
-
-    test "the reached badge shows only while capped" do
-      html = render_component(&QuotaLimitRow.quota_limit_row/1, id: "row", account_label: "Synthetic", limit: limit(%{usage_cap_percent: 5, usage_capped?: true}))
-      assert html =~ "Usage cap reached"
-      assert html =~ "badge-warning"
-      assert html =~ "left: 95%"
-    end
-
-    test "no cap draws neither marker nor badge" do
-      html = render_component(&QuotaLimitRow.quota_limit_row/1, id: "row", account_label: "Synthetic", limit: limit(%{}))
-      refute html =~ "usage-cap-marker"
-      refute html =~ "Usage cap reached"
-    end
-  end
-
-  defp limit(extra) do
-    Map.merge(
-      %{
-        key: :weekly,
-        label: "Weekly",
-        percent: Decimal.new(60),
-        percent_value: 60,
-        percent_label: "60%",
-        count_label: nil,
-        count_title: nil,
-        evidence_state: :fresh,
-        meter_state: :current,
-        measurement_pending?: false,
-        reset_label: nil,
-        reset_display_state: :absent,
-        reset_semantics: :unknown,
-        reset_at: nil,
-        reset_title: nil
-      },
-      extra
-    )
   end
 
   defp shared_account! do

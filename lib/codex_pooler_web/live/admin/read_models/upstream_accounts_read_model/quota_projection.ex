@@ -38,7 +38,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           optional(:saved_reset_context) => QuotaObservations.saved_reset_context(),
           optional(:observation_group) => String.t(),
           optional(:usage_cap_percent) => 1..99 | nil,
-          optional(:usage_capped?) => boolean(),
           optional(:observations) => [QuotaObservations.observation()],
           required(:key) => atom() | String.t(),
           required(:label) => String.t(),
@@ -243,9 +242,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   @doc """
-  Marks the row of the window the operator's usage cap is judged on (weekly,
-  or 30-day on a plan without a weekly window) with the cap and whether routing
-  is holding the account at it right now. A cap that cannot be read marks no
+  Marks the threshold on the window the operator's usage cap applies to (weekly,
+  or 30-day on a plan without a weekly window). A cap that cannot be read marks no
   row; the account card says so instead (`usage_cap_unmeasurable?/1`).
   """
   @spec attach_usage_cap([quota_limit_row()], RoutingQuotaSnapshot.t()) :: [quota_limit_row()]
@@ -255,7 +253,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
         key = if kind == :monthly, do: :primary_30d, else: :weekly
 
         Enum.map(rows, fn
-          %{key: ^key} = row -> row |> Map.put(:usage_cap_percent, cap) |> Map.put(:usage_capped?, state == :reached)
+          %{key: ^key} = row -> Map.put(row, :usage_cap_percent, cap)
           row -> row
         end)
 
