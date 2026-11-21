@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.16.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.5...codex-pooler-v0.16.6) (2026-11-21)
+
+
+### Bug Fixes
+
+* **chat:** build assistant content from message output text only ([11529cb](https://github.com/icoretech/codex-pooler/commit/11529cb4e43fd258110a93f81d1ad0a02e5cf62f))
+
+
+### Dependencies
+
+* update dependency phoenix to v1.8.17 ([#651](https://github.com/icoretech/codex-pooler/issues/651)) ([bbe0599](https://github.com/icoretech/codex-pooler/commit/bbe0599687b7d2a402e1b5584cf97382963555fe))
+* update dependency phoenix_live_view to v1.2.14 ([#652](https://github.com/icoretech/codex-pooler/issues/652)) ([6d821eb](https://github.com/icoretech/codex-pooler/commit/6d821eb857383d4238515774834ac708efa7fb2b))
+* update helm release codex-pooler to v0.17.3 ([#649](https://github.com/icoretech/codex-pooler/issues/649)) ([0aab4b8](https://github.com/icoretech/codex-pooler/commit/0aab4b8425d3d8548644687b1b70896541c0c594))
+
+
+### Tests
+
+* **websocket:** wait for the owner deadline before sending a late final ([c41a6bf](https://github.com/icoretech/codex-pooler/commit/c41a6bf418da7ef314dd2ead9b1d1e1671224622))
+
 ## [0.16.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.4...codex-pooler-v0.16.5) (2026-11-20)
 
 
