@@ -209,7 +209,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SlowOwnerA
 
       # Answering again, the owner applied the confirmation: the final is
       # reserved against it, and its own success arms the next compaction.
-      assert admission_phase(compaction.owner) == :pending_final
+      assert %{phase: :pending_final} = owner_admission(compaction.owner)
       final = send_frame!(compaction, final_after_compaction_frame(compaction, item))
       assert %{"type" => "response.completed", "response" => %{"id" => "resp_slow_owner_final"}} = final
       :ok = await_admission_phase!(compaction.owner, :pending_compact)
@@ -621,6 +621,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SlowOwnerA
       assert %{"type" => "response.completed", "response" => %{"id" => "resp_slow_owner_compact", "output" => [item]}} = served
       compaction = with_client(compaction, conn, websocket)
 
+      # A final arriving exactly at the deadline can still reserve its capability.
+      :ok = await_admission_phase!(compaction.owner, :pending_final, fn admission -> :erpc.call(node(compaction.owner), System, :system_time, [:millisecond]) > admission.expires_at_ms end)
       assert %{"type" => "response.completed", "response" => %{"id" => "resp_slow_owner_final"}} = send_frame!(compaction, final_after_compaction_frame(compaction, item))
       :ok = await_admission_phase!(compaction.owner, :pending_compact)
       assert Scenario.settled_statuses!(compaction.setup, 3) == ["succeeded", "succeeded", "succeeded"]
@@ -810,20 +812,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SlowOwnerA
     :ok
   end
 
-  defp await_admission_phase!(owner, phase, deadline \\ nil) do
+  defp await_admission_phase!(owner, phase, ready? \\ fn _admission -> true end, deadline \\ nil) do
     deadline = deadline || System.monotonic_time(:millisecond) + @detection_timeout_ms
+    admission = owner_admission(owner)
+    current_phase = admission && admission.phase
 
     cond do
-      admission_phase(owner) == phase ->
+      current_phase == phase and ready?.(admission) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
-        flunk("the owner's compaction admission never reached #{phase}: #{inspect(admission_phase(owner))}")
+        flunk("the owner's compaction admission did not meet the #{phase} condition: #{inspect(current_phase)}")
 
       true ->
         receive do
         after
-          1 -> await_admission_phase!(owner, phase, deadline)
+          1 -> await_admission_phase!(owner, phase, ready?, deadline)
         end
     end
   end
@@ -865,15 +869,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.SlowOwnerA
 
   defp with_client(compaction, conn, websocket), do: %{compaction | client: Scenario.settle!(%{compaction.client | conn: conn, websocket: websocket})}
 
-  # The owner's compaction admission phase (the socket's own upstream session's
+  # The owner's compaction admission (the socket's own upstream session's
   # with owner forwarding off), read on its node.
-  defp admission_phase(owner) do
+  defp owner_admission(owner) do
     state = if node(owner) == node(), do: :sys.get_state(owner), else: :erpc.call(node(owner), :sys, :get_state, [owner])
-
-    case Map.get(state, :native_compaction_admission) do
-      %{phase: phase} -> phase
-      nil -> nil
-    end
+    Map.get(state, :native_compaction_admission)
   end
 
   defp send_frame!(compaction, frame) do
