@@ -199,6 +199,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
   end
 
   describe "normalize_response/2" do
+    test "reads only output_text parts of messages in their original order" do
+      output = [
+        %{"type" => "provider_extension", "content" => [%{"type" => "output_text", "text" => "synthetic item marker"}]},
+        %{
+          "type" => "message",
+          "content" => [
+            %{"type" => "output_text", "text" => "first"},
+            %{"type" => "provider_extension", "text" => "synthetic part marker"},
+            %{"type" => "output_text", "text" => " second"}
+          ]
+        }
+      ]
+
+      response = ChatCompletions.normalize_response(%{"status" => "completed", "output" => output}, %{"model" => "sample-model"})
+      assert [%{"message" => %{"content" => "first second"}}] = response["choices"]
+    end
+
     test "preserves a literal provider service tier and omits absent or non-string tiers" do
       payload = %{"model" => "gpt-example"}
 

@@ -625,20 +625,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp model(decoded, _fallback), do: decoded_string(decoded, "model") || "unknown"
 
   defp output_text(decoded) do
-    decoded
-    |> output_items()
-    |> Enum.flat_map(fn
-      %{"content" => content} -> List.wrap(content)
-      %{"text" => text} when is_binary(text) -> [%{"text" => text}]
-      _item -> []
-    end)
-    |> Enum.map(fn
-      %{"text" => text} when is_binary(text) -> text
-      %{"type" => "output_text", "text" => text} when is_binary(text) -> text
-      _content -> ""
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("")
+    parts =
+      for %{"type" => "message", "content" => content} <- output_items(decoded),
+          is_list(content),
+          %{"type" => "output_text", "text" => text} <- content,
+          is_binary(text),
+          do: text
+
+    IO.iodata_to_binary(parts)
   end
 
   defp output_tool_calls(decoded) do

@@ -781,6 +781,55 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     refute Map.has_key?(translated_tool, "function")
   end
 
+  for upstream_format <- [:json, :sse] do
+    test "buffered Chat replays only visible assistant text and tool calls from #{upstream_format}", %{conn: conn} do
+      terminal = %{
+        "id" => "resp_tool_reasoning",
+        "status" => "completed",
+        "output" => [
+          %{"type" => "reasoning", "content" => [%{"type" => "reasoning_text", "text" => "synthetic private marker"}]},
+          %{"type" => "message", "role" => "assistant", "content" => [%{"type" => "output_text", "text" => "checking"}]},
+          %{"type" => "function_call", "call_id" => "call_lookup", "name" => "lookup", "arguments" => "{}"}
+        ]
+      }
+
+      first_response =
+        case unquote(upstream_format) do
+          :json -> FakeUpstream.json_response(terminal)
+          :sse -> FakeUpstream.sse_stream([{"response.completed", %{"type" => "response.completed", "response" => terminal}}])
+        end
+
+      final_response = FakeUpstream.json_response(%{"id" => "resp_follow_up", "status" => "completed", "output" => []})
+      upstream = start_upstream(FakeUpstream.strict_sequence([first_response, final_response]))
+      setup = gateway_setup(upstream)
+      payload = %{"model" => setup.model.exposed_model_id, "messages" => [%{"role" => "user", "content" => "lookup"}]}
+      path = "/v1/chat/completions"
+      first = conn |> auth(setup) |> post(path, payload)
+
+      assert [%{"finish_reason" => "tool_calls", "message" => message}] = json_response(first, 200)["choices"]
+      assert message["content"] == "checking"
+      assert [%{"id" => "call_lookup", "function" => %{"name" => "lookup", "arguments" => "{}"}}] = message["tool_calls"]
+      aliases = ~w(reasoning reasoning_text reasoning_content)
+      assert Map.take(message, aliases) == %{}
+      assistant = Map.merge(message, Map.new(aliases, &{&1, "synthetic vendor marker"}))
+      tool = %{"role" => "tool", "tool_call_id" => "call_lookup", "content" => "found"}
+      replay = Map.update!(payload, "messages", &(&1 ++ [assistant, tool]))
+      assert %{"id" => "resp_follow_up"} = conn |> auth(setup) |> post(path, replay) |> json_response(200)
+
+      assert [_original, follow_up] = FakeUpstream.requests(upstream)
+
+      assert [
+               %{"role" => "user"},
+               %{"role" => "assistant", "content" => [%{"type" => "output_text", "text" => "checking"}]},
+               %{"type" => "function_call", "call_id" => "call_lookup", "name" => "lookup", "arguments" => "{}"},
+               %{"type" => "function_call_output", "call_id" => "call_lookup", "output" => [%{"type" => "input_text", "text" => "found"}]}
+             ] = follow_up.json["input"]
+
+      refute CodexPooler.JSON.encode!(follow_up.json) =~ "synthetic vendor marker"
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
   test "POST /v1/chat/completions accepts tool replay with empty assistant content", %{conn: conn} do
     upstream =
       start_upstream(
