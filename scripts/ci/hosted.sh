@@ -138,10 +138,15 @@ if [[ $lane == partition-* ]]; then
   phase_name=partition
   network="$prefix-network"
   docker_cli network create --label "$label" "$network" >/dev/null
+  # Keep the default Compose major exercised alongside the opt-in major.
+  case "$lane" in
+    partition-1|partition-2) postgres_image=postgres:18 ;;
+    partition-3|partition-4) postgres_image=postgres:19 ;;
+  esac
   docker_cli run -d --name "$prefix-pg" --label "$label" --network "$network" --network-alias pg \
     --tmpfs /var/lib/postgresql:rw,size=4g --shm-size=256m \
     -e POSTGRES_DB=codex_pooler_test -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
-    postgres:18 -c max_connections=400 >/dev/null
+    "$postgres_image" -c max_connections=400 >/dev/null
   ready=0
   for _ in $(seq 1 120); do
     if docker_cli exec "$prefix-pg" pg_isready -h 127.0.0.1 -U postgres -d codex_pooler_test >/dev/null 2>&1; then ready=1; break; fi

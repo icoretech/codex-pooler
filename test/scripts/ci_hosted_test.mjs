@@ -191,7 +191,12 @@ test("tools outputs use executable runtime identity rather than attestation meta
 	assert.notEqual(identities[0], identities[2]);
 });
 
-for (const lane of ["static", "dialyzer", "partition-3"]) {
+for (const [lane, postgresImage] of [
+	["static", null],
+	["dialyzer", null],
+	["partition-1", "postgres:18"],
+	["partition-3", "postgres:19"],
+]) {
 	test(`hosted ${lane} owns its cache mounts and removes only transient resources`, (t) => {
 		// Given a prepared tools image and fresh compatible cache directories.
 		const f = fixture(t);
@@ -214,14 +219,15 @@ for (const lane of ["static", "dialyzer", "partition-3"]) {
 		assert.deepEqual(create.slice(-3), [
 			"bash",
 			"scripts/ci/phases.sh",
-			lane === "partition-3" ? "partition" : lane,
+			postgresImage ? "partition" : lane,
 		]);
 		const pg = f
 			.calls()
 			.filter((args) => args[0] === "run" && args.includes("-d"));
-		assert.equal(pg.length, lane === "partition-3" ? 1 : 0);
-		if (lane === "partition-3") {
-			assert.ok(create.includes("MIX_TEST_PARTITION=3"));
+		assert.equal(pg.length, postgresImage ? 1 : 0);
+		if (postgresImage) {
+			assert.ok(pg[0].includes(postgresImage));
+			assert.ok(create.includes(`MIX_TEST_PARTITION=${lane.split("-")[1]}`));
 			assert.ok(
 				create.some((value) =>
 					/^CODEX_POOLER_TEST_RUN_NAMESPACE=[0-9a-f]{16}$/.test(value),

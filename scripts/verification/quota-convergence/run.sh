@@ -37,7 +37,7 @@ database_name="quota_proof"
 database_user="quota_proof"
 database_credential="quota-proof-local-only"
 
-# postgres:18 declares its data directory a volume: without -v every run left
+# The Postgres image declares its data directory a volume: without -v every run left
 # an anonymous volume of a few hundred megabytes on the host.
 cleanup() {
   docker rm -f -v "$proof" "$database" >/dev/null 2>&1 || true
@@ -51,7 +51,7 @@ docker run -d --name "$database" --network "$network" \
   -e POSTGRES_DB="$database_name" \
   -e POSTGRES_USER="$database_user" \
   -e POSTGRES_PASSWORD="$database_credential" \
-  postgres:18 >/dev/null
+  postgres:19 >/dev/null
 
 for _attempt in $(seq 1 60); do
   if docker exec "$database" pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1; then
