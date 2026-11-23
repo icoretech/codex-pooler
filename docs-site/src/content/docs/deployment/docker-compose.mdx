@@ -41,6 +41,8 @@ tagged stable release before `docker compose pull`. Pinning a version tag makes 
 reproducible. If port `4000` is already in use, set `CODEX_POOLER_HTTP_PORT`
 before generation or edit it in `.env` before starting the stack.
 
+The bundled database defaults to PostgreSQL 18. For a new installation with an empty volume, set `CODEX_POOLER_POSTGRES_IMAGE=postgres:19` in `.env` to use PostgreSQL 19. Both majors mount their data at `/var/lib/postgresql`. For a volume already initialized by PostgreSQL 18, follow the database upgrade procedure below before selecting 19.
+
 ## Start Codex Pooler
 
 Pull and start the stack:
@@ -118,6 +120,47 @@ docker compose logs -f app
 ```
 
 ## Upgrade and run migrations
+
+### Move an existing database from PostgreSQL 18 to 19
+
+Updating Pooler keeps the default PostgreSQL major at 18. The PostgreSQL 19 image refuses to start on an 18 volume. Schedule downtime for a major database upgrade and keep the previous volume and private `.env` available until the new database has been verified.
+
+For the stock Compose installation, the configured `POSTGRES_USER` owns the application database. Stop application writers, then dump the database while PostgreSQL 18 is still running. Back up the same installation's `.env` securely alongside the dump so the application can decrypt restored records.
+
+```bash
+umask 077
+backup_dir=$(mktemp -d "$HOME/codex-pooler-postgres-upgrade.XXXXXX") &&
+  cp .env "$backup_dir/" &&
+  docker compose stop app migrate &&
+  docker compose exec -T db sh -ec 'pg_dumpall --globals-only --username="$POSTGRES_USER"' > "$backup_dir/globals.sql" &&
+  docker compose exec -T db sh -ec 'pg_dump --format=custom --create --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' > "$backup_dir/pooler.dump" &&
+  docker compose exec -T db pg_restore --list < "$backup_dir/pooler.dump" > /dev/null &&
+  docker compose stop db
+```
+
+If the cluster also holds other databases, custom roles, tablespaces, or extensions, include those in the migration. The private `globals.sql` holds role definitions, password hashes, memberships and tablespaces. On the new cluster, the image creates the configured bootstrap role from `.env`. Review the globals backup and restore additional roles, grants and tablespaces before restoring the application database. Preserve custom server configuration separately and install any required extension packages. See the [PostgreSQL major upgrade guide](https://www.postgresql.org/docs/19/upgrading.html).
+
+Set `CODEX_POOLER_POSTGRES_IMAGE=postgres:19` in `.env` and add the following to `docker-compose.override.yml`, merging with any existing override. Choose a new volume key if this project already has a volume called `pooler-postgres-19`.
+
+```yaml
+services:
+  db:
+    volumes:
+      - pooler-postgres-19:/var/lib/postgresql
+volumes:
+  pooler-postgres-19:
+```
+
+Initialize the new volume with only the standard databases, then restore the application database from the archive. The temporary `POSTGRES_DB=postgres` lets `pg_restore --create` create the application database with its original owner and database settings. These commands assume the stock application database has its own name.
+
+```bash
+POSTGRES_DB=postgres docker compose up -d --wait db &&
+  docker compose exec -T db sh -ec 'pg_restore --exit-on-error --create --username="$POSTGRES_USER" --dbname=postgres' < "$backup_dir/pooler.dump" &&
+  docker compose up -d --wait db &&
+  docker compose exec -T db sh -ec 'vacuumdb --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --analyze-in-stages'
+```
+
+Verify the server version, restored data and access grants before `docker compose up -d` starts migrations and the app. Check `/readyz` and an existing operator login. To roll back before accepting writes on 19, stop the new stack, restore the previous image and database volume configuration and start the old stack. After writes resume, moving back requires reconciling those writes. Keep both volumes during verification and rollback.
 
 ### Check TOTP before changing the image
 

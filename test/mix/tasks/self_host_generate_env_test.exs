@@ -5,6 +5,20 @@ defmodule CodexPooler.SelfHostGenerateEnvTest do
 
   @moduletag :tmp_dir
 
+  test "the generated environment preserves the database major unless explicitly selected", %{tmp_dir: tmp_dir} do
+    for {choice, expected} <- [{nil, "postgres:18"}, {"postgres:19", "postgres:19"}] do
+      target = Path.join(tmp_dir, "pg-" <> String.replace(expected, ":", "-"))
+
+      assert {_output, 0} =
+               System.cmd("sh", ["scripts/self-host/generate-env.sh", target],
+                 env: [{"POSTGRES_IMAGE", "postgres:latest"}, {"CODEX_POOLER_POSTGRES_IMAGE", choice}],
+                 stderr_to_stdout: true
+               )
+
+      assert env_values(target)["CODEX_POOLER_POSTGRES_IMAGE"] == expected
+    end
+  end
+
   test "explicit empty lowercase proxy variables disable uppercase fallbacks", %{tmp_dir: tmp_dir} do
     target = Path.join(tmp_dir, ".env")
 

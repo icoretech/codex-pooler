@@ -90,6 +90,7 @@ no_proxy=${no_proxy_value}
 PHX_HOST=${phx_host}
 OBAN_MODE=${OBAN_MODE:-all}
 
+CODEX_POOLER_POSTGRES_IMAGE=${CODEX_POOLER_POSTGRES_IMAGE:-postgres:18}
 POSTGRES_DB=${POSTGRES_DB:-codex_pooler_prod}
 POSTGRES_USER=${POSTGRES_USER:-postgres}
 POSTGRES_PASSWORD=${postgres_password}

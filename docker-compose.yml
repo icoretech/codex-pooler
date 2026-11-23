@@ -2,7 +2,7 @@ name: codex-pooler
 
 services:
   db:
-    image: postgres:18
+    image: ${CODEX_POOLER_POSTGRES_IMAGE:-postgres:18}
     init: true
     shm_size: "256mb"
     restart: unless-stopped

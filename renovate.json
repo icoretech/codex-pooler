@@ -47,6 +47,14 @@
 			"dependencyDashboardApproval": true
 		},
 		{
+			"description": "Keep existing Compose data volumes on PostgreSQL 18",
+			"matchManagers": ["docker-compose"],
+			"matchFileNames": ["docker-compose.yml", "docker-compose.dev.yml"],
+			"matchPackageNames": ["postgres"],
+			"matchUpdateTypes": ["major"],
+			"enabled": false
+		},
+		{
 			"description": "Automerge stable Codex client updates immediately",
 			"matchPackageNames": ["openai/codex", "ghcr.io/icoretech/codex-docker"],
 			"automerge": true,
