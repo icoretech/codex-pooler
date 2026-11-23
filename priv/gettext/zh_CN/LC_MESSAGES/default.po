@@ -1356,7 +1356,7 @@ msgstr "%{status}（记录为%{recorded}）"
 msgid "%{status} · %{reason}"
 msgstr "%{status} · %{reason}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:442
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:444
 #, elixir-autogen, elixir-format
 msgid "%{status}, rechecking every %{seconds}s"
 msgstr "%{status}，每 %{seconds}s 重新检查"
@@ -2234,7 +2234,7 @@ msgstr "按 Pool、上游身份和发送模型分组的受影响尝试"
 msgid "Affected attempts per %{interval} · UTC. Measures can overlap. The comparison uses the model name sent upstream and the names the provider reported."
 msgstr "每 %{interval} 受影响的尝试 · UTC。指标可能重叠。比较基于发送到上游的模型名称和服务商报告的名称。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:201
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:203
 #, elixir-autogen, elixir-format
 msgid "After OpenAI redirects, copy the full URL from the browser address bar and paste it here."
 msgstr "OpenAI 重定向后，复制浏览器地址栏中的完整 URL 并粘贴到这里。"
@@ -3259,7 +3259,7 @@ msgstr "正在根据所选 Pool 和时间窗口构建仪表板。"
 msgid "Bulkheads"
 msgstr "隔离舱"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:254
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:256
 #, elixir-autogen, elixir-format
 msgid "CALLBACK URL"
 msgstr "回调 URL"
@@ -3318,7 +3318,7 @@ msgstr "缓存输入费用 %{cost} 已包含在总费用中"
 msgid "Cached input tokens divided by all input tokens"
 msgstr "缓存输入 Token 除以全部输入 Token"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:185
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:187
 #, elixir-autogen, elixir-format
 msgid "Callback URL"
 msgstr "回调 URL"
@@ -3917,7 +3917,7 @@ msgstr "压缩结果传输方式"
 msgid "Compatibility"
 msgstr "兼容性"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:257
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:259
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1120
 #, elixir-autogen, elixir-format
 msgid "Complete link"
@@ -4125,7 +4125,7 @@ msgstr "冷却时间（分钟）"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:727
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:92
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:123
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1164
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1165
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:250
 #, elixir-autogen, elixir-format
 msgid "Copied"
@@ -4133,9 +4133,9 @@ msgstr "已复制"
 
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:113
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:118
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:275
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1153
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1171
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:277
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1154
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1173
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr "复制"
@@ -4155,7 +4155,7 @@ msgstr "复制 %{name} 的 ID"
 msgid "Copy MCP token"
 msgstr "复制 MCP 令牌"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:165
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:167
 #, elixir-autogen, elixir-format
 msgid "Copy OpenAI authorization URL"
 msgstr "复制 OpenAI 授权 URL"
@@ -4166,7 +4166,7 @@ msgstr "复制 OpenAI 授权 URL"
 msgid "Copy Pool ID"
 msgstr "复制 Pool ID"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:338
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:340
 #, elixir-autogen, elixir-format
 msgid "Copy code"
 msgstr "复制代码"
@@ -4184,14 +4184,14 @@ msgid "Copy config"
 msgstr "复制配置"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:97
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:339
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:341
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:160
 #, elixir-autogen, elixir-format
 msgid "Copy device code"
 msgstr "复制设备代码"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:119
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:388
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:390
 #, elixir-autogen, elixir-format
 msgid "Copy device verification URL"
 msgstr "复制设备验证 URL"
@@ -4211,8 +4211,8 @@ msgstr "复制密钥"
 msgid "Copy key prefix"
 msgstr "复制密钥前缀"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:164
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:387
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:166
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:389
 #, elixir-autogen, elixir-format
 msgid "Copy link"
 msgstr "复制链接"
@@ -4789,7 +4789,7 @@ msgstr "等待设备授权"
 msgid "Device authorization started"
 msgstr "设备授权已开始"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:317
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:319
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:147
 #, elixir-autogen, elixir-format
 msgid "Device code"
@@ -4800,7 +4800,7 @@ msgstr "设备代码"
 msgid "Device code issued"
 msgstr "已生成设备代码"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:370
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:372
 #, elixir-autogen, elixir-format
 msgid "Device verification URL"
 msgstr "设备验证 URL"
@@ -6467,8 +6467,8 @@ msgstr "GitHub 上的议题 #%{number}"
 msgid "It does not guarantee a cache hit."
 msgstr "这并不保证缓存命中。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:326
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:328
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:330
 #, elixir-autogen, elixir-format
 msgid "It expires in %{duration}."
 msgstr "将在 %{duration} 后过期。"
@@ -8596,8 +8596,8 @@ msgstr "只有实例所有者可以管理运营者。"
 msgid "Only instance owners can manage system settings"
 msgstr "只有实例所有者可以管理系统设置"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:159
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:382
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:160
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:384
 #, elixir-autogen, elixir-format
 msgid "Open"
 msgstr "打开"
@@ -8670,7 +8670,7 @@ msgstr "打开已保存的重置储备：%{label}"
 msgid "Open system settings"
 msgstr "打开系统设置"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:320
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:322
 #, elixir-autogen, elixir-format
 msgid "Open the verification page below and enter this code to approve the account."
 msgstr "打开下方的验证页面并输入此代码以批准账号。"
@@ -9142,7 +9142,7 @@ msgstr "密码已更新"
 msgid "Passwords do not match."
 msgstr "密码不匹配。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:282
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:284
 #, elixir-autogen, elixir-format
 msgid "Paste"
 msgstr "粘贴"
@@ -11586,7 +11586,7 @@ msgstr "选择一个事件时间以查看详情。"
 msgid "Select the API keys assigned to this Pool."
 msgstr "选择分配给此 Pool 的 API 密钥。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:238
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:240
 #, elixir-autogen, elixir-format
 msgid "Select the callback URL in the browser address bar, copy it, then paste it into the callback URL field and press Complete link."
 msgstr "在浏览器地址栏中选择并复制回调 URL，然后将其粘贴到回调 URL 字段并点击完成关联。"
@@ -12651,7 +12651,7 @@ msgstr "此 URL 仅在这里显示，关闭后将无法再次查看。"
 msgid "This page already shows the refreshed authorization."
 msgstr "此页面已显示刷新的授权。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:249
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:251
 #, elixir-autogen, elixir-format
 msgid "This page will not load — that is expected."
 msgstr "此页面无法加载 — 这是预期行为。"
@@ -13901,7 +13901,7 @@ msgstr "为独立请求变换起始上游。"
 msgid "Vary the starting upstream"
 msgstr "变换起始上游"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:362
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:364
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:171
 #, elixir-autogen, elixir-format
 msgid "Verification page"
@@ -14304,7 +14304,7 @@ msgstr "重新激活前至少需要保留一项分配"
 msgid "attempts"
 msgstr "次尝试"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1274
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
 #, elixir-autogen, elixir-format
 msgid "attention needed"
 msgstr "需要关注"
@@ -14559,9 +14559,9 @@ msgid "display_name"
 msgstr "显示名称"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:97
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:327
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:412
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:428
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:329
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:414
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:430
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/usage_poll_pause.ex:28
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:992
@@ -14622,7 +14622,7 @@ msgstr "强制服务层级无效"
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:150
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:151
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
 #, elixir-autogen, elixir-format
 msgid "error"
 msgstr "错误"
@@ -15129,7 +15129,7 @@ msgstr "互联网与 Pooler 之间的代理数量，包括直接连接的代理�
 msgid "off"
 msgstr "关"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1273
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
 #, elixir-autogen, elixir-format
 msgid "ok"
 msgstr "正常"
@@ -15341,7 +15341,7 @@ msgstr "核对于 %{time}"
 msgid "recovering"
 msgstr "正在恢复"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1278
 #, elixir-autogen, elixir-format
 msgid "redacted"
 msgstr "已脱敏"

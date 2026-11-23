@@ -1428,7 +1428,7 @@ msgstr ""
 msgid "%{status} · %{reason}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:442
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:444
 #, elixir-autogen, elixir-format
 msgid "%{status}, rechecking every %{seconds}s"
 msgstr ""
@@ -2324,7 +2324,7 @@ msgstr ""
 msgid "Affected attempts per %{interval} · UTC. Measures can overlap. The comparison uses the model name sent upstream and the names the provider reported."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:201
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:203
 #, elixir-autogen, elixir-format
 msgid "After OpenAI redirects, copy the full URL from the browser address bar and paste it here."
 msgstr ""
@@ -3353,7 +3353,7 @@ msgstr ""
 msgid "Bulkheads"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:254
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:256
 #, elixir-autogen, elixir-format
 msgid "CALLBACK URL"
 msgstr ""
@@ -3412,7 +3412,7 @@ msgstr ""
 msgid "Cached input tokens divided by all input tokens"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:185
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:187
 #, elixir-autogen, elixir-format
 msgid "Callback URL"
 msgstr ""
@@ -4011,7 +4011,7 @@ msgstr ""
 msgid "Compatibility"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:257
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:259
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1120
 #, elixir-autogen, elixir-format
 msgid "Complete link"
@@ -4219,7 +4219,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:727
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:92
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:123
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1164
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1165
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:250
 #, elixir-autogen, elixir-format
 msgid "Copied"
@@ -4227,9 +4227,9 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:113
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:118
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:275
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1153
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1171
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:277
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1154
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1173
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr ""
@@ -4249,7 +4249,7 @@ msgstr ""
 msgid "Copy MCP token"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:165
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:167
 #, elixir-autogen, elixir-format
 msgid "Copy OpenAI authorization URL"
 msgstr ""
@@ -4260,7 +4260,7 @@ msgstr ""
 msgid "Copy Pool ID"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:338
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:340
 #, elixir-autogen, elixir-format
 msgid "Copy code"
 msgstr ""
@@ -4278,14 +4278,14 @@ msgid "Copy config"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:97
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:339
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:341
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:160
 #, elixir-autogen, elixir-format
 msgid "Copy device code"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:119
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:388
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:390
 #, elixir-autogen, elixir-format
 msgid "Copy device verification URL"
 msgstr ""
@@ -4305,8 +4305,8 @@ msgstr ""
 msgid "Copy key prefix"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:164
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:387
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:166
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:389
 #, elixir-autogen, elixir-format
 msgid "Copy link"
 msgstr ""
@@ -4884,7 +4884,7 @@ msgstr ""
 msgid "Device authorization started"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:317
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:319
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:147
 #, elixir-autogen, elixir-format
 msgid "Device code"
@@ -4895,7 +4895,7 @@ msgstr ""
 msgid "Device code issued"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:370
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:372
 #, elixir-autogen, elixir-format
 msgid "Device verification URL"
 msgstr ""
@@ -6567,8 +6567,8 @@ msgstr ""
 msgid "It does not guarantee a cache hit."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:326
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:328
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:330
 #, elixir-autogen, elixir-format
 msgid "It expires in %{duration}."
 msgstr ""
@@ -8702,8 +8702,8 @@ msgstr ""
 msgid "Only instance owners can manage system settings"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:159
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:382
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:160
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:384
 #, elixir-autogen, elixir-format
 msgid "Open"
 msgstr ""
@@ -8776,7 +8776,7 @@ msgstr ""
 msgid "Open system settings"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:320
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:322
 #, elixir-autogen, elixir-format
 msgid "Open the verification page below and enter this code to approve the account."
 msgstr ""
@@ -9249,7 +9249,7 @@ msgstr ""
 msgid "Passwords do not match."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:282
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:284
 #, elixir-autogen, elixir-format
 msgid "Paste"
 msgstr ""
@@ -11699,7 +11699,7 @@ msgstr ""
 msgid "Select the API keys assigned to this Pool."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:238
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:240
 #, elixir-autogen, elixir-format
 msgid "Select the callback URL in the browser address bar, copy it, then paste it into the callback URL field and press Complete link."
 msgstr ""
@@ -12766,7 +12766,7 @@ msgstr ""
 msgid "This page already shows the refreshed authorization."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:249
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:251
 #, elixir-autogen, elixir-format
 msgid "This page will not load — that is expected."
 msgstr ""
@@ -14016,7 +14016,7 @@ msgstr ""
 msgid "Vary the starting upstream"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:362
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:364
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:171
 #, elixir-autogen, elixir-format
 msgid "Verification page"
@@ -14420,7 +14420,7 @@ msgstr ""
 msgid "attempts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1274
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
 #, elixir-autogen, elixir-format
 msgid "attention needed"
 msgstr ""
@@ -14675,9 +14675,9 @@ msgid "display_name"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex:97
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:327
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:412
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:428
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:329
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:414
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:430
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/usage_poll_pause.ex:28
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:992
@@ -14738,7 +14738,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:150
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:151
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
 #, elixir-autogen, elixir-format
 msgid "error"
 msgstr ""
@@ -15249,7 +15249,7 @@ msgstr ""
 msgid "off"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1273
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
 #, elixir-autogen, elixir-format
 msgid "ok"
 msgstr ""
@@ -15461,7 +15461,7 @@ msgstr ""
 msgid "recovering"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1278
 #, elixir-autogen, elixir-format
 msgid "redacted"
 msgstr ""
