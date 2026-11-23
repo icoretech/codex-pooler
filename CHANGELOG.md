@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.16.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.6...codex-pooler-v0.16.7) (2026-11-23)
+
+
+### Features
+
+* **compose:** support PostgreSQL 19 as an opt-in database image ([ebba13c](https://github.com/icoretech/codex-pooler/commit/ebba13c8ee6251ff54647392956fe52029397bdb))
+
+
+### Bug Fixes
+
+* **admin:** focus the OAuth callback field after opening or copying the link ([f10e420](https://github.com/icoretech/codex-pooler/commit/f10e420d2cf623daca0f82b241db05b6eb15e9e0))
+
+
+### Dependencies
+
+* refresh Rollup, Undici and other documentation build dependencies ([acfd523](https://github.com/icoretech/codex-pooler/commit/acfd5238c38949cf7c704dd89b034f8cc4b0ecfd))
+* update Argon2 to 5.0.0 and Phoenix LiveView to 1.2.15 ([4b6a63d](https://github.com/icoretech/codex-pooler/commit/4b6a63df9864f67f56d31377f94920112da9a2a8))
+* update dependency daisyui to v5.8.2 ([#632](https://github.com/icoretech/codex-pooler/issues/632)) ([cb3d9d7](https://github.com/icoretech/codex-pooler/commit/cb3d9d77cb798bee0e9d87459d032e82843a55b1))
+* update dependency postgrex to v0.23.0 ([#658](https://github.com/icoretech/codex-pooler/issues/658)) ([dde15ec](https://github.com/icoretech/codex-pooler/commit/dde15ecab95b9fa2bacbcd41eb0efab7ed4c561c))
+* update helm release codex-pooler to v0.17.4 ([#653](https://github.com/icoretech/codex-pooler/issues/653)) ([07763d9](https://github.com/icoretech/codex-pooler/commit/07763d9769c7eabf0cffef4d86efb43ccc312428))
+* update helm release codex-pooler to v0.17.5 ([#656](https://github.com/icoretech/codex-pooler/issues/656)) ([d79264f](https://github.com/icoretech/codex-pooler/commit/d79264f1bc771826d553cb5350f2225fe871d8cf))
+* update the AI SDK OpenAI contract probe to AI SDK 7.0.181 ([7d806d2](https://github.com/icoretech/codex-pooler/commit/7d806d2545b9680599e6bcd233e368e3e7d60d05))
+
+
+### Tests
+
+* verify native trace ordering by execution timestamp ([a674da3](https://github.com/icoretech/codex-pooler/commit/a674da3060560626cc0e56206f7eeaebbb078cb5))
+
+
+### Miscellaneous Chores
+
+* **i18n:** refresh OAuth dialog and clipboard button source references ([2273507](https://github.com/icoretech/codex-pooler/commit/22735071ad4790e8c5a3550f66ef8a4b759e5008))
+
 ## [0.16.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.5...codex-pooler-v0.16.6) (2026-11-21)
 
 
