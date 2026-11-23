@@ -1409,7 +1409,13 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
 
             :ok = TraceEvent.emit(:owner_terminal, %{phase: :compact, outcome: :ok})
             :ok = TraceEvent.emit(:finalization_finished, %{phase: :compact, outcome: :ok})
-            send(caller, :timeline_done)
+
+            # flush/0 only fences live tracees; finish delivery before this worker exits.
+            delivered = :erlang.trace_delivered(self())
+
+            receive do
+              {:trace_delivered, _pid, ^delivered} -> send(caller, :timeline_done)
+            end
         end
       end)
 
@@ -1429,7 +1435,6 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     events = Enum.map(entries, & &1["event"])
 
     assert ordered?(events, [
-             "beam_call",
              "capability_reserved",
              "accounting_started",
              "capability_consumed",
@@ -1446,10 +1451,17 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
              &(is_integer(&1["systemTimeUs"]) and is_integer(&1["monotonicTimeUs"]))
            )
 
-    assert Enum.any?(
-             entries,
-             &(&1["event"] == "beam_return" and is_integer(get_in(&1, ["fields", "duration_us"])))
-           )
+    # The VM trace and the worker's telemetry reach the collector independently.
+    # Its file preserves arrival order, while the BEAM timestamps record execution.
+    reserve_mfa = "#{inspect(NativeAdmission)}.reserve/5"
+
+    assert [%{"event" => "beam_call"} = call, %{"event" => "beam_return"} = returned] =
+             Enum.filter(entries, &(get_in(&1, ["fields", "mfa"]) == reserve_mfa))
+
+    reserved = Enum.find(entries, &(&1["event"] == "capability_reserved"))
+    assert call["monotonicTimeUs"] <= returned["monotonicTimeUs"]
+    assert returned["monotonicTimeUs"] <= reserved["monotonicTimeUs"]
+    assert returned["fields"]["duration_us"] == returned["monotonicTimeUs"] - call["monotonicTimeUs"]
   end
 
   test "recursive redaction preserves operational state and removes credential values" do
