@@ -1147,6 +1147,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :label, :string, default: nil
   attr :class, :any, default: "btn btn-square size-10 shrink-0"
   attr :icon_class, :any, default: "size-4"
+  attr :rest, :global
 
   @spec clipboard_button(map()) :: Phoenix.LiveView.Rendered.t()
   def clipboard_button(assigns) do
@@ -1164,6 +1165,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       data-copied-label={gettext("Copied")}
       aria-label={@aria_label}
       title={@aria_label}
+      {@rest}
     >
       <.icon name="hero-clipboard-document" class={["copy-icon", @icon_class]} />
       <span

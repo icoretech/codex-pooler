@@ -1071,6 +1071,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#oauth-relink-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-relink-callback-url")
     assert has_element?(view, "#oauth-relink-callback-step", "Callback URL")
+
+    for action <- ~w(authorization-open authorization-url-copy) do
+      [command] = view |> element("#oauth-relink-#{action}") |> render() |> LazyHTML.from_fragment() |> LazyHTML.attribute("phx-click")
+      assert [["focus", %{"to" => "#oauth-relink-callback-url"}]] = CodexPooler.JSON.decode!(command)
+    end
+
     assert has_element?(view, "#oauth-relink-submit-callback")
 
     authorization_url = oauth_relink_authorization_url_from_view(view)

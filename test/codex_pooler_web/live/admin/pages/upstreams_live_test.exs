@@ -1200,6 +1200,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-link-callback-url")
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
+
+    for action <- ~w(authorization-open authorization-url-copy) do
+      [command] = view |> element("#oauth-link-#{action}") |> render() |> LazyHTML.from_fragment() |> LazyHTML.attribute("phx-click")
+      assert [["focus", %{"to" => "#oauth-link-callback-url"}]] = CodexPooler.JSON.decode!(command)
+    end
+
     # The copy-then-paste figure belongs to this route only: it draws the move
     # the operator has to make in a browser the pooler cannot reach.
     assert has_element?(view, "#oauth-link-callback-demo[data-role='oauth-callback-paste-demo']")

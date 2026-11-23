@@ -153,6 +153,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
               href={@authorization_url}
               target="_blank"
               rel="noopener noreferrer"
+              phx-click={JS.focus(to: "##{@callback_url_id}")}
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
             >
               <.icon name="hero-arrow-top-right-on-square" class="size-3.5 shrink-0" />
@@ -161,6 +162,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             <AdminComponents.clipboard_button
               id={@authorization_copy_id}
               copy_text={@authorization_url}
+              phx-click={JS.focus(to: "##{@callback_url_id}")}
               label={gettext("Copy link")}
               aria_label={gettext("Copy OpenAI authorization URL")}
               class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
