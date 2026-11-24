@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.7...codex-pooler-v0.17.0) (2026-11-24)
+
+
+### Bug Fixes
+
+* **gateway:** carry retry delays into native capacity failure events ([9e2272f](https://github.com/icoretech/codex-pooler/commit/9e2272fd32a65fab80e93958e134152a6fe743a8))
+* **gateway:** preserve terminal API-key spend limits for Codex ([a071a8f](https://github.com/icoretech/codex-pooler/commit/a071a8f35299a348ef071c694ad6cdf28febdbcf))
+
+
+### Dependencies
+
+* qualify the Codex 0.172.0 catalog decoder and client identity ([61cdfa6](https://github.com/icoretech/codex-pooler/commit/61cdfa6527dec44c7172bf2637844aab6471fc83))
+
+
+### Miscellaneous Chores
+
+* target Codex Pooler 0.17.0 for release ([2c525a3](https://github.com/icoretech/codex-pooler/commit/2c525a34c7b91ff6c06c809457da38f3a7f5c6bd))
+
 ## [0.16.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.6...codex-pooler-v0.16.7) (2026-11-23)
 
 
