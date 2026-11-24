@@ -46,6 +46,21 @@ defmodule CodexPooler.Gateway.Metadata.CodexModelDecodeContractTest do
   end
 
   describe "violations/1" do
+    test "the checked catalog preserves provider access-program availability across decoder versions" do
+      slug = "sample-availability-model"
+      source = CodexCatalogShapes.synced_source(slug)
+      programs = %{"cyber" => []}
+
+      # Older clients ignore the nested field. The common contract leaves its
+      # value intact even when only a newer decoder would reject its type.
+      for availability <- [%{}, %{"daybreak_availability" => "enrollment_required"}, %{"daybreak_availability" => "future_status"}, %{"daybreak_availability" => nil}] do
+        metadata = Map.merge(programs, availability)
+        entry = Map.put(source, "available_access_programs", metadata)
+        assert {:ok, catalog} = build([{model(slug), entry}], :decode_checked)
+        assert [%{"available_access_programs" => ^metadata}] = catalog.body["models"]
+      end
+    end
+
     test "the checked catalog preserves the multi-agent code mode flag across decoder versions" do
       slug = "sample-code-mode-model"
       source = CodexCatalogShapes.synced_source(slug)
