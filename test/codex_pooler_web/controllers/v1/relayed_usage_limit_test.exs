@@ -65,6 +65,7 @@ defmodule CodexPoolerWeb.V1.RelayedUsageLimitTest do
 
   for {label, mode_fun} <- [
         {"a plain provider throttle", :generic_throttle},
+        {"an API-key-scoped spend limit", :api_key_spend_limit},
         {"a usage limit whose reset is already past", :past_reset},
         {"a usage limit that names no reset", :resetless}
       ] do
@@ -78,6 +79,8 @@ defmodule CodexPoolerWeb.V1.RelayedUsageLimitTest do
       assert conn.status == 429
       assert %{"error" => error} = CodexPooler.JSON.decode!(conn.resp_body)
       assert %{"message" => "upstream request failed", "type" => "rate_limit_error"} = error
+      refute conn.resp_body =~ "api_key_spend_limit_exceeded"
+      refute conn.resp_body =~ @provider_message
       refute Map.has_key?(error, "resets_at")
       assert get_resp_header(conn, "retry-after") == []
       assert get_resp_header(conn, "x-should-retry") == []
@@ -115,6 +118,7 @@ defmodule CodexPoolerWeb.V1.RelayedUsageLimitTest do
     assert fixture.relayed_provider_usage_limit == %{when: :last_candidate_provider_429, reset: ["resets_at", "resets_in_seconds"], answer: :terminal, without_reset: %{v1_type: "rate_limit_error"}, recorded: %{status: 429, code: "upstream_rate_limited"}}
   end
 
+  defp upstream_mode(:api_key_spend_limit), do: {:json_headers, 429, %{"error" => %{"type" => "insufficient_quota", "code" => "api_key_spend_limit_exceeded", "message" => @provider_message}}, []}
   defp upstream_mode(:generic_throttle), do: FakeUpstream.generic_429()
   defp upstream_mode(:past_reset), do: provider_usage_limit_429(%{"resets_at" => DateTime.to_unix(DateTime.utc_now()) - 60})
   defp upstream_mode(:resetless), do: provider_usage_limit_429(%{})

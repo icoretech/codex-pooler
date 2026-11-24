@@ -796,7 +796,7 @@ message is not forwarded. A refusal naming a code the Codex client classifies
 itself keeps its `response.failed` event, so the client still compacts on
 `context_length_exceeded`, stops on the quota codes (`insufficient_quota`,
 `credit_balance_exhausted`, `organization_spend_limit_exceeded`,
-`project_spend_limit_exceeded`) and `usage_not_included`, and reports
+`project_spend_limit_exceeded`, `api_key_spend_limit_exceeded`) and `usage_not_included`, and reports
 `invalid_prompt`, `cyber_policy`, `bio_policy` and
 `misalignment_policy_violation` as it would from the provider; overload and
 rate-limit codes stay retryable.

@@ -46,13 +46,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "invalid_api_key",
     "invalid_authentication",
     "context_length_exceeded",
-    # The three spend/credit codes are the final quota error `insufficient_quota`
-    # is (rust-v0.156.0 `QuotaExceeded`): a `response.incomplete` naming one is
-    # a failed turn, not an ordinary incomplete. Like `insufficient_quota` they
-    # stay out of the health-neutral list, so the account that cannot serve is
-    # demoted (findings#258 row 258-24).
+    # A spend or credit limit on a response.incomplete is a failed turn.
+    # Like insufficient_quota, it demotes the account that cannot serve.
     "insufficient_quota",
     "credit_balance_exhausted",
+    "api_key_spend_limit_exceeded",
     "organization_spend_limit_exceeded",
     "project_spend_limit_exceeded",
     "usage_not_included",
@@ -118,18 +116,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "usage_limit_exceeded",
     "usage_limit_reached"
   ]
-  # The `response.failed` codes the latest released Codex client treats as
-  # final instead of resending the compaction (rust-v0.156.0
-  # `codex-api/src/sse/responses.rs` `process_responses_event` and
-  # `protocol/src/error.rs` `retry_delay`). Since 0.156.0 `slow_down` is a
-  # retried rate limit and the three spend/credit codes are a final quota
-  # error; a 0.155.1 client still resends after those three and the Pooler
-  # refuses that resend as a terminal predecessor.
+  # Codex keeps a compaction final on these response.failed codes. Since
+  # 0.172.0, API key, project and organization spend limits each identify the
+  # exhausted scope. Older clients that resend a final predecessor meet the
+  # same Pooler retry fence.
   @codex_response_failed_non_retryable_codes [
     "flex_unavailable",
     "context_length_exceeded",
     "insufficient_quota",
     "credit_balance_exhausted",
+    "api_key_spend_limit_exceeded",
     "organization_spend_limit_exceeded",
     "project_spend_limit_exceeded",
     "usage_not_included",

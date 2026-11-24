@@ -360,6 +360,7 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
         "context_length_exceeded",
         "insufficient_quota",
         "credit_balance_exhausted",
+        "api_key_spend_limit_exceeded",
         "organization_spend_limit_exceeded",
         "project_spend_limit_exceeded",
         "usage_not_included",

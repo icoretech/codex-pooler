@@ -234,6 +234,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ValidationRejectionHealth
     end
   end
 
+  for {shape, fields} <- [{"statusless", %{}}, {"wrapped 429", %{"status" => 429}}] do
+    @tag spend_limit_shape: fields
+    test "native websocket keeps the API key spend limit on a #{shape} provider error", %{spend_limit_shape: fields} do
+      code = "api_key_spend_limit_exceeded"
+      refusal = Map.merge(fields, %{"type" => "error", "error" => %{"type" => "insufficient_quota", "code" => code}, "headers" => %{"x-private" => @provider_sentinel}})
+      frames = native_refusal_frames!("ws-spend-limit-refusal", refusal)
+      terminal = assert_single_native_turn_terminal!(frames, "response.failed")
+      assert get_in(terminal, ["response", "error", "code"]) == code
+      assert terminal["status"] == fields["status"]
+      refute CodexPooler.JSON.encode!(frames) =~ @provider_sentinel
+    end
+  end
+
   defp native_refusal_frames!(request_id, frame) do
     upstream = start_upstream(FakeUpstream.strict_sequence([strict_native_request(1, FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(frame)]))]))
     setup = gateway_setup(upstream)

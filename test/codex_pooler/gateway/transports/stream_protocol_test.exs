@@ -110,6 +110,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
             "slow_down",
             "insufficient_quota",
             "credit_balance_exhausted",
+            "api_key_spend_limit_exceeded",
             "organization_spend_limit_exceeded",
             "project_spend_limit_exceeded"
           ] do
@@ -139,14 +140,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     test "keeps the released client terminal retry policy explicit" do
       # Mirrors the latest released Codex client
       # (`codex-api/src/sse/responses.rs` `process_responses_event` and
-      # `protocol/src/error.rs` `retry_delay`): `slow_down` became a retried
-      # rate limit and the three spend/credit codes became a final quota error.
+      # `protocol/src/error.rs` `retry_delay`): `slow_down` allows a retry,
+      # while credit and scoped spend limits stop the turn.
       retryable = ["server_error", "upstream_terminal_failure", "rate_limit_exceeded", "slow_down"]
 
       terminal = [
         "context_length_exceeded",
         "insufficient_quota",
         "credit_balance_exhausted",
+        "api_key_spend_limit_exceeded",
         "organization_spend_limit_exceeded",
         "project_spend_limit_exceeded",
         "usage_not_included",
@@ -186,6 +188,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       for code <- [
             "insufficient_quota",
             "credit_balance_exhausted",
+            "api_key_spend_limit_exceeded",
             "organization_spend_limit_exceeded",
             "project_spend_limit_exceeded"
           ] do

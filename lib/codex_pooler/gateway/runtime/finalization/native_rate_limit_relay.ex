@@ -12,10 +12,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.NativeRateLimitRelay do
   whatever the provider said. This body keeps the tokens the client
   classifies a `429` by (`codex-api/src/api_bridge.rs`): `error.type`
   `usage_limit_reached` becomes `UsageLimitReached`, `usage_not_included` and
-  `insufficient_quota` their own terminal errors, the quota codes
-  `QuotaExceeded`, anything else `RetryLimit`, with `resets_at` naming the
-  reset in the client's message. The same body goes out in Full and Lite,
-  streaming or not.
+  `insufficient_quota` their own terminal errors. Codex 0.172.0 uses the
+  spend-limit code to identify the API key, project or organization that
+  reached its limit. The same body goes out in Full and Lite, streaming or not.
 
   Only bounded tokens are read from the drained body: a classified type, a
   classified code and integer resets within a month. The provider's
@@ -32,7 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.NativeRateLimitRelay do
   @throttle_type "rate_limit_error"
   # The codes the released client classifies a `429` by, plus the provider's
   # own throttle and usage-limit codes; any other code is not relayed.
-  @classified_codes ~w(insufficient_quota credit_balance_exhausted organization_spend_limit_exceeded project_spend_limit_exceeded organization_usage_limit_exceeded rate_limit_exceeded usage_limit_reached usage_limit_exceeded)
+  @classified_codes ~w(insufficient_quota credit_balance_exhausted api_key_spend_limit_exceeded organization_spend_limit_exceeded project_spend_limit_exceeded organization_usage_limit_exceeded rate_limit_exceeded usage_limit_reached usage_limit_exceeded)
   @body_max_bytes 65_536
   @max_reset_seconds 32 * 24 * 3_600
 

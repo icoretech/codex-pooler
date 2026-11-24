@@ -1,7 +1,6 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SpendLimitTerminalTest do
-  # The latest released Codex client treats `credit_balance_exhausted`,
-  # `organization_spend_limit_exceeded` and `project_spend_limit_exceeded` as a
-  # final quota error, like `insufficient_quota` (findings#258 row 258-02). A
+  # Codex treats exhausted credit and API key, organization, and project spend limits as
+  # terminal quota errors, like `insufficient_quota` (findings#258 row 258-02). A
   # `response.incomplete` naming one of them is a failed turn, and like
   # `insufficient_quota` it demotes the assignment: the account cannot serve
   # until its spend or credit changes (findings#258 row 258-24). They used to
@@ -22,7 +21,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SpendLimitTerminalTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
 
-  for code <- ~w(credit_balance_exhausted organization_spend_limit_exceeded project_spend_limit_exceeded insufficient_quota) do
+  for code <- ~w(credit_balance_exhausted api_key_spend_limit_exceeded organization_spend_limit_exceeded project_spend_limit_exceeded insufficient_quota) do
     @tag spend_code: code
     test "native websocket response.incomplete #{code} fails the turn and demotes the assignment", %{spend_code: code} do
       upstream = start_upstream(incomplete_stream(code))
@@ -41,7 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SpendLimitTerminalTest do
 
       assert :ok = execute_websocket_response(auth, payload, %{request_id: "ws-spend-#{code}", codex_session: session}, fn frame -> send(self(), {:websocket_frame, frame}) end)
       assert_received {:websocket_frame, frame}
-      assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(frame)
+      assert %{"type" => "response.failed", "response" => %{"error" => %{"code" => ^code}}} = CodexPooler.JSON.decode!(frame)
 
       assert_failed_and_demoted!(setup, code, "websocket", "proxy_websocket")
     end

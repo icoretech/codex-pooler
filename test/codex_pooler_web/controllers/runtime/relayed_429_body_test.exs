@@ -9,7 +9,7 @@ defmodule CodexPoolerWeb.Runtime.Relayed429BodyTest do
   # `server_error` body. The native answer now carries, in Full and Lite,
   # streaming or not, the tokens the client classifies a `429` by
   # (`codex-api/src/api_bridge.rs`: `error.type` `usage_limit_reached` is
-  # `UsageLimitReached`, any other `429` `RetryLimit`) and the provider's
+  # `UsageLimitReached`, and a spend-limit code identifies its scope) and the provider's
   # integer reset, with the Pooler's message: the provider's message and plan
   # never travel, as in the terminal usage-limit answer (row 206-531).
   #
@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.Relayed429BodyTest do
   # {arm, provider error, the error the client receives}
   @arms [
     {:resetless_usage_limit, %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team"}, %{"type" => "usage_limit_reached", "code" => "upstream_rate_limited", "message" => "upstream usage limit reached"}},
+    {:api_key_spend_limit, %{"type" => "insufficient_quota", "code" => "api_key_spend_limit_exceeded", "message" => @provider_message}, %{"type" => "insufficient_quota", "code" => "api_key_spend_limit_exceeded", "message" => "upstream usage limit reached"}},
     {:plain_throttle, %{"code" => "rate_limit_exceeded", "message" => @provider_message}, %{"type" => "rate_limit_error", "code" => "rate_limit_exceeded", "message" => "upstream rate limited the request"}}
   ]
 
