@@ -114,6 +114,102 @@ defmodule CodexPoolerWeb.Runtime.WithheldAdviceUsageLimitTest do
     end
   end
 
+  # Codex reads the delay on the response.failed envelope from response.error.headers.
+  # The second fixture also proves a malformed nested value cannot hide valid outer advice.
+  for {code, mode, nested_hint, expected} <- [
+        {"server_is_overloaded", "full", "4", "4"},
+        {"policy_capacity_unavailable", "lite", "malformed", "7"}
+      ],
+      transport <- [:sse, :websocket] do
+    @code code
+    @mode mode
+    @nested_hint nested_hint
+    @expected expected
+    @transport transport
+
+    test "#{transport} statusless #{code} keeps bounded native advice and redacts the public event" do
+      error = %{
+        "type" => "error",
+        "headers" => %{"Retry-After" => "7", "x-fixture-private" => "private-outer-marker"},
+        "error" => %{"code" => @code, "message" => "private-provider-message", "headers" => %{"Retry-After" => @nested_hint, "x-fixture-private" => "private-inner-marker"}}
+      }
+
+      progress = %{"type" => "response.created", "response" => %{"id" => "resp_capacity_fixture", "status" => "in_progress"}}
+      delta = %{"type" => "response.output_text.delta", "delta" => "visible"}
+      events = [progress, delta, error]
+      {native, public} = capacity_terminal_pair!(@transport, @mode, events)
+
+      assert %{"type" => "response.failed", "response" => %{"error" => %{"code" => @code, "headers" => headers}}} = native
+      assert headers == %{"retry-after" => @expected}
+      refute inspect(native) =~ "private-inner-marker"
+      refute inspect(native) =~ "private-outer-marker"
+
+      redacted = %{"code" => @code, "type" => "server_error", "message" => "upstream request failed"}
+      assert %{"error" => ^redacted} = public
+      refute inspect(public) =~ "private-"
+      refute Map.has_key?(public, "headers")
+      if @transport == :websocket, do: assert(%{"type" => "response.failed", "response" => %{"error" => ^redacted}} = public)
+    end
+  end
+
+  defp capacity_terminal_pair!(:sse, mode, events) do
+    scenario = FakeUpstream.sse_stream(Enum.map(events, &{&1["type"], &1}))
+    native = post_native(statusless_pool!(mode, scenario))
+    public_pool = statusless_pool!(mode, scenario)
+    public = build_conn() |> auth(public_pool) |> post("/v1/responses", %{"model" => public_pool.model.exposed_model_id, "input" => "synthetic input", "stream" => true})
+    assert native.status == 200
+    assert public.status == 200
+    {terminal_sse!(native, "response.failed"), terminal_sse!(public, "error")}
+  end
+
+  defp capacity_terminal_pair!(:websocket, mode, events) do
+    scenario = FakeUpstream.websocket_text_frames(Enum.map(events, &CodexPooler.JSON.encode!/1))
+    {native_websocket_turn!(start_public_endpoint!(), statusless_pool!(mode, scenario)), public_websocket_turn!(statusless_pool!(mode, scenario))}
+  end
+
+  for {status_field, code} <- [{"status", "server_is_overloaded"}, {"status_code", "policy_capacity_unavailable"}] do
+    @status_field status_field
+    @code code
+
+    test "an SSE error carrying #{@status_field} 503 keeps the #{@code} retry delay while websocket uses the wrapped status" do
+      error = %{"type" => "error", @status_field => 503, "headers" => %{"retry-after" => "5", "x-fixture-private" => "private-outer-marker"}, "error" => %{"code" => @code}}
+      pool = statusless_pool!("full", FakeUpstream.sse_stream([{"error", error}]))
+      terminal = pool |> post_native() |> terminal_sse!("response.failed")
+
+      assert %{"response" => %{"error" => %{"code" => @code, "headers" => headers}}} = terminal
+      assert headers == %{"retry-after" => "5"}
+      refute inspect(terminal) =~ "private-outer-marker"
+
+      wrapped = FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(error)])
+      ws_terminal = native_websocket_turn!(start_public_endpoint!(), statusless_pool!("full", wrapped))
+      assert %{"type" => "response.failed", "response" => %{"error" => %{"code" => @code} = ws_error}} = ws_terminal
+      assert ws_terminal[@status_field] == 503
+      refute Map.has_key?(ws_error, "headers")
+    end
+  end
+
+  test "a statusless capacity code in the outer error does not add retry advice to a different response error" do
+    error = %{"type" => "error", "headers" => %{"retry-after" => "7"}, "error" => %{"code" => "server_is_overloaded", "headers" => %{"retry-after" => "4"}}, "response" => %{"error" => %{"code" => "invalid_prompt"}}}
+    pool = statusless_pool!("full", FakeUpstream.sse_stream([{"error", error}]))
+    assert %{"response" => %{"error" => %{"code" => "invalid_prompt"} = canonical}} = pool |> post_native() |> terminal_sse!("response.failed")
+    refute Map.has_key?(canonical, "headers")
+  end
+
+  defp statusless_pool!(mode, scenario) do
+    setup = gateway_setup(start_upstream(scenario))
+    set_model_serving_mode!(model_serving_scope(), setup, mode)
+    Map.put(setup, :mode, mode)
+  end
+
+  defp terminal_sse!(conn, type) do
+    [terminal] =
+      for <<"data: ", payload::binary>> <- String.split(conn.resp_body, "\n"),
+          {:ok, %{"type" => ^type} = event} <- [CodexPooler.JSON.decode(payload)],
+          do: event
+
+    terminal
+  end
+
   defp provider_error(resets_at), do: %{"type" => "usage_limit_reached", "message" => @provider_message, "plan_type" => "team", "resets_at" => resets_at, "resets_in_seconds" => @reset_seconds}
 
   defp provider_frame(resets_at), do: CodexPooler.JSON.encode!(%{"type" => "error", "status" => 429, "error" => provider_error(resets_at)})

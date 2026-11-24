@@ -801,6 +801,12 @@ itself keeps its `response.failed` event, so the client still compacts on
 `misalignment_policy_violation` as it would from the provider; overload and
 rate-limit codes stay retryable.
 
+For native `server_is_overloaded` and `policy_capacity_unavailable` stream
+errors, Codex 0.172.0 reads a valid `Retry-After` from the error headers first,
+then from the event headers. When Pooler converts an SSE error or a statusless
+websocket error to `response.failed`, it puts that delay in
+`response.error.headers` so the client can honor it.
+
 A native websocket refusal with another final `4xx` status, such as `404`,
 `409`, `413` or `422`, reaches the client the same way, as one wrapped error
 event with status `400`, because the Codex client treats a wrapped event of any

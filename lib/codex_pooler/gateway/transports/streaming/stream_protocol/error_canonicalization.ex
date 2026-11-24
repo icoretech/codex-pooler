@@ -56,7 +56,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
         {encode_error_event_sse(event), event}
 
       codex_responses_error_needs_canonical_response?(event_type, decoded) ->
-        event = canonical_codex_responses_error_event(decoded)
+        event = canonical_codex_responses_error_event(decoded, :sse)
         {encode_error_event_sse(event), event}
 
       true ->
@@ -356,8 +356,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     }
   end
 
-  defp canonical_codex_responses_error_event(decoded) do
-    error = canonical_codex_responses_error(decoded)
+  defp canonical_codex_responses_error_event(decoded, transport \\ :websocket) do
+    error = decoded |> canonical_codex_responses_error() |> put_capacity_retry_after(decoded, transport)
     response = canonical_codex_responses_error_response(decoded, error)
 
     decoded
@@ -366,6 +366,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     |> Map.put("error", error)
     |> Map.put("response", response)
   end
+
+  # For these error events Codex reads error.headers first, then outer headers.
+  # On SSE it ignores the websocket-only status fields. Once rewritten as
+  # response.failed it reads only the nested response.error.headers.
+  defp put_capacity_retry_after(%{"code" => code} = error, %{"type" => "error", "error" => %{"code" => code}} = source, transport)
+       when code in ["policy_capacity_unavailable", "server_is_overloaded"] do
+    if transport == :sse or (is_nil(source["status"]) and is_nil(source["status_code"])) do
+      error = Map.delete(error, "headers")
+
+      case source |> Map.take(~w(type error headers)) |> WebsocketErrorHeaders.retry_after() do
+        nil -> error
+        delay -> Map.put(error, "headers", %{"retry-after" => delay})
+      end
+    else
+      error
+    end
+  end
+
+  defp put_capacity_retry_after(error, _source, _transport), do: error
 
   defp canonical_codex_responses_error(decoded) do
     error =
