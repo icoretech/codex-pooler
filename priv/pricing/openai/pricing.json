@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-19T20:54:19.729316Z",
+  "generated_at": "2026-11-25T04:10:27.716179Z",
   "models": {
     "chat-latest": {
       "categories": [
@@ -2242,6 +2242,84 @@
         "per_1m_tokens"
       ]
     },
+    "gpt-6-astra-healthcare": {
+      "categories": [
+        "healthcare_model_configurations"
+      ],
+      "category": "healthcare_model_configurations",
+      "context_pricing": {
+        "tiers": {
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "6fb1df76276364b9c4b2723f4920430fdc761f694659737adbd7e1e3b712e36d",
+              "locator": "gpt-6-astra-healthcare/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6-astra-healthcare/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6-astra-healthcare",
+      "prices": {
+        "fast": {
+          "default": {
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 100.0
+          },
+          "long_context": {
+            "cached_input": 4.0,
+            "input": 40.0,
+            "output": 150.0
+          },
+          "short_context": {
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 100.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
+          },
+          "long_context": {
+            "cached_input": 2.0,
+            "input": 20.0,
+            "output": 75.0
+          },
+          "short_context": {
+            "cached_input": 1.0,
+            "input": 10.0,
+            "output": 50.0
+          }
+        }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "promotional_at_least_through_2026-12-31",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
     "gpt-6-astra-law": {
       "categories": [
         "legal_model_configurations"
@@ -2284,7 +2362,7 @@
         "tiers": {
           "standard": {
             "mode": "unavailable",
-            "reason": "time_conditioned",
+            "reason": "promotional_at_least_through_2026-12-31",
             "status": "unsupported"
           }
         },
@@ -2532,7 +2610,7 @@
         "tiers": {
           "standard": {
             "mode": "unavailable",
-            "reason": "time_conditioned",
+            "reason": "promotional_at_least_through_2026-12-31",
             "status": "unsupported"
           }
         },
@@ -2852,6 +2930,84 @@
             "output": 60.0
           }
         }
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6.1-sol-healthcare": {
+      "categories": [
+        "healthcare_model_configurations"
+      ],
+      "category": "healthcare_model_configurations",
+      "context_pricing": {
+        "tiers": {
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "6fb1df76276364b9c4b2723f4920430fdc761f694659737adbd7e1e3b712e36d",
+              "locator": "gpt-6.1-sol-healthcare/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6.1-sol-healthcare/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.1-sol-healthcare",
+      "prices": {
+        "fast": {
+          "default": {
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          },
+          "long_context": {
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "short_context": {
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          },
+          "long_context": {
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "short_context": {
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          }
+        }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "promotional_at_least_through_2026-12-31",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
       },
       "pricing_type": "per_1m_tokens",
       "pricing_types": [
@@ -3194,6 +3350,90 @@
         "per_1m_tokens"
       ]
     },
+    "gpt-6.2-astra-healthcare": {
+      "categories": [
+        "healthcare_model_configurations"
+      ],
+      "category": "healthcare_model_configurations",
+      "context_pricing": {
+        "tiers": {
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "6fb1df76276364b9c4b2723f4920430fdc761f694659737adbd7e1e3b712e36d",
+              "locator": "gpt-6.2-astra-healthcare/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6.2-astra-healthcare/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.2-astra-healthcare",
+      "prices": {
+        "fast": {
+          "default": {
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 80.0
+          },
+          "long_context": {
+            "cached_input": 1.6,
+            "input": 32.0,
+            "output": 120.0
+          },
+          "short_context": {
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 80.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          },
+          "long_context": {
+            "cache_write_12h": 40.0,
+            "cache_write_30m": 20.0,
+            "cached_input": 0.8,
+            "input": 16.0,
+            "output": 60.0
+          },
+          "short_context": {
+            "cache_write_12h": 20.0,
+            "cache_write_30m": 10.0,
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 40.0
+          }
+        }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "promotional_at_least_through_2026-12-31",
+            "status": "unsupported"
+          }
+        },
+        "version": 1
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
     "gpt-6.2-astra-law": {
       "categories": [
         "legal_model_configurations"
@@ -3242,7 +3482,7 @@
         "tiers": {
           "standard": {
             "mode": "unavailable",
-            "reason": "time_conditioned",
+            "reason": "promotional_at_least_through_2026-12-31",
             "status": "unsupported"
           }
         },
@@ -3438,6 +3678,90 @@
             "reason": "time_conditioned",
             "status": "supported",
             "timezone": "America/Los_Angeles"
+          }
+        },
+        "version": 1
+      },
+      "pricing_type": "per_1m_tokens",
+      "pricing_types": [
+        "per_1m_tokens"
+      ]
+    },
+    "gpt-6.2-sol-healthcare": {
+      "categories": [
+        "healthcare_model_configurations"
+      ],
+      "category": "healthcare_model_configurations",
+      "context_pricing": {
+        "tiers": {
+          "fast": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "6fb1df76276364b9c4b2723f4920430fdc761f694659737adbd7e1e3b712e36d",
+              "locator": "gpt-6.2-sol-healthcare/fast/context"
+            },
+            "status": "known"
+          },
+          "standard": {
+            "long_context_input_tokens_gt": 272000,
+            "provenance": {
+              "evidence_sha256": "49946ba9438cf21bb25d54a74e1b44400d63f65ed64d562ca129d3cc9334517e",
+              "locator": "gpt-6.2-sol-healthcare/standard/context"
+            },
+            "status": "known"
+          }
+        },
+        "version": 1
+      },
+      "model": "gpt-6.2-sol-healthcare",
+      "prices": {
+        "fast": {
+          "default": {
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          },
+          "long_context": {
+            "cached_input": 0.4,
+            "input": 8.0,
+            "output": 30.0
+          },
+          "short_context": {
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 20.0
+          }
+        },
+        "standard": {
+          "default": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          },
+          "long_context": {
+            "cache_write_12h": 10.0,
+            "cache_write_30m": 5.0,
+            "cached_input": 0.2,
+            "input": 4.0,
+            "output": 15.0
+          },
+          "short_context": {
+            "cache_write_12h": 5.0,
+            "cache_write_30m": 2.5,
+            "cached_input": 0.1,
+            "input": 2.0,
+            "output": 10.0
+          }
+        }
+      },
+      "pricing_applicability": {
+        "tiers": {
+          "standard": {
+            "mode": "unavailable",
+            "reason": "promotional_at_least_through_2026-12-31",
+            "status": "unsupported"
           }
         },
         "version": 1
@@ -4415,7 +4739,7 @@
       ]
     }
   },
-  "models_count": 78,
+  "models_count": 82,
   "schema_version": 2,
   "source": "openai_official_pricing_page",
   "source_url": "https://developers.openai.com/api/docs/pricing",

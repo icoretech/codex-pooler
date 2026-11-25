@@ -531,6 +531,39 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert_imported_target_settles("gpt-6.1-sol", ultrafast: "19440")
   end
 
+  test "Healthcare Standard cost stays unavailable while Fast settles in its context band" do
+    assert {:ok, %{price_version: version}} = OpenAIPricingImporter.import_file(@target)
+    %{pool: pool, authorization: authorization} = active_api_key_fixture()
+    {:ok, auth} = CodexPooler.Access.authenticate_authorization_header(authorization)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    for identifier <- ~w(gpt-6-astra-healthcare gpt-6.1-sol-healthcare gpt-6.2-astra-healthcare gpt-6.2-sol-healthcare) do
+      model = model_fixture(pool, %{exposed_model_id: identifier, upstream_model_id: identifier, pricing_ref: "openai/#{identifier}"})
+
+      for tier <- ~w(default fast), {input, bucket} <- [{272_000, "default"}, {272_001, "long_context"}] do
+        payload = %{"model" => identifier, "service_tier" => tier}
+        assert {:ok, reserved} = Accounting.reserve(auth, model, payload, %{correlation_id: "healthcare-#{identifier}-#{tier}-#{input}"})
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, assignment)
+        usage = %{status: "usage_known", input_tokens: input, output_tokens: 1, total_tokens: input + 1, service_tier: tier}
+        assert {:ok, %{settlement: settlement}} = Accounting.finalize_success(reserved.request, attempt, usage, %{response_status_code: 200})
+        assert settlement.details["price_bucket"] == bucket
+
+        if tier == "fast" do
+          snapshot = Repo.get!(PricingSnapshot, settlement.pricing_snapshot_id)
+          assert snapshot.model_identifier == identifier
+          assert snapshot.price_version == version
+          assert snapshot.config["service_tier"] == "priority"
+          assert settlement.details["pricing_status"] == "priced"
+          assert Decimal.gt?(settlement.settled_cost_micros, 0)
+        else
+          assert settlement.details["pricing_status"] == "unpriced_unavailable_price_bucket"
+          assert is_nil(settlement.details["settled_cost_micros"])
+          assert is_nil(settlement.pricing_snapshot_id)
+        end
+      end
+    end
+  end
+
   test "the vendored target leaves ambiguous ultrafast and promotional rates unavailable" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
     assert {:ok, imported} = OpenAIPricingImporter.import_file(@target)
