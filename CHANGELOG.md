@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.17.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.17.0...codex-pooler-v0.17.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* normalize websocket upgrade headers before recording first-event errors ([094b728](https://github.com/icoretech/codex-pooler/commit/094b7284d3d89730a55ba1386428bb4253a237ff))
+* **pricing:** import source-qualified Healthcare Standard rates ([3419177](https://github.com/icoretech/codex-pooler/commit/3419177780395b3898124e099f009b86402aba9e))
+* request full history for interrupted mailbox continuations ([1eb68d5](https://github.com/icoretech/codex-pooler/commit/1eb68d5cd9f8a0fa8b4727089f34561d4911178b))
+
+
+### Dependencies
+
+* pin Erlang/OTP 29.1.3 for local, CI and release builds ([7b71e53](https://github.com/icoretech/codex-pooler/commit/7b71e53cffc52b37bec308acf43c33823e58bc2b))
+* update Cally, daisyUI and Starlight and refresh frontend locks ([eb81fce](https://github.com/icoretech/codex-pooler/commit/eb81fce292a4629f46cc232a84fdd8e58084074e))
+* update DBConnection to 2.10.3 ([0ed0895](https://github.com/icoretech/codex-pooler/commit/0ed089522185d0057a5db056bdb9dfc6d77ba5c7))
+* update dependency lazy_html to v0.1.15 ([#661](https://github.com/icoretech/codex-pooler/issues/661)) ([c88a029](https://github.com/icoretech/codex-pooler/commit/c88a0297a0fa6f10d2a2e39c0bd6074fc95584bd))
+* update dependency lazy_html to v0.1.16 ([#665](https://github.com/icoretech/codex-pooler/issues/665)) ([b40d5c4](https://github.com/icoretech/codex-pooler/commit/b40d5c4eb99e6dc359f8b75bf8859d33f39adb97))
+* update helm release codex-pooler to v0.17.6 ([#662](https://github.com/icoretech/codex-pooler/issues/662)) ([d8090a8](https://github.com/icoretech/codex-pooler/commit/d8090a8f75792b638913bf89f0db65f7d6c9e272))
+* update helm release codex-pooler to v0.18.0 ([#664](https://github.com/icoretech/codex-pooler/issues/664)) ([114bd85](https://github.com/icoretech/codex-pooler/commit/114bd85efec80fda1e4788b438b640f2af3d81c7))
+* update the AI SDK OpenAI contract probe to AI SDK 7.0.183 ([15d2484](https://github.com/icoretech/codex-pooler/commit/15d2484b8dc88b8530349b8e1448bf35570eca91))
+
+
+### Tests
+
+* reuse a peer node across remote websocket auth failover cases ([01695a1](https://github.com/icoretech/codex-pooler/commit/01695a1a76e4da8ea78eccf28ac13e34e8d19211))
+* scope the recovery deadline to the held-lock phase ([3ba1f0b](https://github.com/icoretech/codex-pooler/commit/3ba1f0b15bf064989debb6859ccb5bb3f7fe474f))
+* verify rollback and notification order after transaction owner exit ([9a0bcd8](https://github.com/icoretech/codex-pooler/commit/9a0bcd86d25e6528a3fc6be1ba81d925b1e9d724))
+
 ## [0.17.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.16.7...codex-pooler-v0.17.0) (2026-11-24)
 
 
