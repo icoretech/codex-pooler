@@ -157,7 +157,8 @@
 				"/(^|/)docs-site/src/content/docs/deployment/helm\\.mdx$/"
 			],
 			"matchStrings": [
-				"(?<prefix>--version\\s+)(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\\s+\\\\)"
+				"(?<prefix>--version\\s+)(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\\s+\\\\)",
+				"chart: codex-pooler\\s+version: \"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
 			],
 			"depNameTemplate": "codex-pooler",
 			"datasourceTemplate": "helm",
