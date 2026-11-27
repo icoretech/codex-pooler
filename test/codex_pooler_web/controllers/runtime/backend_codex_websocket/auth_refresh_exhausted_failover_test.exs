@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshExhaustedFailo
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [seed_preferring_assignment: 2, start_upstream: 1, start_public_endpoint_with_server!: 0, public_websocket_connect_with_request_headers!: 5, public_websocket_send_text!: 4, public_websocket_receive_text!: 3, capture_public_endpoint_identity!: 1, assert_public_endpoint_identity_released!: 1]
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport, only: [execute_websocket_response: 4, strict_native_response: 4, websocket_auth_refresh_payload: 2, websocket_failover_candidates!: 3, route_circuit_failures: 1, account_reconciliation_jobs: 1, held_websocket_handshake_401: 2]
 
-  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_peer_session_owner!: 2]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [start_shared_peer_session_owner!: 3]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
@@ -59,51 +59,54 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshExhaustedFailo
     end
   end
 
-  for topology <- [:direct, :local_owner, :remote_owner], mode <- ["full", "lite"], route <- ["/backend-api/codex/responses", "/v1/responses"] do
+  for topology <- [:direct, :local_owner], mode <- ["full", "lite"], route <- ["/backend-api/codex/responses", "/v1/responses"] do
     @tag topology: topology, mode: mode, route: route
     @tag :exhausted_auth_socket
-    @tag slow: "drives released HTTP websocket framing, with a real peer for remote ownership"
+    @tag slow: "drives released HTTP websocket framing across an auth refresh and failover"
     test "#{topology} #{mode} #{route} exhausted refresh reaches B without an intermediate terminal", ctx do
-      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, ctx.topology != :direct)
-      if ctx.topology == :remote_owner, do: enter_peer_owner_topology!()
-      first = start_upstream(FakeUpstream.strict_sequence([handshake_401(), refresh_success(), handshake_401()]))
-      second_server = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(completed_event())]))]))
-      {setup, second} = websocket_failover_candidates!(first, second_server, ctx.mode)
-      assert :ok = Events.subscribe_pool(setup.pool)
-      assert {:ok, _secret} = Upstreams.store_encrypted_secret(setup.identity, %{secret_kind: "refresh_token", plaintext: "synthetic-refresh"})
-      turn_state = Ecto.UUID.generate()
-      session_attrs = if ctx.route == "/v1/responses", do: %{session_header: turn_state, session_header_source: "x-session-id"}, else: %{accepted_turn_state: turn_state}
-      peer = if ctx.topology == :remote_owner, do: start_peer_session_owner!(setup, session_attrs)
-      port = start_owned_endpoint!()
-      headers = if ctx.route == "/v1/responses", do: [{"x-session-id", turn_state}], else: []
-      {conn, websocket, ref, _headers} = public_websocket_connect_with_request_headers!(port, setup, turn_state, ctx.route, headers)
+      assert_exhausted_socket_failover!(ctx)
+    end
+  end
 
-      try do
-        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, websocket_auth_refresh_payload(setup, "wire-auth-failover"))
-        {_conn, _websocket, types, terminal} = receive_terminal(conn, websocket, ref, [])
-        assert terminal["type"] == "response.completed"
-        refute "error" in types
-        refute "response.failed" in types
-        request = await_settled_request!(setup.pool.id)
-        assert_failover_rows!(setup, second, request)
-        assert :ok = FakeUpstream.verify!(first)
-        assert :ok = FakeUpstream.verify!(second_server)
+  def assert_exhausted_socket_failover!(ctx) do
+    CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, ctx.topology != :direct)
+    first = start_upstream(FakeUpstream.strict_sequence([handshake_401(), refresh_success(), handshake_401()]))
+    second_server = start_upstream(FakeUpstream.strict_sequence([FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(completed_event())]))]))
+    {setup, second} = websocket_failover_candidates!(first, second_server, ctx.mode)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    assert {:ok, _secret} = Upstreams.store_encrypted_secret(setup.identity, %{secret_kind: "refresh_token", plaintext: "synthetic-refresh"})
+    turn_state = Ecto.UUID.generate()
+    session_attrs = if ctx.route == "/v1/responses", do: %{session_header: turn_state, session_header_source: "x-session-id"}, else: %{accepted_turn_state: turn_state}
+    peer = if ctx.topology == :remote_owner, do: start_shared_peer_session_owner!(setup, session_attrs, ctx.peer_node)
+    port = start_owned_endpoint!()
+    headers = if ctx.route == "/v1/responses", do: [{"x-session-id", turn_state}], else: []
+    {conn, websocket, ref, _headers} = public_websocket_connect_with_request_headers!(port, setup, turn_state, ctx.route, headers)
 
-        if ctx.topology != :direct do
-          owner_metadata = request.request_metadata["websocket_owner_forwarding"]
-          assert owner_metadata["enabled"] == true
-          expected_node = if peer, do: peer.node, else: node()
-          assert owner_metadata["owner_instance_id"] == Atom.to_string(expected_node)
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, websocket_auth_refresh_payload(setup, "wire-auth-failover"))
+      {_conn, _websocket, types, terminal} = receive_terminal(conn, websocket, ref, [])
+      assert terminal["type"] == "response.completed"
+      refute "error" in types
+      refute "response.failed" in types
+      request = await_settled_request!(setup.pool.id)
+      assert_failover_rows!(setup, second, request)
+      assert :ok = FakeUpstream.verify!(first)
+      assert :ok = FakeUpstream.verify!(second_server)
 
-          if peer do
-            assert node(peer.owner_pid) != node()
-            assert Repo.get!(CodexSession, peer.session.id).owner_instance_id == Atom.to_string(peer.node)
-          end
+      if ctx.topology != :direct do
+        owner_metadata = request.request_metadata["websocket_owner_forwarding"]
+        assert owner_metadata["enabled"] == true
+        expected_node = if peer, do: peer.node, else: node()
+        assert owner_metadata["owner_instance_id"] == Atom.to_string(expected_node)
+
+        if peer do
+          assert node(peer.owner_pid) != node()
+          assert Repo.get!(CodexSession, peer.session.id).owner_instance_id == Atom.to_string(peer.node)
         end
-      after
-        Mint.HTTP.close(conn)
       end
+    after
+      Mint.HTTP.close(conn)
     end
   end
 
@@ -271,5 +274,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshExhaustedFailo
 
   defp handshake_401 do
     FakeUpstream.expect_request(method: "GET", respond: FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "invalid_api_key"}}, status: 401, headers: [{"x-openai-authorization-error", "invalid_api_key"}]))
+  end
+end
+
+defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshExhaustedFailoverPeerTest do
+  use CodexPoolerWeb.ConnCase, async: false
+
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshExhaustedFailoverTest, only: [assert_exhausted_socket_failover!: 1]
+  import CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport, only: [enter_peer_owner_topology!: 0, start_shared_bridge_peer!: 0]
+
+  @moduletag topology: :remote_owner
+  @moduletag :exhausted_auth_socket
+  @moduletag slow: "drives released HTTP websocket framing through a remote owner across an auth refresh and failover"
+
+  setup_all do
+    %{peer_node: start_shared_bridge_peer!()}
+  end
+
+  setup do
+    enter_peer_owner_topology!()
+    :ok
+  end
+
+  for mode <- ["full", "lite"], route <- ["/backend-api/codex/responses", "/v1/responses"] do
+    @tag mode: mode, route: route
+    test "remote_owner #{mode} #{route} exhausted refresh reaches B without an intermediate terminal", ctx do
+      assert_exhausted_socket_failover!(ctx)
+    end
   end
 end
