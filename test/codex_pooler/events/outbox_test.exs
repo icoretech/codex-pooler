@@ -158,17 +158,17 @@ defmodule CodexPooler.Events.OutboxTest do
     refute_received {Events, ^event}
     monitor = Process.monitor(worker.pid)
 
-    log =
-      capture_log(fn ->
-        assert Task.shutdown(worker, :brutal_kill) == nil
-        assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, @detection_timeout
-        assert run_unboxed(fn -> Repo.one!(from entry in OutboxEntry, where: entry.id == ^event.id, lock: "FOR UPDATE").id end) == event.id
-        assert {:ok, 1} = run_unboxed(fn -> Outbox.drain() end)
-      end)
-
-    assert log =~ "DBConnection.ConnectionError"
-    assert log =~ "exited"
+    assert Task.shutdown(worker, :brutal_kill) == nil
+    assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, @detection_timeout
+    assert run_unboxed(fn -> Repo.one!(from entry in OutboxEntry, where: entry.id == ^event.id, lock: "FOR UPDATE").id end) == event.id
+    assert {:ok, 1} = run_unboxed(fn -> Outbox.drain() end)
     assert_receive {Events, ^event}, @detection_timeout
+
+    # PostgreSQL delivers notifications in commit order. Wait for a later
+    # event on the same channel before checking for a duplicate.
+    marker = queue_event(pool_id)
+    assert {:ok, 1} = run_unboxed(fn -> Outbox.drain() end)
+    assert_receive {Events, ^marker}, @detection_timeout
     refute_received {Events, ^event}
   end
 

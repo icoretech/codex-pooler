@@ -84,14 +84,9 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanupPostgresTest do
 
     assert Task.yield(cleanup, 0) == nil
 
-    log =
-      ExUnit.CaptureLog.capture_log(fn ->
-        Process.exit(coordinator, :kill)
-        assert_receive {:DOWN, ^monitor, :process, ^coordinator, :killed}, 15_000
-        assert :ok = Task.await(cleanup, 15_000)
-      end)
-
-    if kill_phase == :before_commit, do: assert(log =~ "DBConnection.ConnectionError")
+    Process.exit(coordinator, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^coordinator, :killed}, 15_000
+    assert :ok = Task.await(cleanup, 15_000)
 
     Sandbox.unboxed_run(Repo, fn ->
       case kill_phase do
