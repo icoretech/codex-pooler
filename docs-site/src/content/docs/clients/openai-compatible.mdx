@@ -462,6 +462,8 @@ const compaction = result.content.find(
 
 The serialized request must contain visible input followed by exactly one final `{"type":"compaction_trigger"}` item. Non-terminal, duplicate, trigger-only, hidden-only, or otherwise malformed placement returns an OpenAI-shaped `400 invalid_request` on `input` before upstream dispatch.
 
+The OpenAI SDK’s `responses.compact()` method calls `/v1/responses/compact` when configured with Pooler’s public `/v1` base URL. That endpoint returns `404 unsupported_endpoint`. On the supported trigger route, Pooler currently omits a caller-supplied `safety_identifier` from the upstream compaction request.
+
 Successful non-streaming HTTP returns a completed Responses JSON object containing the normalized compaction item. Public SSE follows the Responses streaming grammar the official SDK stream helpers expect: `response.created` with an empty output, `response.output_item.added` and `response.output_item.done` for the compaction item at `output_index` 0, then `response.completed` and `[DONE]`. Narrow Responses websocket completion emits the same four Responses events without the HTTP `[DONE]` sentinel. Direct `POST /v1/responses/compact` remains unsupported.
 
 If upstream compact output is malformed JSON or does not contain nonblank encrypted compaction content, Codex Pooler returns a sanitized `502 invalid_compaction_response`. Other provider failures follow the public error rules documented below.
