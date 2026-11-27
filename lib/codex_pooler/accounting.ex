@@ -112,6 +112,9 @@ defmodule CodexPooler.Accounting do
   @spec native_turn_recorded_position(String.t()) :: CodexPooler.Accounting.NativeTurnProgress.position() | nil
   defdelegate native_turn_recorded_position(claim), to: CodexPooler.Accounting.NativeTurnProgress, as: :recorded_position_for_claim
 
+  @spec older_settled_steer?(Ecto.UUID.t(), <<_::256>>, String.t(), String.t()) :: boolean()
+  defdelegate older_settled_steer?(session_id, semantic_turn_digest, steer_claim, interrupted_claim), to: CodexPooler.Accounting.NativeTurnProgress
+
   @spec native_turn_progress_advances?(CodexPooler.Accounting.NativeTurnProgress.position() | nil, CodexPooler.Accounting.NativeTurnProgress.position() | nil) :: boolean()
   defdelegate native_turn_progress_advances?(recorded, position), to: CodexPooler.Accounting.NativeTurnProgress, as: :advances?
 

@@ -27,6 +27,20 @@ defmodule CodexPooler.Gateway.Payloads.NativeMailboxContinuation do
 
   defp mailbox_intent?(_payload), do: false
 
+  @doc "Whether the entire increment is new mail addressed to the agent named by the turn."
+  @spec addressed_increment?(map(), RequestOptions.t()) :: boolean()
+  def addressed_increment?(%{"input" => [_first | _rest] = input} = payload, %RequestOptions{} = options) do
+    case payload |> NativeTurnContinuation.canonical_document(options) |> NativeTurnContinuation.canonical_metadata_map() do
+      %{"agent_name" => agent} when is_binary(agent) and byte_size(agent) in 1..256 ->
+        Enum.all?(input, &incoming?(&1, agent))
+
+      _unknown_agent ->
+        false
+    end
+  end
+
+  def addressed_increment?(_payload, _options), do: false
+
   defp candidates(semantic_key, %{"input" => input} = payload, options) when is_list(input) do
     with nil <- Map.get(payload, "previous_response_id"),
          "turn" <- NativeTurnContinuation.request_kind(payload, options),

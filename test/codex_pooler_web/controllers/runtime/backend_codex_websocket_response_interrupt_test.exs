@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketResponseInterruptTest do
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.WebsocketCleanupFence
 
@@ -48,6 +49,76 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketResponseInterruptTest do
   @native_terminal_types ["response.completed", "response.failed", "response.incomplete", "error"]
   @installation_id "00000000-0000-4000-8000-000000000272"
   @interrupt_mode "discard_partial_items"
+
+  @tag :interrupted_mailbox
+  test "a mailbox increment colliding with an old steer requests full history, and a websocket rebuild dispatches once" do
+    put_owner_forwarding!(false)
+    final_id = "resp_mailbox_completed"
+    gate = make_ref()
+    frames = completed_events(final_id)
+    reply = FakeUpstream.barrier_websocket_frames(frames, notify: self(), release_ref: gate)
+    ctx = interrupted_mailbox_setup!([FakeUpstream.expect_request(method: "WEBSOCKET", path: @turn_path, respond: reply)])
+    assert_mailbox_rebuild_requested!(ctx)
+
+    # Codex opens a new socket and resends the full history, including the
+    # earlier tool call. Its HTTP fallback must still meet this active claim.
+    rebuilt = frame(ctx.turn, "turn", ctx.rebuilt, %{})
+    client = ctx.port |> connect!(ctx.setup, ctx.turn) |> send_frame!(rebuilt)
+    assert_receive {:fake_upstream_frame_barrier, 0, handler, ^gate}, @detection_timeout_ms
+
+    try do
+      assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(mailbox_http_rebuild(ctx), 409)
+      assert length(pool_requests(ctx.setup)) == 4
+    after
+      assert :ok = FakeUpstream.release_remaining_frames(ctx.upstream, gate)
+    end
+
+    {client, events} = receive_turn!(client)
+    assert %{"type" => "response.completed", "response" => %{"id" => ^final_id}} = List.last(events)
+    last_barrier = length(frames)
+    assert_receive {:fake_upstream_frame_barrier, ^last_barrier, ^handler, ^gate}, @detection_timeout_ms
+    await_no_response_task!(client)
+    assert_mailbox_rebuild_settled!(ctx)
+    drop!(client)
+  end
+
+  @tag :interrupted_mailbox
+  test "a Lite mailbox increment through its session owner requests full history and accepts the HTTP rebuild" do
+    put_owner_forwarding!(true)
+    final_id = "resp_mailbox_http_completed"
+    terminal = completed_events(final_id) |> List.last() |> CodexPooler.JSON.decode!()
+    reply = FakeUpstream.sse_stream([{"response.completed", terminal}])
+    ctx = interrupted_mailbox_setup!([FakeUpstream.expect_request(method: "POST", path: @turn_path, respond: reply)], "lite")
+    assert_mailbox_rebuild_requested!(ctx)
+    response = mailbox_http_rebuild(ctx)
+    assert response.status == 200
+    assert response.resp_body =~ final_id
+    assert_mailbox_rebuild_settled!(ctx)
+  end
+
+  @tag :interrupted_mailbox
+  test "mail directed to a different agent cannot change a duplicate turn into a full-history retry" do
+    put_owner_forwarding!(false)
+    ctx = interrupted_mailbox_setup!([])
+    mail = Map.put(ctx.mail, "recipient", "/root/other")
+    anchored = frame(ctx.turn, "turn", [mail], %{"previous_response_id" => ctx.interrupted_id})
+    {client, events} = send_turn!(ctx.client, anchored)
+    assert %{"type" => "error", "status" => 409, "error" => %{"code" => "duplicate_turn"}} = List.last(events)
+
+    # Replaying the actual previously served steer on its old anchor stays
+    # a duplicate even though the last request on this socket was interrupted.
+    {client, replay} = send_turn!(client, follow_up_frame(ctx.turn, "resp_before_steer"))
+    assert %{"type" => "error", "status" => 409, "error" => %{"code" => "duplicate_turn"}} = List.last(replay)
+    assert [opening, steer, interrupted] = pool_requests(ctx.setup)
+    turn = Repo.get_by!(CodexTurn, request_id: interrupted.id)
+
+    # The durable collision check must reject both the producer itself and
+    # an old pair after a later request of this semantic turn was recorded.
+    refute CodexPooler.Accounting.older_settled_steer?(turn.codex_session_id, turn.semantic_turn_digest, interrupted.correlation_id, interrupted.correlation_id)
+    refute CodexPooler.Accounting.older_settled_steer?(turn.codex_session_id, turn.semantic_turn_digest, opening.correlation_id, steer.correlation_id)
+    assert :ok = FakeUpstream.verify!(ctx.upstream)
+    drop!(client)
+  end
 
   for forwarding <- [:off, :on], mode <- ["full", "lite"], moment <- [:mid, :early] do
     @tag forwarding: forwarding, serving_mode: mode, moment: moment
@@ -323,6 +394,102 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketResponseInterruptTest do
   defp topology(:off), do: "direct"
   defp topology(:on), do: "owner"
 
+  defp assert_mailbox_rebuild_requested!(ctx) do
+    anchored = frame(ctx.turn, "turn", [ctx.mail], %{"previous_response_id" => ctx.interrupted_id})
+    {client, events} = send_turn!(ctx.client, anchored)
+    assert %{"type" => "error", "status" => 400, "error" => %{"code" => "previous_response_not_found", "message" => advice}} = List.last(events)
+    assert advice =~ "full input"
+    assert length(FakeUpstream.requests(ctx.upstream)) == 3
+    assert length(pool_requests(ctx.setup)) == 3
+    drop!(client)
+  end
+
+  defp mailbox_http_rebuild(ctx) do
+    body = ctx.turn |> frame("turn", ctx.rebuilt, %{}) |> CodexPooler.JSON.decode!() |> Map.delete("type")
+
+    build_conn()
+    |> auth(ctx.setup)
+    |> put_req_header("accept", "text/event-stream")
+    |> put_req_header("session-id", ctx.turn.thread)
+    |> put_req_header("thread-id", ctx.turn.thread)
+    |> put_req_header("originator", "codex_exec")
+    |> put_req_header("x-codex-window-id", "#{ctx.turn.thread}:0")
+    |> put_req_header("x-codex-turn-metadata", body["client_metadata"]["x-codex-turn-metadata"])
+    |> then(&if(ctx.turn.mode == "lite", do: put_req_header(&1, "x-openai-internal-codex-responses-lite", "true"), else: &1))
+    |> post(@turn_path, body)
+  end
+
+  defp assert_mailbox_rebuild_settled!(ctx) do
+    assert [_, _, _, recovery] = pool_requests(ctx.setup)
+    assert recovery.status == "succeeded"
+    assert Repo.get_by!(Attempt, request_id: recovery.id).status == "succeeded"
+    assert "codex-request:" <> _ = recovery.correlation_id
+    assert [_, _, _, sent] = FakeUpstream.requests(ctx.upstream)
+    refute Map.has_key?(sent.json, "previous_response_id")
+    assert List.last(sent.json["input"]) == ctx.mail
+    assert :ok = FakeUpstream.verify!(ctx.upstream)
+  end
+
+  # A user steer already owns the claim for this user-message count. Its
+  # result is a tool call, so the interrupted request and the full history
+  # reconstructed after it both contain a tool result.
+  defp interrupted_mailbox_setup!(recoveries, mode \\ "full") do
+    hold = make_ref()
+    first_id = "resp_before_steer"
+    steered_id = "resp_steered_tool_call"
+    interrupted_id = "resp_interrupted_after_tool"
+    call = %{"type" => "function_call", "id" => "fc_mailbox", "call_id" => "call_mailbox", "name" => "exec_command", "arguments" => "{}", "status" => "completed"}
+    result = %{"type" => "function_call_output", "call_id" => call["call_id"], "output" => "synthetic result"}
+    reasoning = %{"type" => "reasoning", "id" => "rs_mailbox", "summary" => []}
+    mail = %{"type" => "agent_message", "author" => "/root/worker", "recipient" => "/root", "content" => [%{"type" => "input_text", "text" => "synthetic update"}]}
+
+    call_frames =
+      encode([
+        created(steered_id),
+        %{"type" => "response.output_item.done", "output_index" => 0, "item" => call},
+        %{"type" => "response.completed", "response" => %{"id" => steered_id, "output" => [call], "status" => "completed", "usage" => %{"input_tokens" => 15, "output_tokens" => 5, "total_tokens" => 20}}}
+      ])
+
+    opening = encode([created(interrupted_id), %{"type" => "response.output_item.done", "output_index" => 0, "item" => reasoning}])
+    on_interrupt = FakeUpstream.interruptible_websocket_frames(opening, response_id: interrupted_id, interrupted: interrupted_events(interrupted_id, :early), completion: completion_events(interrupted_id), notify: self(), release_ref: hold)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence(
+          [
+            turn_request(FakeUpstream.websocket_text_frames(completed_events(first_id))),
+            turn_request(FakeUpstream.websocket_text_frames(call_frames)),
+            turn_request(on_interrupt)
+          ] ++ recoveries
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    set_model_serving_mode!(model_serving_scope(), setup, mode)
+    {_server, port} = start_public_endpoint_with_server!()
+    turn = setup |> new_turn(mode) |> Map.put(:agent_name, "/root")
+
+    client = port |> connect!(setup, turn) |> prewarm!(turn)
+    {client, opening} = send_turn!(client, opener_frame(turn))
+    assert %{"type" => "response.completed", "response" => %{"id" => ^first_id, "output" => [answer]}} = List.last(opening)
+    steer = user_message("synthetic steered input")
+    {client, steered} = send_turn!(client, frame(turn, "turn", [steer], %{"previous_response_id" => first_id}))
+    assert %{"type" => "response.completed", "response" => %{"id" => ^steered_id, "output" => [^call]}} = List.last(steered)
+    client = send_frame!(client, frame(turn, "turn", [result], %{"previous_response_id" => steered_id}))
+    assert_receive {:fake_upstream_interruptible_open, _handler, ^hold}, @detection_timeout_ms
+    {client, _opening} = receive_n!(client, 2)
+    {client, interrupted} = client |> send_frame!(interrupt_frame(interrupted_id)) |> receive_turn!()
+    assert %{"type" => "response.incomplete", "response" => %{"id" => ^interrupted_id, "incomplete_details" => %{"reason" => "interrupted"}}} = List.last(interrupted)
+    await_no_response_task!(client)
+    assert [opener, steer_request, tool_request] = pool_requests(setup)
+    assert "codex-turn:" <> _ = opener.correlation_id
+    assert "codex-resume:" <> _ = steer_request.correlation_id
+    assert "codex-request:" <> _ = tool_request.correlation_id
+    assert %{"terminal_class" => "response.incomplete", "incomplete_reason" => "interrupted"} = await_downstream_delivery!(tool_request)
+
+    %{client: client, port: port, setup: setup, upstream: upstream, turn: turn, mail: mail, interrupted_id: interrupted_id, rebuilt: history(turn) ++ [answer, steer, call, result, reasoning, mail]}
+  end
+
   # The provider's interruptible response: what it sends before the client
   # interrupts, its answer to the interrupt, and the rest had nobody
   # interrupted it.
@@ -503,6 +670,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketResponseInterruptTest do
       "request_kind" => request_kind,
       "thread_source" => "user"
     }
+
+    base = if turn[:agent_name], do: Map.put(base, "agent_name", turn.agent_name), else: base
 
     case request_kind do
       "prewarm" -> Map.merge(base, %{"model" => turn.model, "reasoning_effort" => "low"})

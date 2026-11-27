@@ -86,6 +86,35 @@ defmodule CodexPooler.Accounting.NativeTurnProgress do
     |> recorded_position()
   end
 
+  @doc "Checks whether a settled older request holds the interrupted request's user-steer position in this session."
+  @spec older_settled_steer?(Ecto.UUID.t(), <<_::256>>, String.t(), String.t()) :: boolean()
+  def older_settled_steer?(session_id, semantic_turn_digest, steer_claim, interrupted_claim) do
+    newer =
+      from turn in CodexTurn,
+        where: turn.codex_session_id == ^session_id and turn.semantic_turn_digest == ^semantic_turn_digest,
+        where: turn.turn_sequence > parent_as(:interrupted_turn).turn_sequence
+
+    collision =
+      from producer in Request,
+        where: producer.correlation_id == ^interrupted_claim and not is_nil(producer.completed_at),
+        join: current in CodexTurn,
+        as: :interrupted_turn,
+        on: current.request_id == producer.id,
+        where: current.codex_session_id == ^session_id and current.semantic_turn_digest == ^semantic_turn_digest and not is_nil(current.completed_at),
+        join: holder in Request,
+        on: holder.correlation_id == ^steer_claim,
+        where: holder.pool_id == producer.pool_id and holder.api_key_id == producer.api_key_id,
+        where: holder.model_id == producer.model_id,
+        join: prior in CodexTurn,
+        on: prior.request_id == holder.id,
+        where: prior.codex_session_id == ^session_id and prior.semantic_turn_digest == ^semantic_turn_digest,
+        where: prior.turn_sequence < current.turn_sequence,
+        where: not is_nil(holder.completed_at) and not is_nil(prior.completed_at),
+        where: not exists(subquery(newer))
+
+    Repo.exists?(collision)
+  end
+
   # A pre-turn compaction can be the first request of a logical turn. Its
   # resume has a codex-resume claim, leaving no bare opener to compare a later
   # user steer with. The owner preflight calls this only after authorizing the

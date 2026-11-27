@@ -14,10 +14,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity
+  alias CodexPooler.Gateway.Payloads.NativeMailboxContinuation
   alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases, as: SessionAliases
@@ -453,7 +455,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         })
 
       {:error, %{code: :duplicate_request} = reason} ->
-        websocket_turn_claim_duplicate(prepared.request_options, reason)
+        websocket_turn_claim_duplicate(prepared.request_options, reason, payload)
 
       # The claim rolled back; an admitted compaction must not keep the
       # owner waiting for a turn that will not run.
@@ -1352,7 +1354,30 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   # Owner forwarding off: the resend meets the turn claim instead of the owner
   # replay preflight, with the same rule (findings#254 row 254-100).
-  defp websocket_turn_claim_duplicate(%RequestOptions{} = request_options, reason) do
+  defp websocket_turn_claim_duplicate(
+         %RequestOptions{continuity: %{codex_session: %CodexSession{} = session, semantic_turn_key: <<_::256>> = key, request_claim_key: claim}, extra: %{native_turn_progress: <<_::256>> = progress, socket_last_completed_native_response: %{interrupted_request_claim: producer}}} = options,
+         %{resend_disposition: :anchor_unavailable} = reason,
+         payload
+       )
+       when is_binary(producer) do
+    # Full history may select a tool-continuation claim that an older replica
+    # derives from the entire request. Let the client supply that history
+    # before buying work; the user-message position cannot identify new mail.
+    if NativeTurnContinuation.steered_continuation?(payload, options, key) and
+         NativeMailboxContinuation.addressed_increment?(payload, options) and
+         claim == WebsocketTurnIdentity.steered_claim_key(key, progress) and
+         Accounting.older_settled_steer?(session.id, key, claim, producer) do
+      refusal = error(400, "previous_response_not_found", "Send the full input without previous_response_id to continue with the new agent messages.", "previous_response_id")
+      log_replay_rejection_line(options, session, :anchored_mailbox_requires_full_history, "/backend-api/codex/responses", "websocket_turn_claim", public_code: refusal.code)
+      {:error, refusal}
+    else
+      ordinary_websocket_turn_claim_duplicate(options, reason)
+    end
+  end
+
+  defp websocket_turn_claim_duplicate(options, reason, _payload), do: ordinary_websocket_turn_claim_duplicate(options, reason)
+
+  defp ordinary_websocket_turn_claim_duplicate(%RequestOptions{} = request_options, reason) do
     with :terminal_predecessor <- Map.get(reason, :resend_disposition),
          {:ok, session, input} <- turn_claim_refusal_input(request_options),
          {:ok, metadata} <- Accounting.final_refusal_predecessor(session, input),

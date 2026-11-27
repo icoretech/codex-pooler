@@ -4649,7 +4649,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          pid,
          %PreparedWebsocketFrame{variant: :native_response_create, semantic_turn_key: <<_::256>> = key, payload: payload, request_options: %RequestOptions{} = options}
        ) do
-    state = Map.update(state, :response_task_turns, %{pid => key}, &Map.put(&1, pid, key))
+    turn = {key, options.continuity.request_claim_key}
+    state = Map.update(state, :response_task_turns, %{pid => turn}, &Map.put(&1, pid, turn))
 
     # Carried forward only when it is the very progress this frame's row
     # records, so the socket never knows a turn's history its rows do not.
@@ -4685,9 +4686,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp record_completed_native_response(state, pid, data) do
     with {:ok, outcome} <- StreamProtocol.terminal_outcome(data),
          true <- anchorable_native_outcome?(outcome),
-         <<_::256>> = key <- state |> Map.get(:response_task_turns, %{}) |> Map.get(pid),
+         {<<_::256>> = key, claim} <- state |> Map.get(:response_task_turns, %{}) |> Map.get(pid),
          {:ok, %{"response" => %{"id" => id}}} when is_binary(id) and id != "" <- CodexPooler.JSON.decode(data) do
       record = %{semantic_turn_key: key, response_digest: NativeCodexTurnMetadata.response_id_digest(id)}
+      record = if outcome.kind == :incomplete, do: Map.put(record, :interrupted_request_claim, claim), else: record
 
       # The progress of the request that produced this response, so the next
       # frame anchored on it can be read in full-history terms (row 206-412).
