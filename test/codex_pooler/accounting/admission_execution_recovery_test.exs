@@ -471,7 +471,7 @@ defmodule CodexPooler.Accounting.AdmissionExecutionRecoveryTest do
     assert_receive {:DOWN, ^holder_monitor, :process, ^holder, :normal}, 15_000
 
     UnboxedFixture.run_unboxed(fn ->
-      assert {:ok, %{admission_only_requests_recovered: 1}} = AdmissionExecutionRecovery.recover_published(DateTime.utc_now(), limit: 2, timeout: 500)
+      assert {:ok, %{admission_only_requests_recovered: 1}} = AdmissionExecutionRecovery.recover_published(DateTime.utc_now(), limit: 2)
       assert ledger_kinds(older) == ["release", "reservation"]
       assert ledger_kinds(later) == ["release", "reservation"]
     end)
