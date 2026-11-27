@@ -455,6 +455,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
   end
 
   test "websocket final assignment model miss emits one sanitized terminal failure" do
+    upstream_request_id = "req_model_miss"
+
     upstream =
       start_upstream(
         FakeUpstream.sse_stream(
@@ -475,6 +477,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
         )
       )
 
+    :ok = FakeUpstream.set_websocket_upgrade_headers(upstream, [{"x-request-id", upstream_request_id}])
     setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -501,6 +504,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     assert attempt.status == "failed"
     assert attempt.retryable == false
     assert attempt.network_error_code == "upstream_model_unavailable"
+    assert attempt.response_metadata["upstream_request_id"] == upstream_request_id
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -703,6 +707,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
 
   @tag :feature_websocket_connection_limit_retry
   test "websocket connection limit first event retries same assignment without demotion" do
+    upstream_request_id = "req_first_socket_limit"
+
     upstream =
       start_upstream(
         # Strict finite scenario: the connection-limit terminal arrives on the
@@ -725,6 +731,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
           strict_native_response("resp_ws_connection_limit_retry", 2, 4, 3)
         ])
       )
+
+    :ok = FakeUpstream.set_websocket_upgrade_headers(upstream, [{"x-oai-request-id", upstream_request_id}])
 
     fallback_upstream =
       start_upstream(
@@ -797,6 +805,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     assert first_attempt.status == "retryable_failed"
     assert first_attempt.retryable == true
     assert first_attempt.network_error_code == "websocket_connection_limit_reached"
+    assert first_attempt.response_metadata["upstream_request_id"] == upstream_request_id
     assert first_attempt.response_metadata["stream_failure_stage"] == "first_event"
 
     assert first_attempt.response_metadata["stream_error_code"] ==

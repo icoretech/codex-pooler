@@ -149,6 +149,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   end
 
   test "established native websocket moves a quota-rejected full-history turn to another account" do
+    upstream_request_id = "req_quota_rejection"
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
@@ -172,6 +173,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
           strict_native_request(1, rejection)
         ])
       )
+
+    :ok = FakeUpstream.set_websocket_upgrade_headers(upstream, [{"x-oai-request-id", upstream_request_id}])
 
     fallback_upstream =
       start_upstream(
@@ -266,6 +269,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert failed.pool_upstream_assignment_id == setup.assignment.id
     assert failed.status == "retryable_failed"
     assert failed.response_metadata["quota_rejection_before_output"] == true
+    assert failed.response_metadata["upstream_request_id"] == upstream_request_id
     assert succeeded.pool_upstream_assignment_id == fallback.assignment.id
     assert succeeded.status == "succeeded"
 

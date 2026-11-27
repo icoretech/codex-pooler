@@ -1525,6 +1525,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
   defp assert_owner_connection_limit_recovery(route) when route in [:direct, :proxy] do
     anchor = "resp_owner_limit_anchor_#{route}"
     recovered = "resp_owner_limit_recovered_#{route}"
+    upstream_request_id = "req_limit_upgrade_#{route}"
     release_ref = make_ref()
 
     upstream =
@@ -1548,6 +1549,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
         ])
       )
 
+    :ok = FakeUpstream.set_websocket_upgrade_headers(upstream, [{"x-request-id", upstream_request_id}])
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     turn_state = "owner-limit-recovery-#{route}-#{System.unique_integer([:positive])}"
@@ -1665,6 +1667,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
       assert anchor_request.status == "succeeded"
       assert limit_request.status == "failed"
       assert limit_request.last_error_code == "websocket_connection_limit_reached"
+      limit_attempt = Repo.get_by!(Attempt, request_id: limit_request.id)
+      assert limit_attempt.response_metadata["upstream_request_id"] == upstream_request_id
       assert stale_request.status == "failed"
       assert stale_request.last_error_code == "stream_incomplete"
       assert recovery_request.status == "succeeded"
