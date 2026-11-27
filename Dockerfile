@@ -10,7 +10,7 @@ WORKDIR /app
 COPY assets/package.json assets/package-lock.json ./assets/
 RUN npm ci --prefix assets
 
-FROM elixir:1.20.5-otp-29-slim AS builder
+FROM elixir:1.20.5-otp-29-slim@sha256:85b39770dd49e943ce86f2a8dcf7fc64c909c8df902d7dc8e69f405ecaab3769 AS builder
 
 ARG DEBIAN_MIRROR
 ARG DEBIAN_SECURITY_MIRROR

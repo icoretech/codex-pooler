@@ -35,6 +35,10 @@ function fixture(t) {
 	])
 		copyFileSync(resolve("scripts/ci", name), join(repo, "scripts/ci", name));
 	writeFileSync(join(repo, "mix.lock"), "%{}\n");
+	writeFileSync(
+		join(repo, "mise.toml"),
+		'[tools]\nelixir = "1.2.3-otp-29"\nerlang = "29.1.2"\n',
+	);
 	writeFileSync(join(repo, ".gitignore"), "tmp/\n");
 	const git = (...args) =>
 		execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString().trim();
@@ -82,6 +86,7 @@ else if(['container','network','volume'].includes(a[0]) && a[1]==='rm') {
   s.resources=s.resources.filter(r=>r.name!==a.at(-1)); save();
 }
 else if(['volume','network'].includes(a[0]) && a[1]==='create') { s.resources.push({kind:a[0],name:a.at(-1),owner:label()});save();console.log(a.at(-1)); }
+else if(a[0]==='run' && a.includes('elixir')) console.log(process.env.TOOL_VERSIONS || '1.2.3-otp-29 29.1.2');
 else if(a[0]==='run' && a.includes('--rm')) fs.readFileSync(0);
 else if(a[0]==='create' || (a[0]==='run' && a.includes('-d'))) { s.resources.push({kind:'container',name:value('--name'),owner:label()});save();console.log(value('--name')); }
 else if(a[0]==='logs')console.log('lane fixture log');
@@ -163,6 +168,9 @@ test("tools cache restores the image without another build and rejects a mismatc
 	assert.equal(f.calls().filter((args) => args[0] === "load").length, 2);
 	assert.notEqual(rejected.status, 0);
 	assert.match(rejected.stderr, /tools image differs/);
+	const staleRuntime = f.run("tools", { TOOL_VERSIONS: "1.2.3-otp-29 29.1.1" });
+	assert.notEqual(staleRuntime.status, 0);
+	assert.match(staleRuntime.stderr, /tools runtime differs from mise\.toml/);
 });
 
 test("tools outputs use executable runtime identity rather than attestation metadata", (t) => {

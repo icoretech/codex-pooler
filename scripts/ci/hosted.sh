@@ -61,7 +61,15 @@ fi
 tools_hash=$(sha256sum scripts/ci/Dockerfile | cut -d ' ' -f 1)
 image="pooler-ci-hosted-tools:amd64-${tools_hash:0:20}"
 verify_tools() {
+  local expected actual
   [[ $(docker_cli image inspect --format '{{.Os}} {{.Architecture}} {{index .Config.Labels "io.codex-pooler.ci.tools-source"}}' "$image") == "linux amd64 $tools_hash" ]] || fail 'tools image differs from Dockerfile or platform'
+  expected=$(python3 -c 'import tomllib; tools = tomllib.load(open("mise.toml", "rb"))["tools"]; print(tools["elixir"], tools["erlang"])')
+  actual=$(docker_cli run --rm --network none "$image" elixir -e '
+    otp = System.otp_release()
+    patch = File.read!(Path.join([:code.root_dir(), "releases", otp, "OTP_VERSION"])) |> String.trim()
+    IO.puts("#{System.version()}-otp-#{otp} #{patch}")
+  ')
+  [[ $actual == "$expected" ]] || fail "tools runtime differs from mise.toml (expected $expected, got $actual)"
 }
 if [[ $mode == tools ]]; then
   mkdir -p "$tools_dir"
