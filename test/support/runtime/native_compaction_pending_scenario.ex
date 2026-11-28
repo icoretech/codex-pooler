@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityDrain, ActivityRegistry, UpstreamWebsocketSession, WebsocketOwnerSession}
   alias CodexPooler.Repo
-  alias CodexPoolerWeb.Runtime.{DownstreamKeepaliveScenario, WebsocketCleanupFence}
+  alias CodexPoolerWeb.Runtime.{DownstreamKeepaliveScenario, NativeCompactionPendingClient, WebsocketCleanupFence}
 
   @path "/backend-api/codex/responses"
   @compact_path @path <> "/compact"
@@ -29,7 +29,8 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     hold = make_ref()
     pacer = if outcome == :source_progress, do: start_source_pacer!(hold)
     pacer_monitor = if pacer, do: Process.monitor(pacer)
-    expectations = sequence(hold, form, pacer)
+    notify = pacer || barrier_recipient(hold, Keyword.get(opts, :barrier_delay_ms, 0))
+    expectations = sequence(hold, form, pacer, notify)
     expectations = if outcome in [:complete, :source_progress], do: expectations, else: Enum.take(expectations, 2)
     # provenance: synthetic_adversarial; the optional paced compact preserves the measured event order, not provider timing.
     upstream = start_upstream(FakeUpstream.strict_sequence(expectations))
@@ -44,7 +45,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
       assert node(owner.owner_pid) == peer
     end
 
-    client = connect!(setup, thread, window) |> Map.put(:answer_pings?, outcome != :ignore_pong)
+    client = connect!(setup, thread, window, outcome != :ignore_pong)
     on_exit(fn -> release_on_exit(upstream, hold) end)
     first = payload(setup, mode, thread, window, [prompt()], Ecto.UUID.generate())
     {client, first_events} = client |> send!(first) |> terminal!()
@@ -244,7 +245,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     assert FakeUpstream.physical_counts(upstream).websocket_generation == 3
     assert FakeUpstream.physical_counts(upstream).http_generation == 0
     assert :ok = FakeUpstream.verify!(upstream)
-    Mint.HTTP.close(client.conn)
+    GenServer.stop(client.reader)
     WebsocketCleanupFence.await_session_cleanups!()
     :ok
   end
@@ -264,14 +265,14 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     assert %{"termination_source" => "pooler_receive_timeout", "phase" => "receive_timeout"} = attempt.response_metadata["transport_failure"]
     assert FakeUpstream.physical_counts(ctx.upstream).websocket_generation == 2
     assert FakeUpstream.physical_counts(ctx.upstream).http_generation == 0
-    Mint.HTTP.close(client.conn)
+    GenServer.stop(client.reader)
     FakeUpstream.release_remaining_frames(ctx.upstream, ctx.hold)
     WebsocketCleanupFence.await_session_cleanups!()
     :ok
   end
 
   defp client_close!(ctx) do
-    Mint.HTTP.close(ctx.client.conn)
+    GenServer.stop(ctx.client.reader)
     await!(fn -> Repo.reload!(ctx.request).status == "failed" end)
     assert Repo.reload!(ctx.request).last_error_code == "client_disconnected"
     assert FakeUpstream.physical_counts(ctx.upstream).websocket_generation == 2
@@ -306,7 +307,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     if owner_drain, do: Task.await(owner_drain, @budget)
     await!(fn -> Repo.reload!(ctx.request).status == "failed" end)
     assert Repo.reload!(ctx.request).last_error_code == "owner_drained"
-    Mint.HTTP.close(client.conn)
+    GenServer.stop(client.reader)
     FakeUpstream.release_remaining_frames(ctx.upstream, ctx.hold)
     WebsocketCleanupFence.await_session_cleanups!()
     :ok
@@ -352,7 +353,7 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     try do
       {client, count} = until_watchdog!(ctx.client, 0)
       assert count <= 1, "a frozen receive actor continued authorizing pending text"
-      Mint.HTTP.close(client.conn)
+      GenServer.stop(client.reader)
     after
       resume_source(upstream)
     end
@@ -415,62 +416,46 @@ defmodule CodexPoolerWeb.Runtime.NativeCompactionPendingScenario do
     :erpc.call(peer, Application, :put_env, [:codex_pooler, UpstreamWebsocketSession, Keyword.put(previous, :compaction_pending_interval_ms, interval)])
   end
 
-  defp sequence(hold, form, pacer) do
+  defp barrier_recipient(_hold, 0), do: self()
+
+  defp barrier_recipient(hold, delay) do
+    parent = self()
+
+    start_supervised!(
+      {Task,
+       fn ->
+         assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^hold} = barrier, @budget
+         Process.send_after(parent, barrier, delay)
+       end}
+    )
+  end
+
+  defp sequence(hold, form, pacer, notify) do
     compact_json = if form == :anchored, do: [valid: true, equals: %{"previous_response_id" => @anchor}], else: [valid: true, forbidden: ["previous_response_id"]]
     compact_events = if pacer, do: source_progress_events(), else: events(@compact, [item()])
 
     [
       FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames(events(@anchor, []))),
-      FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: compact_json, respond: FakeUpstream.barrier_websocket_frames(compact_events, notify: pacer || self(), release_ref: hold)),
+      FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, json: compact_json, respond: FakeUpstream.barrier_websocket_frames(compact_events, notify: notify, release_ref: hold)),
       FakeUpstream.expect_request(method: "WEBSOCKET", websocket_connection_ordinal: 1, respond: FakeUpstream.websocket_text_frames(events("resp_pending_resume000000001", [])))
     ]
   end
 
-  defp connect!(setup, thread, window) do
+  defp connect!(setup, thread, window, answer_pings?) do
     port = start_public_endpoint!()
     sockets = WebsocketCleanupFence.listener_sockets()
     headers = [{"session-id", thread}, {"thread-id", thread}, {"x-codex-window-id", window}]
-    {conn, websocket, ref, _headers} = public_websocket_connect_with_request_headers!(port, setup, thread, @path, headers)
-    %{conn: conn, websocket: websocket, ref: ref, queued: [], socket: WebsocketCleanupFence.await_new_listener_socket!(sockets)}
+    connect = fn -> public_websocket_connect_with_request_headers!(port, setup, thread, @path, headers) end
+    reader = start_supervised!({NativeCompactionPendingClient, {self(), connect, answer_pings?}})
+    %{reader: reader, socket: WebsocketCleanupFence.await_new_listener_socket!(sockets)}
   end
 
   defp send!(client, payload) do
-    {conn, websocket} = public_websocket_send_text!(client.conn, client.websocket, client.ref, CodexPooler.JSON.encode!(payload))
-    %{client | conn: conn, websocket: websocket}
+    :ok = NativeCompactionPendingClient.send_request!(client.reader, payload)
+    client
   end
 
-  # This consumer deliberately bypasses the generic helper that hides controls.
-  # Ping/Pong frames never renew its text-only idle deadline.
-  defp next_text!(client, timeout), do: read_text!(client, System.monotonic_time(:millisecond) + timeout)
-  defp read_text!(%{queued: [{:closed, code} | _rest]}, _deadline), do: flunk("socket closed before terminal: #{code}")
-  defp read_text!(%{queued: [text | rest]} = client, _deadline) when is_binary(text), do: {%{client | queued: rest}, CodexPooler.JSON.decode!(text)}
-
-  defp read_text!(client, deadline) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-    message = receive_mint_socket_message!(client.conn, remaining, "text-only client watchdog expired")
-    {:ok, conn, responses} = Mint.WebSocket.stream(client.conn, message)
-    client = Enum.reduce(responses, %{client | conn: conn}, &decode_response/2)
-    read_text!(client, deadline)
-  end
-
-  defp decode_response({:data, ref, data}, %{ref: ref} = client) do
-    {:ok, websocket, frames} = Mint.WebSocket.decode(client.websocket, data)
-    Enum.reduce(frames, %{client | websocket: websocket}, &decode_frame/2)
-  end
-
-  defp decode_response(_response, client), do: client
-  defp decode_frame({:text, text}, client), do: %{client | queued: client.queued ++ [text]}
-
-  defp decode_frame({:ping, _data}, %{answer_pings?: false} = client), do: client
-
-  defp decode_frame({:ping, data}, client) do
-    {:ok, websocket, encoded} = Mint.WebSocket.encode(client.websocket, {:pong, data})
-    {:ok, conn} = Mint.WebSocket.stream_request_body(client.conn, client.ref, encoded)
-    %{client | conn: conn, websocket: websocket}
-  end
-
-  defp decode_frame({:pong, _data}, client), do: client
-  defp decode_frame({:close, code, _reason}, client), do: %{client | queued: client.queued ++ [{:closed, code}]}
+  defp next_text!(client, timeout), do: {client, NativeCompactionPendingClient.next_text!(client.reader, timeout)}
 
   defp pending_until!(client, deadline, count) do
     {client, control} = next_text!(client, @watchdog)

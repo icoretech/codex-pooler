@@ -27,6 +27,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketNativeCompactionPendingTes
     end
   end
 
+  @tag :pending_barrier_regression
+  @tag slow: "the compact test client must answer real Pings while the source barrier notification is delayed beyond the 2 s downstream idle deadline"
+  test "the local compact client receives its source timeout while waiting for a delayed barrier" do
+    assert :ok = NativeCompactionPendingScenario.run!("full", :local, :full_history, outcome: :timeout, barrier_delay_ms: 2_500)
+  end
+
   @tag slow: "the actual downstream idle deadline closes a client that ignores pending-control Pings"
   test "pending text does not renew the server idle deadline without a client Pong" do
     assert :ok = NativeCompactionPendingScenario.run!("full", :direct, :anchored, outcome: :ignore_pong)
