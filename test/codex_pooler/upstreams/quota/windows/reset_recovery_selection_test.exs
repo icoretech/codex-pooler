@@ -153,6 +153,26 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelectionTest do
     end
   end
 
+  test "monthly progress on a mixed receipt cannot retire independent weekly pressure" do
+    base = snapshot("primary", 43_200)
+    [monthly, witness] = base.raw_windows
+    monthly = %{monthly | used_percent: Decimal.new(99)}
+    weekly = %{monthly | window_kind: "secondary", window_minutes: 10_080}
+    monthly_descriptor = %{"window_kind" => "primary", "window_minutes" => 43_200}
+    weekly_descriptor = %{"window_kind" => "secondary", "window_minutes" => 10_080}
+    receipt = Map.merge(base.redemption, %{"finished_at" => DateTime.to_iso8601(DateTime.add(@consumed, 1)), "credential_epoch" => 2, "included_window_descriptors" => [weekly_descriptor, monthly_descriptor]})
+    binding = receipt |> Map.take(~w(attempt_id generation consumed_at credential_epoch)) |> Map.put("descriptor", monthly_descriptor)
+    marker = %{"binding" => binding, "first_provider_at" => DateTime.to_iso8601(DateTime.add(@consumed, 10)), "last_provider_at" => DateTime.to_iso8601(@now), "reset_at" => DateTime.to_iso8601(monthly.reset_at), "accepted_at" => DateTime.to_iso8601(@now)}
+    witness = %{witness | used_percent: Decimal.new(7), reset_at: monthly.reset_at, metadata: %{"credential_epoch" => 2, "__quota_applied_reset_progress_v1" => marker, "rate_limit_allowed" => true, "rate_limit_reached" => false}}
+    mixed = %{base | redemption: receipt, raw_windows: [weekly, monthly, witness]}
+
+    assert ResetRecoverySelection.reject_recovered_prior_cycles(mixed.raw_windows, mixed) == [weekly, witness]
+
+    for unbound <- [put_in(mixed.redemption["included_window_descriptors"], [weekly_descriptor]), put_in(mixed.redemption["credential_epoch"], 3)] do
+      assert ResetRecoverySelection.reject_recovered_prior_cycles(unbound.raw_windows, unbound) == mixed.raw_windows
+    end
+  end
+
   defp selected(snapshot), do: RoutingQuotaSnapshot.effective_windows(snapshot)
 
   defp snapshot(kind \\ "secondary", minutes \\ 10_080) do

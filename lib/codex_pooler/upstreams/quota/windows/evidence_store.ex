@@ -9,6 +9,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.Windows.AppliedResetProgress
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.RelativeLiveness
   alias CodexPooler.Upstreams.Quota.Windows.RuntimeCoherence
@@ -58,6 +59,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       |> Quota.AccountQuotaWindow.changeset(
         evidence
         |> Evidence.to_window_attrs()
+        |> Map.update!(:metadata, &AppliedResetProgress.clear/1)
         |> Map.put(:upstream_identity_id, identity_id)
         |> put_timestamps()
       )
@@ -78,18 +80,22 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @spec record_evidence(identity_ref(), map(), DateTime.t(), DateTime.t()) ::
           {:ok, Quota.AccountQuotaWindow.t()}
           | {:error, Ecto.Changeset.t() | Evidence.errors() | map()}
-  def record_evidence(identity_or_id, attrs, observed_at, timestamp) do
+  def record_evidence(identity_or_id, attrs, observed_at, timestamp), do: record_evidence(identity_or_id, attrs, observed_at, timestamp, nil)
+
+  @spec record_evidence(identity_ref(), map(), DateTime.t(), DateTime.t(), AppliedResetProgress.receipt_capacity()) ::
+          {:ok, Quota.AccountQuotaWindow.t()} | {:error, Ecto.Changeset.t() | Evidence.errors() | map()}
+  def record_evidence(identity_or_id, attrs, observed_at, timestamp, receipt_capacity) do
     if Repo.in_transaction?() do
-      record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp)
+      record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp, receipt_capacity)
     else
-      record_evidence_in_new_transaction(identity_or_id, attrs, observed_at, timestamp)
+      record_evidence_in_new_transaction(identity_or_id, attrs, observed_at, timestamp, receipt_capacity)
     end
   end
 
-  defp record_evidence_in_new_transaction(identity_or_id, attrs, observed_at, timestamp) do
+  defp record_evidence_in_new_transaction(identity_or_id, attrs, observed_at, timestamp, receipt_capacity) do
     Repo.transaction(fn ->
       identity_or_id
-      |> record_evidence_in_transaction(attrs, observed_at, timestamp)
+      |> record_evidence_in_transaction(attrs, observed_at, timestamp, receipt_capacity)
       |> unwrap_record_evidence_transaction()
     end)
   end
@@ -97,20 +103,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp unwrap_record_evidence_transaction({:ok, window}), do: window
   defp unwrap_record_evidence_transaction({:error, reason}), do: Repo.rollback(reason)
 
-  defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp) do
+  defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp, receipt_capacity) do
     with {:ok, evidence} <- Evidence.new(attrs, observed_at),
          identity_id when is_binary(identity_id) <- evidence_identity_id(identity_or_id, attrs) do
-      lock_evidence_identity!(identity_id)
+      reset_context = (lock_evidence_context!(identity_id) || %{}) |> Map.put(:receipt_capacity, receipt_capacity)
 
       attrs =
         evidence
         |> Evidence.to_window_attrs()
+        |> Map.update!(:metadata, &AppliedResetProgress.clear/1)
         |> Map.put(:upstream_identity_id, identity_id)
 
       with {:ok, existing} <- get_existing_evidence(identity_id, evidence),
            :ok <- validate_initial_relative_weekly_observation(existing, evidence, timestamp) do
         timestamped_attrs =
-          merge_attrs(existing, attrs, evidence, timestamp)
+          merge_attrs(existing, attrs, evidence, timestamp, reset_context)
           |> retain_spark_permission_observation(existing, evidence)
           |> AutomaticConfirmation.retain(existing)
           |> UsageCoherence.observe(evidence, timestamp)
@@ -121,7 +128,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           |> Quota.AccountQuotaWindow.changeset(timestamped_attrs)
           |> Repo.insert_or_update()
 
-        clear_provider_candidates_after_runtime(result, evidence, existing, identity_id)
+        clear_provider_candidates_after_runtime(result, evidence, existing, identity_id, reset_context)
       end
     else
       {:error, _errors} = error -> error
@@ -172,20 +179,19 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   """
   @spec lock_evidence_identity!(Ecto.UUID.t()) :: :ok
   def lock_evidence_identity!(identity_id) when is_binary(identity_id) do
-    advisory_lock_evidence_identity(identity_id)
-    lock_evidence_identity_reference(identity_id)
+    _context = lock_evidence_context!(identity_id)
+    :ok
   end
 
-  defp lock_evidence_identity_reference(identity_id) do
-    _identity_id =
-      Repo.one(
-        from identity in UpstreamIdentity,
-          where: identity.id == ^identity_id,
-          select: identity.id,
-          lock: "FOR KEY SHARE"
-      )
+  defp lock_evidence_context!(identity_id) do
+    advisory_lock_evidence_identity(identity_id)
 
-    :ok
+    Repo.one(
+      from identity in UpstreamIdentity,
+        where: identity.id == ^identity_id,
+        select: %{credential_epoch: fragment("?->'credential_epoch'", identity.metadata), redemption: fragment("?->'saved_reset_redemption'", identity.metadata)},
+        lock: "FOR KEY SHARE"
+    )
   end
 
   defp advisory_lock_evidence_identity(identity_id) do
@@ -436,7 +442,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       optional_string(window.raw_metered_feature) == optional_string(evidence.raw_metered_feature)
   end
 
-  defp merge_attrs(%Quota.AccountQuotaWindow{id: nil} = existing, attrs, evidence, timestamp) do
+  defp merge_attrs(%Quota.AccountQuotaWindow{id: nil} = existing, attrs, evidence, timestamp, _reset_context) do
     attrs
     |> put_timestamps(existing)
     |> put_accepted_positive_weekly_barrier(evidence, existing, timestamp)
@@ -447,39 +453,48 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Quota.AccountQuotaWindow{} = existing,
          attrs,
          %Evidence{} = evidence,
-         timestamp
+         timestamp,
+         reset_context
        ) do
     merged_attrs =
-      cond do
-        unproven_model_weekly_zero_observation?(evidence, existing) ->
-          rejected_snapshot_without_sync_attrs(existing, timestamp)
-
-        invalid_relative_weekly_observation?(evidence, existing, timestamp) ->
-          rejected_snapshot_without_sync_attrs(existing, timestamp)
-
-        non_candidate_weekly_zero_observation?(evidence, existing) ->
-          rejected_snapshot_attrs(existing, evidence, timestamp)
-
-        equivalent_account_anchor_maintenance?(evidence, existing, timestamp) ->
-          equivalent_account_anchor_attrs(existing, attrs, evidence, timestamp)
-
-        runtime_corroborated_weekly_restart?(evidence, existing, timestamp) ->
-          runtime_corroborated_weekly_restart_attrs(existing, attrs, evidence, timestamp)
-
-        unconfirmed_weekly_zero_observation?(evidence, existing, timestamp) ->
-          sliding_restart_attrs(existing, attrs, evidence, timestamp)
-
-        floating_model_weekly_attempt?(evidence, existing, timestamp) ->
-          floating_model_weekly_attrs(existing, attrs, evidence, timestamp)
-
-        true ->
-          merge_attrs_by_decision(existing, attrs, evidence, timestamp)
+      case AppliedResetProgress.decide(existing, evidence, timestamp, reset_context) do
+        {:accept, marker} -> existing |> accepted_snapshot_attrs(attrs, timestamp) |> AppliedResetProgress.put_accepted(marker)
+        {:hold, metadata} -> candidate_snapshot_attrs(existing, metadata, timestamp)
+        :ordinary -> merge_ordinary_attrs(AppliedResetProgress.discard_interrupted(existing, evidence, reset_context), attrs, evidence, timestamp)
       end
 
     merged_attrs
     |> maybe_upgrade_explicit_zero_capacity(evidence, existing, timestamp)
     |> put_accepted_positive_weekly_barrier(evidence, existing, timestamp)
     |> put_primary_idle_display(existing, evidence, timestamp)
+  end
+
+  defp merge_ordinary_attrs(existing, attrs, evidence, timestamp) do
+    cond do
+      unproven_model_weekly_zero_observation?(evidence, existing) ->
+        rejected_snapshot_without_sync_attrs(existing, timestamp)
+
+      invalid_relative_weekly_observation?(evidence, existing, timestamp) ->
+        rejected_snapshot_without_sync_attrs(existing, timestamp)
+
+      non_candidate_weekly_zero_observation?(evidence, existing) ->
+        rejected_snapshot_attrs(existing, evidence, timestamp)
+
+      equivalent_account_anchor_maintenance?(evidence, existing, timestamp) ->
+        equivalent_account_anchor_attrs(existing, attrs, evidence, timestamp)
+
+      runtime_corroborated_weekly_restart?(evidence, existing, timestamp) ->
+        runtime_corroborated_weekly_restart_attrs(existing, attrs, evidence, timestamp)
+
+      unconfirmed_weekly_zero_observation?(evidence, existing, timestamp) ->
+        sliding_restart_attrs(existing, attrs, evidence, timestamp)
+
+      floating_model_weekly_attempt?(evidence, existing, timestamp) ->
+        floating_model_weekly_attrs(existing, attrs, evidence, timestamp)
+
+      true ->
+        merge_attrs_by_decision(existing, attrs, evidence, timestamp)
+    end
   end
 
   # A confirmed idle primary is a display fact, not a new quota cycle. Keep
@@ -2101,20 +2116,23 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          {:ok, window},
          %Evidence{source: source} = evidence,
          existing,
-         identity_id
+         identity_id,
+         reset_context
        )
        when source in @runtime_quota_sources do
-    if runtime_pressure_accepted?(window, existing) do
-      clear_matching_provider_candidates(evidence, identity_id)
+    ordinary_pressure? = runtime_pressure_accepted?(window, existing)
+
+    if ordinary_pressure? or AppliedResetProgress.check_runtime?(reset_context, evidence) do
+      clear_matching_provider_candidates(evidence, identity_id, ordinary_pressure?)
     end
 
     {:ok, window}
   end
 
-  defp clear_provider_candidates_after_runtime(result, _evidence, _existing, _identity_id),
+  defp clear_provider_candidates_after_runtime(result, _evidence, _existing, _identity_id, _reset_context),
     do: result
 
-  defp clear_matching_provider_candidates(evidence, identity_id) do
+  defp clear_matching_provider_candidates(evidence, identity_id, ordinary_pressure?) do
     {scope, family, model, upstream_model, quota_key, kind, minutes} =
       Evidence.logical_window_key(evidence)
 
@@ -2138,7 +2156,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
     Enum.each(provider_rows, fn provider ->
       metadata = provider.metadata || %{}
-      cleared_metadata = maybe_clear_runtime_compatible_candidate(metadata, evidence)
+
+      cleared_metadata =
+        case AppliedResetProgress.runtime_action(metadata, evidence) do
+          :keep -> metadata
+          :clear -> metadata |> AppliedResetProgress.clear() |> clear_candidate()
+          :ordinary when ordinary_pressure? -> maybe_clear_runtime_compatible_candidate(metadata, evidence)
+          :ordinary -> metadata
+        end
 
       if cleared_metadata != provider.metadata do
         provider

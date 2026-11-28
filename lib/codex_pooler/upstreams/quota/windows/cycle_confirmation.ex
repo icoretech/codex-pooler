@@ -64,6 +64,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.CycleConfirmation do
   # (`@weekly_restart_confirmation_span_seconds`); keep them together.
   @positive_candidate_confirmation_seconds 3 * 60
 
+  @spec positive_confirmation_seconds() :: pos_integer()
+  def positive_confirmation_seconds, do: @positive_candidate_confirmation_seconds
+
   @spec observe_positive(map(), AccountQuotaWindow.t(), Evidence.t(), DateTime.t()) :: map()
   def observe_positive(attrs, existing, evidence, timestamp) do
     if evidence.quota_scope == "account" and evidence.window_minutes == 10_080 and

@@ -16,6 +16,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
@@ -2304,15 +2305,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     if claim["attempt_id"] == redemption["attempt_id"] and claim["generation"] == redemption["generation"] do
       put_captured_confirmation_resources(claim, redemption)
     else
-      Map.put(claim, "included_window_descriptors", reset_confirmation_descriptors(identity, timestamp))
+      claim
+      |> Map.put("credential_epoch", CredentialFencing.credential_epoch(identity))
+      |> Map.put("included_window_descriptors", reset_confirmation_descriptors(identity, timestamp))
     end
   end
 
   defp put_captured_confirmation_resources(base, redemption) do
-    case Map.fetch(redemption, "included_window_descriptors") do
-      {:ok, descriptors} -> Map.put(base, "included_window_descriptors", descriptors)
-      :error -> base
-    end
+    Map.merge(base, Map.take(redemption, ["included_window_descriptors", "credential_epoch"]))
   end
 
   defp put_claim_gateway_auto_context(%{identity: _identity} = claim, gateway_auto_context)

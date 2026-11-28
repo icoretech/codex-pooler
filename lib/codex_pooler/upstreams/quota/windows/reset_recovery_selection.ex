@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
 
   alias CodexPooler.Quotas.{CapacityFacts, Evidence}
   alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, CapacityFactsStore, RoutingQuotaSnapshot, WindowSelector}
+  alias CodexPooler.Upstreams.Quota.Windows.AppliedResetProgress
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
   alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
@@ -16,23 +17,30 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
   @spec reject_recovered_prior_cycles([AccountQuotaWindow.t()], RoutingQuotaSnapshot.t()) :: [AccountQuotaWindow.t()]
   def reject_recovered_prior_cycles(windows, snapshot) do
     with {:ok, consumed_at, finished_at, descriptors} <- confirmed_reset(snapshot),
-         true <- included_permission?(snapshot, consumed_at),
-         witnesses <- Enum.filter(windows, &recovery_witness?(&1, snapshot, consumed_at)),
-         true <- Enum.all?(descriptors, fn descriptor -> Enum.any?(witnesses, &matches_descriptor?(&1, descriptor)) end) do
+         true <- included_permission?(snapshot, consumed_at) do
+      witnesses = Enum.filter(windows, &recovery_witness?(&1, snapshot, consumed_at))
+      all_witnessed? = Enum.all?(descriptors, fn descriptor -> Enum.any?(witnesses, &matches_descriptor?(&1, descriptor)) end)
+
       Enum.reject(windows, fn window ->
-        (preconsume_measurement?(window, consumed_at) and
-           Enum.any?(descriptors, &recovered_resource?(window, &1, witnesses))) or
-          superseded_partial_measurement?(window, consumed_at, finished_at, descriptors, witnesses, snapshot.as_of)
+        Enum.any?(witnesses, &AppliedResetProgress.supersedes?(&1, window, snapshot, finished_at)) or
+          (all_witnessed? and recovered_measurement?(window, consumed_at, finished_at, descriptors, witnesses, snapshot.as_of))
       end)
     else
       _unproven -> windows
     end
   end
 
+  defp recovered_measurement?(window, consumed, finished, descriptors, witnesses, as_of) do
+    (preconsume_measurement?(window, consumed) and Enum.any?(descriptors, &recovered_resource?(window, &1, witnesses))) or
+      superseded_partial_measurement?(window, consumed, finished, descriptors, witnesses, as_of)
+  end
+
   defp recovered_resource?(window, descriptor, witnesses),
     do: matches_descriptor?(window, descriptor) and Enum.any?(witnesses, &(matches_descriptor?(&1, descriptor) and later_cycle?(&1, window)))
 
-  defp confirmed_reset(%{redemption: redemption, as_of: as_of}) when is_map(redemption) do
+  @doc false
+  @spec confirmed_reset(map()) :: {:ok, DateTime.t(), DateTime.t(), [map()]} | :error
+  def confirmed_reset(%{redemption: redemption, as_of: as_of}) when is_map(redemption) do
     with true <- RedemptionLifecycle.phase(redemption) == RedemptionLifecycle.confirmed_by_quota(),
          true <- RedemptionLifecycle.applied_consume?(redemption),
          %{"code" => code} when code in ["reset", "already_redeemed", "target_redeemed"] <- redemption["result"],
@@ -52,7 +60,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ResetRecoverySelection do
     end
   end
 
-  defp confirmed_reset(_snapshot), do: :error
+  def confirmed_reset(_snapshot), do: :error
 
   defp valid_replay_version?(_redemption, 1, _as_of), do: true
 

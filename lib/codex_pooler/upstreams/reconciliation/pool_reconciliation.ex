@@ -15,6 +15,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.CapacityFactsStore
   alias CodexPooler.Upstreams.Quota.CreditBalanceStore
+  alias CodexPooler.Upstreams.Quota.Windows.AppliedResetProgress
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
@@ -713,6 +714,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   defp persist_unusable_capacity(identity, %UsageProbe.Result{capacity_facts: facts, capacity_observations: observations}, fence) do
     CredentialFencing.apply_usage_success(identity, fence, fn locked ->
       epoch = CredentialFencing.credential_epoch(locked)
+      AppliedResetProgress.invalidate_denied_receipt(locked.id, epoch, {facts, observations}, facts.observed_at)
       metadata = CapacityFactsStore.transition(locked.metadata, facts, epoch)
       metadata = CapacityFactsStore.record_observations(metadata, observations, epoch)
       {:ok, Repo.update!(Ecto.Changeset.change(locked, metadata: metadata))}
@@ -762,6 +764,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          broadcast?: broadcast?
        }) do
     credential_epoch = CredentialFencing.credential_epoch(identity)
+    receipt_capacity = {capacity_facts, capacity_observations}
+    AppliedResetProgress.invalidate_denied_receipt(identity.id, credential_epoch, receipt_capacity, observed_at)
 
     windows =
       Enum.map(windows, fn attrs ->
@@ -770,6 +774,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
     case Quota.Windows.upsert_quota_windows(identity, windows,
            delete_missing?: true,
+           receipt_capacity: receipt_capacity,
            covered_descriptors: covered_descriptors,
            identity_attrs: identity_attrs,
            broadcast?: broadcast?

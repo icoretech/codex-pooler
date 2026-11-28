@@ -89,9 +89,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     else
       Enum.reduce(windows, Multi.new(), fn attrs, multi ->
         Multi.run(multi, {:quota_window, Evidence.identity_key(attrs)}, fn _repo, _changes ->
+          timestamp = now()
           # Reason: Multi callback normalizes quota evidence errors at the boundary.
           # credo:disable-for-next-line Credo.Check.Refactor.Nesting
-          case EvidenceStore.record_evidence(identity, attrs, now()) do
+          case EvidenceStore.record_evidence(identity, attrs, timestamp, timestamp, opts[:receipt_capacity]) do
             {:ok, window} -> {:ok, window}
             {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
             {:error, errors} -> {:error, quota_window_error_changeset(identity, attrs, errors)}
