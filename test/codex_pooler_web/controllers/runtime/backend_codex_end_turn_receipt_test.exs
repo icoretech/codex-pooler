@@ -30,6 +30,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexEndTurnReceiptTest do
   @path "/backend-api/codex/responses"
   @prompt_sentinel "end-turn-receipt-prompt-sentinel"
   @delta_sentinel "end-turn-receipt-delta-sentinel"
+  @input_transformations [
+    %{"type" => "reasoning", "id" => "rs_fixture_first", "action" => "removed", "reason" => "prefix_mismatch"},
+    %{"type" => "reasoning", "id" => "rs_fixture_second", "action" => "removed", "reason" => "prefix_mismatch"}
+  ]
   @arms [{"true", true}, {"false", false}, {"absent", :absent}]
   @moduletag capture_log: true
 
@@ -71,7 +75,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexEndTurnReceiptTest do
   end
 
   for mode <- ["full", "lite"], owner? <- [false, true] do
-    test "#{mode} native websocket, owner forwarding #{owner?}: every completed turn's receipt names the class the provider sent" do
+    test "#{mode} native websocket, owner forwarding #{owner?}: completions relay ordered input transformations and record the end_turn class" do
       CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled, nil)
       Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, unquote(owner?))
       turns = Enum.map(@arms, fn {class, value} -> {class, FakeUpstream.websocket_text_frames(Enum.map(events("resp_end_turn_ws_#{class}", value), &frame/1))} end)
@@ -88,7 +92,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexEndTurnReceiptTest do
         Enum.reduce(Enum.with_index(@arms, 1), {conn, websocket}, fn {{class, _value}, ordinal}, {conn, websocket} ->
           {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, CodexPooler.JSON.encode!(turn_frame(setup, thread, class)))
           {conn, websocket, terminal} = receive_terminal(conn, websocket, ref)
-          assert terminal["type"] == "response.completed"
+          assert %{"type" => "response.completed", "response" => %{"id" => id, "input_transformations" => @input_transformations}} = terminal
+          assert id == "resp_end_turn_ws_#{class}"
           assert length(await_receipts(setup, ordinal)) == ordinal
           {conn, websocket}
         end)
@@ -103,6 +108,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexEndTurnReceiptTest do
         assert %{"outcome" => "delivered", "terminal_class" => "response.completed", "transport" => "websocket"} = receipt
         assert Enum.sort(Map.keys(receipt)) == ~w(end_turn frames_after_visible highest_frame_class outcome pushed_at terminal_class transport)
         refute inspect(attempt.response_metadata) =~ @delta_sentinel
+        refute Map.has_key?(attempt.response_metadata, "input_transformations")
       end
     end
   end
@@ -214,6 +220,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexEndTurnReceiptTest do
     response = %{"id" => response_id, "status" => "completed", "output" => [], "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}}
     response = if end_turn == :absent, do: response, else: Map.put(response, "end_turn", end_turn)
     {"response.completed", %{"type" => "response.completed", "response" => response}}
+  end
+
+  defp frame({"response.completed", payload}) do
+    payload
+    |> put_in(["response", "input_transformations"], @input_transformations)
+    |> CodexPooler.JSON.encode!()
   end
 
   defp frame({_type, payload}), do: CodexPooler.JSON.encode!(payload)
