@@ -313,7 +313,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
     legacy = project(%{"phase" => "confirmed_by_quota"})
     assert legacy.verification == :quota_confirmed
     assert legacy.provider_outcome == :unknown
-    assert legacy.summary == "The new quota cycle is confirmed."
+    assert legacy.summary == "Quota was usable at the last reset check."
     assert legacy.detail == @unknown_caveat
   end
 

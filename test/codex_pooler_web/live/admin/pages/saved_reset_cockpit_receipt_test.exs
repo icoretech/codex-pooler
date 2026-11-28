@@ -80,10 +80,11 @@ defmodule CodexPoolerWeb.Admin.SavedResetCockpitReceiptTest do
     end
   end
 
-  for state <- [:consuming, :ambiguous] do
+  for {state, outcome} <- [consuming: :unknown, ambiguous: :unknown, applied_pending: :applied, confirmed: :applied, provisional: :applied, reblocked: :applied, expired: :applied, consume_not_applied: :not_applied, manual_replacement_not_applied: :not_applied, legacy: :unknown] do
     @state state
+    @outcome outcome
 
-    test "list #{@state} meter accessibility excludes hidden legacy confirmation", context do
+    test "list #{@state} exposes the receipt through Banked Resets", context do
       %{identity: identity, now: now, conn: conn} = context
       identity |> Ecto.Changeset.change(metadata: Map.put(identity.metadata, "saved_reset_redemption", redemption(@state, now))) |> Repo.update!()
       {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
@@ -95,16 +96,16 @@ defmodule CodexPoolerWeb.Admin.SavedResetCockpitReceiptTest do
       assert has_element?(view, "#{meter}-bar[aria-label='2 saved resets'][aria-valuenow='2']")
       refute has_element?(view, "#{meter}-confirmation")
       refute has_element?(view, "#{meter} [data-role='upstream-saved-reset-consumed-at'], #{meter} [data-role='upstream-saved-reset-deadline']")
-      assert has_element?(view, "#{operation}[data-provider-outcome='unknown'][data-presentation='compact']")
-      assert has_element?(view, "#{operation} [data-role='saved-reset-view-status']", "View status")
+      refute has_element?(view, operation)
+      refute has_element?(view, "#upstream-account-#{identity.id} [data-role='saved-reset-view-status']")
       refute render(element(view, meter)) =~ "Not reported"
       refute render(element(view, meter)) =~ "Reset consumed"
 
-      view |> element("#{operation} [data-role='saved-reset-view-status']") |> render_click()
-      assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-provider-outcome='unknown']")
+      view |> element("#{meter}-open[aria-haspopup='dialog']") |> render_click()
+      assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-provider-outcome='#{@outcome}']")
       assert has_element?(view, "#saved-reset-expiration-row-0")
       assert has_element?(view, "#saved-reset-policy-form[data-saved-reset-form]")
-      refute has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-consumed-at']")
+      assert has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-consumed-at']") == (@outcome == :applied)
       refute html =~ "sample-private-provider-value"
       capture_html!("list_#{@state}_bank", render(view))
       record_evidence!("list_#{@state}", context.fake)
@@ -119,8 +120,16 @@ defmodule CodexPoolerWeb.Admin.SavedResetCockpitReceiptTest do
 
   defp redemption(:legacy, now), do: %{"phase" => "consumed_pending_probe", "started_at" => DateTime.to_iso8601(DateTime.add(now, -3, :minute))}
 
+  defp redemption(:consume_not_applied, now) do
+    %{"phase" => "consume_not_applied", "status" => "failed", "finished_at" => DateTime.to_iso8601(now), "result" => %{"code" => "consume_not_applied", "applied" => false}, "provider_replay" => %{"version" => 1, "provider_dispatches" => 0}}
+  end
+
+  defp redemption(:manual_replacement_not_applied, now) do
+    %{"phase" => "manual_replacement_not_applied", "status" => "failed", "finished_at" => DateTime.to_iso8601(now), "result" => %{"code" => "no_credit", "applied" => false}}
+  end
+
   defp redemption(state, now) do
-    phase = %{applied_pending: "consumed_pending_probe", confirmed: "confirmed_by_quota", provisional: "confirmed_by_upstream"}[state]
+    phase = %{reblocked: "reblocked", expired: "expired", applied_pending: "consumed_pending_probe", confirmed: "confirmed_by_quota", provisional: "confirmed_by_upstream"}[state]
     %{"status" => "succeeded", "phase" => phase, "started_at" => DateTime.to_iso8601(DateTime.add(now, -3, :minute)), "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -2, :minute)), "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 13, :minute)), "result" => %{"applied" => true, "code" => "reset"}}
   end
 

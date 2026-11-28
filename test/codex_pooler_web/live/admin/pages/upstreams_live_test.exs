@@ -6526,8 +6526,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     persist_reset_receipt!(identity, "consumed_pending_probe")
     send(view.pid, {Events, %{topics: ["upstreams"], reason: "quota_windows_updated"}})
     settle_saved_reset_status(view)
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-provider-outcome='applied'][data-verification-state='pending']")
     assert :sys.get_state(view.pid).socket.assigns.quota_observations_open?
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
+    render_click(view, "close_quota_observations", %{})
+    view |> element("#upstream-account-#{identity.id}-saved-reset-meter-open") |> render_click()
+    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-provider-outcome='applied'][data-verification-state='pending']")
   end
 
   @tag :saved_reset_live_status
@@ -6546,7 +6549,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert state.saved_reset_policy_form === draft
     assert state.editing_saved_reset_policy.saved_reset_operation.provider_outcome == :applied
     assert state.editing_saved_reset_policy.saved_reset_operation.verification == :pending
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}", "Reset applied")
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
     persist_reset_receipt!(identity, "confirmed_by_quota")
     render_click(view, "refresh_saved_reset_status", %{"id" => identity.id})
     settle_saved_reset_status(view)
@@ -6582,7 +6585,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     render_hook(view, "set_live_updates", %{"paused" => true})
     render_click(view, "open_saved_reset_policy", %{"id" => identity.id})
     latest = "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-latest']"
-    assert has_element?(view, latest, "The new quota cycle is confirmed.")
+    assert has_element?(view, latest, "Quota was usable at the last reset check.")
     refute has_element?(view, latest, "The reset continues")
     refute has_element?(view, latest, "Live updates paused")
     assert has_element?(view, "#saved-reset-operation-heading-bank-#{identity.id}", "Quota confirmed")
@@ -6619,7 +6622,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     state = :sys.get_state(view.pid).socket.assigns
     assert state.live_updates_paused?
     assert state.editing_saved_reset_policy.saved_reset_operation.provider_outcome == :applied
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}", "Reset applied")
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-headline']", "Live updates paused")
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}", "The reset continues. Refresh reads the stored status.")
     persist_reset_receipt!(identity, "confirmed_by_quota")
@@ -6762,8 +6765,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     job = args |> SavedResetRedemptionWorker.new(unique: false) |> Oban.insert!()
     render_click(view, "refresh_saved_reset_status", %{"id" => identity.id})
     settle_saved_reset_status(view)
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id} [data-role='saved-reset-request']", "Request accepted")
-    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-provider-outcome='applied']")
+    assert has_element?(view, "#saved-reset-operation-heading-bank-#{identity.id}", "Request accepted")
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
     job |> Ecto.Changeset.change(state: "executing") |> Repo.update!()
     render_click(view, "refresh_saved_reset_status", %{"id" => identity.id})
     settle_saved_reset_status(view)
@@ -6771,7 +6774,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     persist_reset_receipt!(identity, "consumed_pending_probe")
     send(view.pid, {Events, %{topics: ["upstreams"], reason: "saved_reset_redemption_updated"}})
     settle_saved_reset_status(view)
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-provider-outcome='applied'][data-verification-state='pending']")
+    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-provider-outcome='applied'][data-verification-state='pending']")
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     observed_at = DateTime.add(now, -60, :second)
     attrs = %{quota_key: "account", quota_scope: "account", quota_family: "account", window_kind: "secondary", window_minutes: 10_080, source: "codex_usage_api", source_precision: "observed", freshness_state: "fresh", last_sync_at: observed_at, observed_at: observed_at, reset_at: DateTime.add(now, 6, :day), merge_precedence: 60, used_percent: Decimal.new(100), metadata: %{}}
@@ -6779,9 +6783,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     window = %AccountQuotaWindow{} |> AccountQuotaWindow.changeset(Map.merge(attrs, %{upstream_identity_id: identity.id, metadata: EvidenceStore.put_candidate(%{}, candidate), created_at: now, updated_at: now})) |> Repo.insert!()
     send(view.pid, {Events, %{topics: ["upstreams"], reason: "quota_windows_updated"}})
     settle_saved_reset_status(view)
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-verification-state='candidate']")
-    assert has_element?(view, "#upstream-account-#{identity.id}-limit-weekly", "Last verified quota")
-    assert has_element?(view, "#upstream-account-#{identity.id}-limit-weekly", "New quota report awaiting verification")
+    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-verification-state='candidate']")
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
+    refute has_element?(view, "#upstream-account-#{identity.id}-limit-weekly [data-role='pending-quota-measurement']")
+    assert has_element?(view, "#upstream-account-#{identity.id}-limit-weekly-observations-dialog", "New quota report awaiting verification")
     persist_reset_receipt!(identity, "confirmed_by_quota")
     Repo.delete!(job)
     send(view.pid, {Events, %{topics: ["upstreams"], reason: "saved_reset_redemption_updated"}})
@@ -6860,11 +6865,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert reads == 0
     assert has_element?(view, "#rename-upstream-account-dialog[open]")
     assert :sys.get_state(view.pid).socket.assigns.saved_reset_status_timer == nil
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-verification-state='pending']")
+    assert [%{saved_reset_operation: %{verification: :pending}}] = :sys.get_state(view.pid).socket.assigns.upstream_accounts
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
   end
 
   @tag :compact_list_live_status
-  test "normal paused cards hide historical receipt while active View status preserves access to the completed result", %{conn: conn, scope: scope} do
+  test "paused and active cards keep receipts in Banked Resets through remount", %{conn: conn, scope: scope} do
     {:ok, fake} = FakeUpstream.start_link(:success)
     on_exit(fn -> FakeUpstream.stop(fake) end)
     {:ok, pool} = Pools.create_pool(scope, %{slug: "compact-reset-status", name: "Compact reset status"})
@@ -6889,9 +6895,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     send(view.pid, {Events, %{topics: ["upstreams"], reason: "saved_reset_redemption_updated"}})
     execute_scheduled_upstreams_reload(view)
     settle_saved_reset_status(view)
-    assert has_element?(view, "#saved-reset-operation-list-#{identity.id}[data-presentation='compact']", "Reset applied")
-    refute has_element?(view, "#saved-reset-operation-list-#{identity.id} dl")
-    view |> element("#saved-reset-view-status-list-#{identity.id}") |> render_click()
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}, #saved-reset-view-status-list-#{identity.id}")
+    view |> element("#upstream-account-#{identity.id}-saved-reset-meter-open") |> render_click()
     assert has_element?(view, "#saved-reset-policy-dialog[open]")
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-verification-state='pending']")
     # The completed job adds nothing beside the latest receipt.
@@ -6914,7 +6919,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, remounted, _html} = live(conn, ~p"/admin/upstreams")
     assert_confirmed_receipt_reviewable(remounted, identity)
     assert FakeUpstream.requests(fake) == []
-    CodexPooler.TestDiagnostics.puts(Jason.encode!(%{scenario: "normal_paused_historical_compact_active_detail_remount", initial_routing_ready: true, terminal_request_state: "completed", paused_normal_list_receipts: 0, active_compact_rows: 1, view_status_opened_safe_bank: true, confirmed_hidden_from_list: true, latest_bank_receipt_after_remount: true, provider_calls: 0}))
+    CodexPooler.TestDiagnostics.puts(Jason.encode!(%{scenario: "paused_and_active_card_bank_receipt_remount", initial_routing_ready: true, terminal_request_state: "completed", paused_normal_list_receipts: 0, active_compact_rows: 0, banked_resets_opened_bank: true, confirmed_hidden_from_list: true, latest_bank_receipt_after_remount: true, provider_calls: 0}))
     stop_saved_reset_fake!(fake)
   end
 
@@ -6961,7 +6966,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-verification-state='quota_confirmed']")
     # The headline sits in the disclosure summary that labels the section; the section itself shows the summary line.
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}-details[data-preserve-open] > summary#saved-reset-operation-heading-bank-#{identity.id}", "Quota confirmed")
-    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-latest']", "The new quota cycle is confirmed.")
+    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-latest']", "Quota was usable at the last reset check.")
   end
 
   defp stop_saved_reset_fake!(fake) do
@@ -7049,7 +7054,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp persist_reset_receipt!(identity, phase) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    record = %{"phase" => phase, "status" => "succeeded", "generation" => 4, "started_at" => DateTime.to_iso8601(DateTime.add(now, -30, :second)), "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -20, :second)), "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 180, :second)), "result" => %{"applied" => true, "code" => "reset"}}
+    record = %{"phase" => phase, "status" => "succeeded", "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}], "generation" => 4, "started_at" => DateTime.to_iso8601(DateTime.add(now, -30, :second)), "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -20, :second)), "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 180, :second)), "result" => %{"applied" => true, "code" => "reset"}}
     identity = Repo.get!(UpstreamIdentity, identity.id)
     identity |> UpstreamIdentity.changeset(%{metadata: Map.put(identity.metadata, "saved_reset_redemption", record)}) |> Repo.update!()
   end

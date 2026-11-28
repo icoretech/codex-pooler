@@ -1074,7 +1074,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       account.deletion_state in [:in_progress, :failed] or
         (not unrelated_dialog? and
            (account.identity.id == editing_id or socket.assigns[:quota_observations_open?] == true or
-              get_in(account, [:saved_reset_operation, :active?]) == true))
+              SavedResetOperationProjection.monitor?(account.saved_reset_operation)))
     end)
     |> Enum.map(& &1.identity.id)
   end

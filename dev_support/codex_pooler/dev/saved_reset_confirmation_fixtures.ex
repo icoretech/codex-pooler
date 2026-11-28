@@ -714,6 +714,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixtures do
     Map.put(metadata, "saved_reset_redemption", %{
       "status" => status,
       "phase" => phase,
+      "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}],
       "attempt_id" => Ecto.UUID.generate(),
       "generation" => 1,
       "started_at" => DateTime.to_iso8601(now),

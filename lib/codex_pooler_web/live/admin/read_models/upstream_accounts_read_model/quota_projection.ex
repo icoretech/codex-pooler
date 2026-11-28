@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @type reset_display_state :: :countdown | :static | :unconfirmed | :absent
 
   @type quota_limit_row :: %{
+          optional(:pending_quota_measurement) => QuotaObservations.pending_quota_measurement(),
           optional(:saved_reset_context) => QuotaObservations.saved_reset_context(),
           optional(:observation_group) => String.t(),
           optional(:usage_cap_percent) => 1..99 | nil,
@@ -234,10 +235,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     |> QuotaObservations.attach(raw_windows, preferences, snapshot_at)
   end
 
-  @spec quota_limit_rows([Quota.AccountQuotaWindow.t()], DateTimeDisplay.preferences(), DateTime.t(), [Quota.AccountQuotaWindow.t()], map()) :: [quota_limit_row()]
-  def quota_limit_rows(windows, preferences, snapshot_at, raw_windows, redemption) do
+  @spec quota_limit_rows([Quota.AccountQuotaWindow.t()], DateTimeDisplay.preferences(), DateTime.t(), [Quota.AccountQuotaWindow.t()], map() | nil, non_neg_integer() | nil) :: [quota_limit_row()]
+  def quota_limit_rows(windows, preferences, snapshot_at, raw_windows, redemption, epoch \\ nil) do
     windows
-    |> quota_limit_rows(preferences, snapshot_at, raw_windows)
+    |> quota_limit_rows(preferences, snapshot_at)
+    |> QuotaObservations.attach(raw_windows, preferences, snapshot_at, epoch)
     |> QuotaObservations.attach_saved_reset_context(raw_windows, redemption, snapshot_at)
   end
 

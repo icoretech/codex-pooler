@@ -6,6 +6,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
   alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, Windows, WindowSelector}
   alias CodexPooler.Upstreams.Quota.Windows.{CycleConfirmation, EvidenceStore}
 
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
+
   @known_sources ~w(
     codex_usage_api
     codex_rate_limit_event
@@ -52,14 +54,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
        ) do
     consumed_at = nonfuture_datetime(redemption["consumed_at"], snapshot_at)
 
+    effective_windows = recovery_windows(effective_windows, redemption, snapshot_at)
+
     {candidate_key, candidate_observed_at} =
-      challenged_candidate(raw_windows, consumed_at, snapshot_at)
+      challenged_candidate(recovery_windows(raw_windows, redemption, snapshot_at), consumed_at, snapshot_at)
 
     # A post-consume candidate names the challenged window first, then an accepted confirmation, then the
     # newest reset-bearing account window.
     challenged_key =
       candidate_key || challenge_key(accepted_challenge(effective_windows, consumed_at, snapshot_at)) ||
-        challenge_key(fallback_challenge(effective_windows, snapshot_at))
+        challenge_key(fallback_challenge(effective_windows, consumed_at, snapshot_at))
 
     %{
       confirmation_state: confirmation_state,
@@ -83,6 +87,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
   defp confirmation_state("consume_not_applied"), do: {:ok, :not_applied}
   defp confirmation_state("expired"), do: {:ok, :confirmation_expired}
   defp confirmation_state(_phase), do: :none
+
+  @doc false
+  @spec recovery_windows([AccountQuotaWindow.t()], map(), DateTime.t()) :: [AccountQuotaWindow.t()]
+  def recovery_windows(windows, %{"included_window_descriptors" => descriptors, "phase" => phase} = redemption, as_of)
+      when phase in ["consumed_pending_probe", "reblocked", "confirmed_by_upstream", "confirmed_by_quota"] and is_list(descriptors) and length(descriptors) in 1..2 do
+    with %DateTime{} = consumed <- nonfuture_datetime(redemption["consumed_at"], as_of),
+         :lt <- DateTime.compare(as_of, RedemptionLifecycle.deadline_at(consumed)),
+         false <- RedemptionLifecycle.expired?(redemption, as_of) do
+      Enum.filter(windows, fn window ->
+        WindowClassifier.saved_reset_window?(window) and
+          %{"window_kind" => window.window_kind, "window_minutes" => window.window_minutes} in descriptors and
+          matching_epoch?(redemption, window)
+      end)
+    else
+      _outside_interval -> []
+    end
+  end
+
+  def recovery_windows(_windows, _redemption, _as_of), do: []
+
+  defp matching_epoch?(%{"credential_epoch" => epoch}, %{metadata: metadata}), do: is_integer(epoch) and is_map(metadata) and metadata["credential_epoch"] == epoch
+  defp matching_epoch?(_legacy_receipt, _window), do: true
 
   defp challenged_candidate(raw_windows, consumed_at, snapshot_at) do
     raw_windows
@@ -142,9 +168,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
 
   defp accepted_window_challenge(_window, _consumed_at, _snapshot_at), do: []
 
-  defp fallback_challenge(effective_windows, snapshot_at) do
+  defp fallback_challenge(effective_windows, consumed_at, snapshot_at) do
     effective_windows
-    |> Enum.filter(&reset_account_window?/1)
+    |> Enum.filter(&(reset_account_window?(&1) and timestamp_between?(&1.observed_at, consumed_at, snapshot_at)))
     |> Enum.max_by(&window_sort_key/1, fn -> nil end)
     |> case do
       %AccountQuotaWindow{} = window ->

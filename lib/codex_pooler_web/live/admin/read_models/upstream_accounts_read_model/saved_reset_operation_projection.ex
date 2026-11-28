@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.ManualRedemptionGate
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
-  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.{Formatting, SavedResetConfirmationProjection}
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.{Formatting, QuotaObservations, SavedResetConfirmationProjection}
   alias CodexPoolerWeb.DateTimeDisplay
 
   @terminal_requests [:completed, :discarded, :cancelled, :stopped]
@@ -24,6 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
           required(:datetime_preferences) => DateTimeDisplay.preferences(),
           optional(:redemption) => map() | nil,
           optional(:request_summary) => request_summary() | :unavailable | nil,
+          optional(:pending_quota_measurements) => [QuotaObservations.pending_quota_measurement()],
           optional(:confirmation) => SavedResetConfirmationProjection.t() | nil,
           optional(:serving_readiness) => UpstreamRoutingReadiness.t() | nil,
           optional(:usage_poll_pause) => usage_pause() | :unavailable | nil,
@@ -34,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   @type request :: %{required(:state) => request_state(), required(:headline) => String.t() | nil, required(:summary) => String.t() | nil, optional(:requested_at) => String.t(), optional(:scheduled_at) => String.t()}
   @type t :: %{
           required(:request) => request(),
+          required(:pending_quota_measurements) => [QuotaObservations.pending_quota_measurement()],
           required(:show_request?) => boolean(),
           required(:provider_outcome) => provider_outcome(),
           required(:verification) => verification(),
@@ -58,6 +60,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
           optional(:pause_until) => String.t()
         }
 
+  @spec monitor?(t() | nil) :: boolean()
+  def monitor?(%{active?: true}), do: true
+  def monitor?(%{pending_quota_measurements: [_ | _]}), do: true
+  def monitor?(_operation), do: false
+
   @spec project(context()) :: t()
   def project(%{snapshot_at: %DateTime{} = now, datetime_preferences: preferences} = context) do
     redemption = Map.get(context, :redemption)
@@ -74,6 +81,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
 
     %{
       request: request,
+      pending_quota_measurements: Map.get(context, :pending_quota_measurements, []),
       show_request?: show_request?(request.state, latest?),
       provider_outcome: outcome,
       verification: verification,
@@ -285,7 +293,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetOperationProj
   # be a non-consuming failure, and an expired one can follow an unresolved
   # consume. `facts` carries the snapshot clock and the record facts the last
   # clauses need.
-  defp copy(_record, _request, _outcome, :quota_confirmed, _facts), do: {gettext("Quota confirmed"), gettext("The new quota cycle is confirmed."), false}
+  defp copy(_record, _request, _outcome, :quota_confirmed, _facts), do: {gettext("Quota confirmed"), gettext("Quota was usable at the last reset check."), false}
   defp copy(_record, _request, _outcome, :request_verified, _facts), do: {gettext("Recovery verified by a request"), gettext("A request succeeded on the new quota; the usage report has not caught up yet."), false}
   defp copy(_record, _request, :applied, :reblocked, _facts), do: {gettext("Quota is still unavailable"), gettext("The reset was applied, but quota is still blocked. No further reset is spent automatically."), true}
   defp copy(_record, _request, _outcome, :reblocked, _facts), do: {gettext("Quota is still unavailable"), gettext("Quota is still blocked."), false}

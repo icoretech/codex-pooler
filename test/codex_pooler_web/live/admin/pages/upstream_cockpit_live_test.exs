@@ -113,6 +113,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           },
           "saved_reset_redemption" => %{
             "phase" => "consumed_pending_probe",
+            "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}],
             "consumed_at" => DateTime.to_iso8601(consumed_at),
             "deadline_at" => DateTime.add(consumed_at, 15, :minute) |> DateTime.to_iso8601()
           }
@@ -202,13 +203,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#{card}-pool-assignment-#{assignment.id}-route-circuit[title='Circuit recovery in progress']"
            )
 
-    assert has_element?(
-             view,
-             "#saved-reset-operation-list-#{identity.id}[data-verification-state='candidate']"
-           )
-
-    refute has_element?(view, "#saved-reset-operation-list-#{identity.id} [data-role='saved-reset-serving-readiness']")
-    view |> element("#saved-reset-view-status-list-#{identity.id}") |> render_click()
+    refute has_element?(view, "#saved-reset-operation-list-#{identity.id}")
+    view |> element("#{card}-saved-reset-meter-open") |> render_click()
+    assert has_element?(view, "#saved-reset-operation-bank-#{identity.id}[data-verification-state='candidate']")
     assert has_element?(view, "#saved-reset-policy-dialog[open]")
     assert has_element?(view, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-serving-readiness']", account.routing_readiness.label)
     # The unconfirmed reset keeps the account from routing, so the bank prints the account's own reason under the label.
@@ -5489,6 +5486,94 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-refresh-data-message", "Account data refreshed")
   end
 
+  for {key, kind, minutes, days} <- [{:weekly, "secondary", 10_080, 6}, {:primary_30d, "primary", 43_200, 29}], transition <- [:adopted, :expired] do
+    @tag quota_measurement_transition: transition
+    @tag quota_descriptor: key
+    test "finished receipt rereads #{key} measurement #{transition} in storage with disclosures closed", %{conn: conn, scope: scope, quota_measurement_transition: transition} do
+      %{identity: identity, now: now} = reset_status_fixture!(scope)
+      {:ok, fake} = FakeUpstream.start_link(:success)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+      set_reset_phase!(identity, "confirmed_by_quota", now)
+
+      update_identity_metadata!(identity, fn metadata ->
+        metadata
+        |> Map.merge(%{"usage_base_url" => FakeUpstream.url(fake), "base_url" => FakeUpstream.url(fake)})
+        |> put_in(["saved_reset_redemption", "status"], "succeeded")
+        |> put_in(["saved_reset_redemption", "finished_at"], DateTime.to_iso8601(now))
+      end)
+
+      window = Repo.get_by!(AccountQuotaWindow, upstream_identity_id: identity.id)
+      reset_at = DateTime.add(now, unquote(days), :day)
+
+      candidate =
+        cockpit_candidate_metadata(DateTime.add(now, -10, :second), now)
+        |> put_in(["__quota_confirmed_candidate_v1", "used_percent"], "7")
+        |> put_in(["__quota_confirmed_candidate_v1", "reset_at"], DateTime.to_iso8601(reset_at))
+
+      window = window |> Ecto.Changeset.change(used_percent: Decimal.new(99), window_kind: unquote(kind), window_minutes: unquote(minutes), reset_at: reset_at, metadata: candidate) |> Repo.update!()
+      {:ok, list, _html} = live(conn, ~p"/admin/upstreams")
+      {:ok, cockpit, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+      cockpit_row = "#upstream-quota-limit-#{unquote(key)}"
+      surfaces = [{list, "#upstream-account-#{identity.id}-limit-#{unquote(key)}"}, {cockpit, cockpit_row}]
+
+      for {view, row} <- surfaces do
+        render_async(view)
+        assert has_element?(view, row <> "-progress[value='1']")
+        assert has_element?(view, row <> "[data-measurement-pending='true']")
+        refute has_element?(view, row <> " [data-role='pending-quota-measurement']")
+        assert has_element?(view, row <> "-observations-dialog [data-role='pending-quota-measurement']", "93%")
+        refute has_element?(view, "dialog[open]")
+      end
+
+      timers = Enum.map(surfaces, fn {view, _row} -> reset_status_assigns(view).saved_reset_status_timer end)
+      assert Enum.map(timers, &is_reference/1) == [true, true]
+
+      # Change only the stored row. The next automatic tick must pick it up without a Pool event.
+      expected =
+        case transition do
+          :adopted ->
+            window |> Ecto.Changeset.change(metadata: %{}, used_percent: Decimal.new(7), observed_at: now, last_sync_at: now) |> Repo.update!()
+            93
+
+          :expired ->
+            render_hook(cockpit, "set_live_updates", %{"paused" => true})
+            elapsed = DateTime.add(now, -1, :second)
+            expired = put_in(candidate, ["__quota_confirmed_candidate_v1", "reset_at"], DateTime.to_iso8601(elapsed))
+            window |> Ecto.Changeset.change(reset_at: elapsed, metadata: expired) |> Repo.update!()
+            1
+        end
+
+      # Fast-forward only the already armed timers; exercise the same messages as Process.send_after/3.
+      for {{view, _row}, timer} <- Enum.zip(surfaces, timers) do
+        assert is_integer(Process.cancel_timer(timer))
+        message = if view == list, do: :refresh_saved_reset_status_tick, else: {:saved_reset_status_tick, reset_status_assigns(cockpit).saved_reset_status_timer_token}
+        send(view.pid, message)
+        render(view)
+        render_async(view)
+      end
+
+      if transition == :expired do
+        assert has_element?(cockpit, cockpit_row <> "[data-measurement-pending='true']")
+        render_hook(cockpit, "set_live_updates", %{"paused" => false})
+      end
+
+      render(cockpit)
+      render_async(cockpit)
+
+      for {view, row} <- surfaces do
+        assert reset_status_assigns(view).saved_reset_status_timer == nil
+        assert has_element?(view, row <> "-progress[value='#{expected}']")
+        refute has_element?(view, row <> "[data-measurement-pending='true']")
+        refute has_element?(view, row <> " [data-role='pending-quota-measurement']")
+        refute has_element?(view, row <> "-observations-dialog [data-role='pending-quota-measurement']")
+        refute has_element?(view, "dialog[open]")
+      end
+
+      assert FakeUpstream.requests(fake) == []
+      assert :ok = FakeUpstream.stop(fake)
+    end
+  end
+
   @tag :saved_reset_live_refresh
   test "cockpit open evidence follows queued, applied, candidate and confirmed stored facts", %{conn: conn, scope: scope} do
     fixture = reset_status_fixture!(scope)
@@ -5518,7 +5603,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     publish_reset_status!(view, pool, identity)
     assert has_element?(view, "#{operation}[data-verification-state='candidate']")
     assert has_element?(view, "#upstream-quota-limit-weekly-progress[value='0']")
-    assert has_element?(view, "#upstream-quota-limit-weekly", "New quota report awaiting verification")
+    refute has_element?(view, "#upstream-quota-limit-weekly [data-role='pending-quota-measurement']")
+    assert has_element?(view, "#upstream-quota-limit-weekly-observations-dialog", "New quota report awaiting verification")
     set_reset_phase!(identity, "confirmed_by_quota", now)
     publish_reset_status!(view, pool, identity)
     assert has_element?(view, "#{operation}[data-verification-state='quota_confirmed']")
@@ -6509,7 +6595,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   defp set_reset_phase!(identity, phase, now) do
-    update_identity_metadata!(identity, &Map.put(&1, "saved_reset_redemption", %{"status" => "redeeming", "phase" => phase, "generation" => 1, "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -60, :second)), "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 600, :second)), "result" => %{"applied" => true, "code" => "reset"}}))
+    update_identity_metadata!(identity, &Map.put(&1, "saved_reset_redemption", %{"status" => "redeeming", "phase" => phase, "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}], "generation" => 1, "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -60, :second)), "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 600, :second)), "result" => %{"applied" => true, "code" => "reset"}}))
   end
 
   defp publish_reset_status!(view, pool, identity) do

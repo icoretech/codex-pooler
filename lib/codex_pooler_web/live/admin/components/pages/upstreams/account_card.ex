@@ -25,7 +25,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     ReconciliationStatus,
     ReinviteLink,
     RoutePath,
-    SavedResetOperation,
     UsagePollPause
   }
 
@@ -202,7 +201,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   open_policy={if @account.can_manage_provider_credits? and @account.identity.status != "deleted", do: JS.push_focus() |> JS.push("open_provider_credits_policy", value: %{id: @account.identity.id})}
                 />
                 <SavedResetMeter.saved_reset_meter
-                  :if={@account.identity.status != "deleted" and saved_reset_panel_available?(@saved_resets, @saved_reset_confirmation)}
+                  :if={@account.identity.status != "deleted" and saved_reset_panel_available?(@saved_resets, @saved_reset_confirmation, Map.get(@account, :saved_reset_operation))}
                   id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
                   identity_id={@account.identity.id}
                   saved_resets={@saved_resets}
@@ -210,14 +209,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   class={saved_reset_meter_grid_class(@reported_quota_limits)}
                 />
               </div>
-              <AdminComponents.saved_reset_operation
-                :if={Map.has_key?(@account, :saved_reset_operation) && SavedResetOperation.list_visible?(@account.saved_reset_operation)}
-                identity_id={@account.identity.id}
-                surface={:list}
-                operation={@account.saved_reset_operation}
-                refreshing={Map.get(@account, :saved_reset_status_refreshing?, false)}
-                status_view_disabled={UpstreamAccountActions.assignment_unavailable_reason(@account.assignments) != nil or @account.identity.status == "deleted"}
-              />
             </section>
 
             <section
@@ -616,14 +607,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp normalize_panel_view(_panel_view, _saved_resets, _account), do: :usage
 
-  defp saved_reset_panel_available?(_saved_resets, confirmation) when is_map(confirmation),
+  defp saved_reset_panel_available?(_saved_resets, _confirmation, %{open?: true}), do: true
+
+  defp saved_reset_panel_available?(_saved_resets, confirmation, _operation) when is_map(confirmation),
     do: true
 
-  defp saved_reset_panel_available?(%{reported?: true, available_count: count}, _confirmation)
+  defp saved_reset_panel_available?(%{reported?: true, available_count: count}, _confirmation, _operation)
        when is_integer(count) and count > 0,
        do: true
 
-  defp saved_reset_panel_available?(_saved_resets, _confirmation), do: false
+  defp saved_reset_panel_available?(_saved_resets, _confirmation, _operation), do: false
 
   defp pools_panel_available?(%{assignments: assignments}) when is_list(assignments),
     do: assignments != []

@@ -4,9 +4,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components
-  alias Phoenix.LiveView.JS
 
-  @surfaces [:list, :bank, :cockpit]
+  @surfaces [:bank, :cockpit]
   @outcomes [:applied, :not_applied, :unknown, :not_recorded]
   @verifications [:not_started, :pending, :candidate, :quota_confirmed, :request_verified, :reblocked, :expired, :unknown]
   defp timestamps do
@@ -17,7 +16,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
   attr :surface, :atom, required: true, values: @surfaces
   attr :operation, :map, required: true
   attr :refreshing, :boolean, default: false
-  attr :status_view_disabled, :boolean, default: false
 
   @spec saved_reset_operation(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_operation(assigns) do
@@ -30,8 +28,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
       |> assign(:id, prefix)
       |> assign(:heading_id, "saved-reset-operation-heading-#{assigns.surface}-#{assigns.identity_id}")
       |> assign(:refresh_id, "saved-reset-status-refresh-#{assigns.surface}-#{assigns.identity_id}")
-      |> assign(:visible?, if(assigns.surface == :list, do: list_visible?(operation), else: operation.refreshable? || operation.show_latest_receipt?))
-      |> assign(:detail_open?, list_visible?(operation))
+      |> assign(:visible?, operation.refreshable? || operation.show_latest_receipt?)
+      |> assign(:detail_open?, open_details?(operation))
       |> assign(:compact_headline, operation.compact_headline)
       |> assign(:provider_outcome, bounded_state(operation.provider_outcome, @outcomes, :unknown))
       |> assign(:verification, bounded_state(operation.verification, @verifications, :unknown))
@@ -41,36 +39,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
       |> assign(:two_facts?, operation.show_request? and operation.show_latest_receipt?)
 
     ~H"""
-    <section
-      :if={@visible? && @surface == :list}
-      id={@id}
-      aria-labelledby={@heading_id}
-      aria-describedby={"#{@id}-summary"}
-      data-role="saved-reset-operation"
-      data-presentation="compact"
-      data-provider-outcome={@provider_outcome}
-      data-verification-state={@verification}
-      class="flex min-w-0 flex-wrap items-center justify-between gap-2 py-1 text-xs leading-5 text-base-content/70"
-    >
-      <h3 id={@heading_id} class="sr-only">{gettext("Saved reset status")}</h3>
-      <p id={"#{@id}-summary"} data-role="saved-reset-headline" role="status" aria-live="polite" aria-atomic="true" class="min-w-0 break-words font-medium">
-        <span data-role={if @operation.request.state in [:queued, :processing], do: "saved-reset-request"}>{@compact_headline}</span>
-      </p>
-      <button
-        id={"saved-reset-view-status-list-#{@identity_id}"}
-        type="button"
-        data-role="saved-reset-view-status"
-        data-saved-reset-action="view-status"
-        data-server-disabled={to_string(@status_view_disabled)}
-        class="btn btn-ghost btn-sm shrink-0 text-base-content/60 hover:text-base-content"
-        phx-click={JS.push_focus() |> JS.push("open_saved_reset_policy")}
-        phx-value-id={@identity_id}
-        aria-controls="saved-reset-policy-dialog"
-        aria-haspopup="dialog"
-        disabled={@status_view_disabled}
-      >{gettext("View status")}</button>
-    </section>
-    <details :if={@visible? && @surface != :list} id={"#{@id}-details"} data-preserve-open open={@detail_open?} class="min-w-0 text-xs leading-5 text-base-content/70">
+    <p :for={measurement <- if(@surface == :bank, do: Map.get(@operation, :pending_quota_measurements, []), else: [])} data-role="pending-quota-measurement" class="text-xs leading-5 text-base-content/75">{measurement.label}</p>
+    <details :if={@visible?} id={"#{@id}-details"} data-preserve-open open={@detail_open?} class="min-w-0 text-xs leading-5 text-base-content/70">
       <summary id={@heading_id} class="cursor-pointer font-medium text-base-content">{gettext("Saved reset · %{headline}", headline: @compact_headline)}</summary>
       <section
         id={@id}
@@ -132,8 +102,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
     """
   end
 
-  @spec list_visible?(map()) :: boolean()
-  def list_visible?(operation) do
+  defp open_details?(operation) do
     ready? = match?(%{routing_ready_now?: true}, operation.serving_readiness)
     accepted? = operation.verification in [:quota_confirmed, :request_verified]
 
@@ -228,5 +197,5 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetOperation do
   defp bounded_state(state, allowed, fallback), do: if(state in allowed, do: state, else: fallback)
 
   defp validate_surface!(surface) when surface in @surfaces, do: :ok
-  defp validate_surface!(_surface), do: raise(ArgumentError, "saved reset surface must be list, bank or cockpit")
+  defp validate_surface!(_surface), do: raise(ArgumentError, "saved reset surface must be bank or cockpit")
 end

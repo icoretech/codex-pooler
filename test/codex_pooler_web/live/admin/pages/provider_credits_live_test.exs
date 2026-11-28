@@ -305,9 +305,9 @@ defmodule CodexPoolerWeb.Admin.ProviderCreditsLiveTest do
       {:ok, cockpit, _} = live(conn, ~p"/admin/upstreams/#{identity.id}")
       assert has_element?(list, "#{summary(identity)}[title^='Banked-reset recovery pending']")
       assert has_element?(cockpit, "#upstream-provider-credits[title^='Banked-reset recovery pending']")
-      assert has_element?(list, "#saved-reset-operation-list-#{identity.id}[data-verification-state='pending']")
+      refute has_element?(list, "#saved-reset-operation-list-#{identity.id}")
 
-      list |> element("#saved-reset-view-status-list-#{identity.id}") |> render_click()
+      list |> element("#upstream-account-#{identity.id}-saved-reset-meter-open") |> render_click()
       assert has_element?(list, "#saved-reset-policy-dialog[open]")
       assert has_element?(list, "#saved-reset-operation-bank-#{identity.id}[data-provider-outcome='unknown'][data-verification-state='pending']")
       assert has_element?(list, "#saved-reset-operation-bank-#{identity.id} [data-role='saved-reset-latest']")

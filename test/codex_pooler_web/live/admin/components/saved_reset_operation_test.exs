@@ -60,23 +60,23 @@ defmodule CodexPoolerWeb.Admin.SavedResetOperationTest do
   end
 
   @tag :receipt_state_rendering
-  test "list and open bank for one identity have unique ids and local aria references" do
+  test "bank and cockpit receipts have unique ids and local aria references" do
     operation = project(%{redemption: applied("consumed_pending_probe")})
-    html = receipt(operation, :list) <> receipt(operation, :bank)
-    record_html("list-bank", html)
+    html = receipt(operation, :cockpit) <> receipt(operation, :bank)
+    record_html("cockpit-bank", html)
     document = LazyHTML.from_fragment(html)
     assert Enum.count(LazyHTML.query(document, "section[data-role='saved-reset-operation']")) == 2
     ids = document |> LazyHTML.query("[id]") |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
     assert ids == Enum.uniq(ids)
 
-    for surface <- [:list, :bank], attribute <- ["aria-labelledby", "aria-describedby"] do
+    for surface <- [:cockpit, :bank], attribute <- ["aria-labelledby", "aria-describedby"] do
       node = LazyHTML.query(document, "#saved-reset-operation-#{surface}-#{@identity}")
 
       references = LazyHTML.attribute(node, attribute)
       assert length(references) == 1
 
       # The bank section is labelled by the disclosure summary beside it, so its references resolve inside the whole disclosure, never in the other surface.
-      owner = if surface == :bank, do: "#saved-reset-operation-bank-#{@identity}-details", else: "#saved-reset-operation-list-#{@identity}"
+      owner = "#saved-reset-operation-#{surface}-#{@identity}-details"
 
       for id <- references do
         assert Enum.count(LazyHTML.query(LazyHTML.query(document, owner), "##{id}")) == 1
@@ -140,11 +140,9 @@ defmodule CodexPoolerWeb.Admin.SavedResetOperationTest do
     end
   end
 
-  @tag :compact_list_presentation
-  test "the list row names a passed deadline like the detail does" do
+  @tag :receipt_state_rendering
+  test "the bank receipt names a passed deadline" do
     passed = Map.put(applied("consumed_pending_probe"), "deadline_at", DateTime.to_iso8601(DateTime.add(@now, -1)))
-    list = %{redemption: passed} |> project() |> receipt(:list) |> LazyHTML.from_fragment()
-    assert LazyHTML.query(list, "[data-role='saved-reset-headline']") |> LazyHTML.text() =~ "Deadline passed — checking quota"
     bank = %{redemption: passed} |> project() |> receipt(:bank) |> LazyHTML.from_fragment()
     assert LazyHTML.query(bank, "summary#saved-reset-operation-heading-bank-#{@identity}") |> LazyHTML.text() =~ "Deadline passed — checking quota"
   end
@@ -315,11 +313,11 @@ defmodule CodexPoolerWeb.Admin.SavedResetOperationTest do
     assert LazyHTML.attribute(line, "title") == [readiness.reason]
   end
 
-  for surface <- [:cockpit, :list], routing_ready_now? <- [true, false] do
+  for routing_ready_now? <- [true, false] do
     @tag :receipt_state_rendering
-    test "the #{surface} surface carries no routing line or reason when routing_ready_now? is #{routing_ready_now?}" do
+    test "the cockpit carries no routing line or reason when routing_ready_now? is #{routing_ready_now?}" do
       readiness = %{label: "Current readiness", reason: "Existing readiness fact", routing_ready_now?: unquote(routing_ready_now?)}
-      document = project(%{redemption: applied("consumed_pending_probe"), serving_readiness: readiness}) |> receipt(unquote(surface)) |> LazyHTML.from_fragment()
+      document = project(%{redemption: applied("consumed_pending_probe"), serving_readiness: readiness}) |> receipt(:cockpit) |> LazyHTML.from_fragment()
       # The receipt itself renders, so the missing line is not an empty surface.
       assert Enum.count(LazyHTML.query(document, "[data-role='saved-reset-operation']")) == 1
       assert Enum.empty?(LazyHTML.query(document, "[data-role='saved-reset-serving-readiness'], [data-role='saved-reset-serving-reason']"))
@@ -327,75 +325,29 @@ defmodule CodexPoolerWeb.Admin.SavedResetOperationTest do
     end
   end
 
-  @tag :compact_list_presentation
-  test "normal historical receipts add no list status even when updates are paused" do
+  @tag :receipt_state_rendering
+  test "historical receipts stay collapsed with the recorded summary and outcome when updates are paused" do
     readiness = %{label: "Ready", reason: "Current quota is available.", routing_ready_now?: true}
 
-    for context <- [
-          %{},
-          %{view_paused?: true},
-          %{redemption: applied("confirmed_by_quota")},
-          %{redemption: applied("confirmed_by_quota"), view_paused?: true},
-          %{redemption: applied("confirmed_by_quota"), view_connected?: false},
-          %{redemption: %{"phase" => "confirmed_by_quota"}, view_paused?: true},
-          %{redemption: applied("confirmed_by_upstream"), view_paused?: true},
-          %{request_summary: :unavailable, view_paused?: true},
-          %{request_summary: %{open: nil, latest_terminal: %{state: :stopped, requested_at: @now}}, redemption: applied("confirmed_by_quota"), view_paused?: true},
-          %{redemption: %{"phase" => "consume_not_applied", "result" => %{"applied" => false, "code" => "no_credit"}}}
-        ] do
-      operation = context |> Map.put(:serving_readiness, readiness) |> project()
-      html = receipt(operation, :list)
-      assert Enum.empty?(LazyHTML.query(LazyHTML.from_fragment(html), "[data-role='saved-reset-operation']"))
-      record_html("normal-#{length(Map.keys(context))}-#{operation.headline}", "<main data-evidence-host>#{html}</main>")
-
-      if operation.show_latest_receipt? do
-        detail = receipt(operation, :bank)
-        document = LazyHTML.from_fragment(detail)
-        assert Enum.count(LazyHTML.query(document, "details:not([open]) [data-role='saved-reset-latest']")) == 1
-        latest = LazyHTML.query(document, "[data-role='saved-reset-latest']") |> LazyHTML.text()
-        assert latest =~ operation.summary
-        # The caveat line renders exactly when the projection has a detail for it.
-        assert Enum.empty?(LazyHTML.query(document, "[data-role='saved-reset-provider-outcome']")) == is_nil(operation.detail)
-        if operation.detail, do: assert(latest =~ operation.detail)
-        record_html("historical-bank-#{operation.headline}", detail)
-      end
+    for record <- [applied("confirmed_by_quota"), applied("confirmed_by_upstream"), %{"phase" => "confirmed_by_quota"}, %{"phase" => "consume_not_applied", "result" => %{"applied" => false, "code" => "no_credit"}}] do
+      operation = project(%{redemption: record, view_paused?: true, serving_readiness: readiness})
+      detail = receipt(operation, :bank)
+      document = LazyHTML.from_fragment(detail)
+      assert Enum.count(LazyHTML.query(document, "details:not([open]) [data-role='saved-reset-latest']")) == 1
+      latest = LazyHTML.query(document, "[data-role='saved-reset-latest']") |> LazyHTML.text()
+      assert latest =~ operation.summary
+      assert Enum.empty?(LazyHTML.query(document, "[data-role='saved-reset-provider-outcome']")) == is_nil(operation.detail)
+      if operation.detail, do: assert(latest =~ operation.detail)
+      record_html("historical-bank-#{operation.headline}", detail)
     end
   end
 
-  @tag :compact_list_presentation
-  test "active and unresolved list status is a single compact row with the safe dialog action" do
-    contexts = [
-      %{request_summary: %{open: %{state: :queued, requested_at: @now}, latest_terminal: nil}},
-      %{request_summary: %{open: %{state: :processing, requested_at: @now}, latest_terminal: nil}, redemption: applied("confirmed_by_quota")},
-      %{redemption: applied("consumed_pending_probe")},
-      %{redemption: applied("consumed_pending_probe"), view_paused?: true},
-      %{redemption: applied("confirmed_by_upstream")},
-      %{redemption: %{"phase" => "legacy_unknown"}},
-      %{redemption: %{"phase" => "consuming", "started_at" => "2020-01-01T00:00:00Z"}}
-    ]
-
-    for {context, index} <- Enum.with_index(contexts) do
-      operation = project(context)
-      html = receipt(operation, :list)
-      document = LazyHTML.from_fragment(html)
-      assert Enum.count(LazyHTML.query(document, "[data-role='saved-reset-operation'][data-presentation='compact']")) == 1
-      assert Enum.count(LazyHTML.query(document, "[data-role='saved-reset-headline']")) == 1
-      assert Enum.count(LazyHTML.query(document, "button[data-role='saved-reset-view-status'][type='button'][phx-value-id='#{@identity}']")) == 1
-      assert LazyHTML.query(document, "[data-role='saved-reset-view-status']") |> LazyHTML.text() |> String.trim() == "View status"
-      assert Enum.empty?(LazyHTML.query(document, "dl, [data-role='saved-reset-serving-readiness'], [data-role='saved-reset-latest'], [data-role='saved-reset-observation']"))
-      refute html =~ "border-base-300"
-      refute html =~ "Refresh reads"
-      record_html("compact-list-#{index}", html)
-    end
-  end
-
-  @tag :compact_list_presentation
-  test "terminal recovery attention follows current readiness and all detail surfaces keep their own disclosure" do
+  @tag :receipt_state_rendering
+  test "terminal recovery status opens the bank when attention is needed and active detail surfaces keep their own disclosure" do
     for phase <- ["reblocked", "expired"], ready? <- [true, false] do
       operation = project(%{redemption: applied(phase), serving_readiness: %{label: "Current readiness", reason: "Existing readiness fact", routing_ready_now?: ready?}})
-      document = operation |> receipt(:list) |> LazyHTML.from_fragment()
-      assert Enum.empty?(LazyHTML.query(document, "[data-role='saved-reset-operation']")) == ready?
-      record_html("terminal-list-#{phase}-#{ready?}", "<main data-evidence-host>#{receipt(operation, :list)}</main>")
+      document = operation |> receipt(:bank) |> LazyHTML.from_fragment()
+      assert Enum.empty?(LazyHTML.query(document, "details[open]")) == ready?
     end
 
     for surface <- [:bank, :cockpit] do

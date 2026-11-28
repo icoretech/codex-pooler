@@ -675,11 +675,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   defp monitor_saved_reset_status?(socket) do
     cockpit = socket.assigns.cockpit
-    operation = cockpit && cockpit.saved_reset_operation
 
     cockpit != nil and
       (cockpit.deletion_state in [:in_progress, :failed] or socket.assigns[:quota_observations_open?] == true or
-         (is_map(operation) and (operation.active? or operation.request.state in [:queued, :processing])))
+         SavedResetOperationProjection.monitor?(cockpit.saved_reset_operation))
   end
 
   defp cancel_saved_reset_status_timer(socket) do

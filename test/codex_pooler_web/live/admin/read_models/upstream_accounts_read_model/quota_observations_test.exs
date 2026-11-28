@@ -220,7 +220,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservationsTest d
     consumed_at = DateTime.add(@now, -4, :minute)
     selected = window("codex_usage_api", DateTime.add(@now, -6, :minute), "100")
     historical = window("codex_response_headers", DateTime.add(@now, -1, :day), "90")
-    redemption = %{"phase" => "consumed_pending_probe", "consumed_at" => DateTime.to_iso8601(consumed_at)}
+    redemption = %{"phase" => "consumed_pending_probe", "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}], "consumed_at" => DateTime.to_iso8601(consumed_at)}
     row = QuotaProjection.quota_limit_rows([selected], DateTimeDisplay.preferences_for_user(nil), @now, [selected, historical], redemption) |> Enum.find(&(&1.key == :weekly))
     assert row.percent_label == "0%"
     assert row.saved_reset_context.label == "Last verified quota"

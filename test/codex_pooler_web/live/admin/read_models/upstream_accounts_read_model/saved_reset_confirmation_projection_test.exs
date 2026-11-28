@@ -33,7 +33,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
 
     result =
       SavedResetConfirmationProjection.project(
-        %{"phase" => "consumed_pending_probe", "consumed_at" => DateTime.to_iso8601(now)},
+        %{"phase" => "consumed_pending_probe", "included_window_descriptors" => [%{"window_kind" => "primary", "window_minutes" => 43_200}], "consumed_at" => DateTime.to_iso8601(now)},
         [monthly, primary],
         [monthly, primary],
         now
@@ -136,10 +136,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
     assert row.saved_reset_context.candidate_label == nil
   end
 
+  test "a fresh measure remains generic when the receipt covers another descriptor or has passed its confirmation window" do
+    weekly = candidate_window("secondary", 10_080)
+    monthly = candidate_window("primary", 43_200)
+    preferences = DateTimeDisplay.preferences_for_user(nil)
+
+    for {window, other_kind, other_minutes} <- [{weekly, "primary", 43_200}, {monthly, "secondary", 10_080}] do
+      for receipt <- [
+            Map.put(redemption(), "included_window_descriptors", [%{"window_kind" => other_kind, "window_minutes" => other_minutes}]),
+            Map.put(redemption(), "consumed_at", DateTime.to_iso8601(DateTime.add(@now, -1, :day)))
+          ] do
+        [row] = QuotaProjection.quota_limit_rows([window], preferences, @now, [window], receipt) |> Enum.filter(&(&1.percent != nil))
+        assert row.pending_quota_measurement.reported == "68%"
+        refute Map.has_key?(row, :saved_reset_context)
+        assert SavedResetConfirmationProjection.project(receipt, [window], [window], @now).challenged_evidence_state == :absent
+      end
+    end
+  end
+
+  test "the current receipt challenges only its bound window across raw and effective source selection" do
+    monthly = %{candidate_window("primary", 43_200) | metadata: %{}, observed_at: @consumed_at}
+    weekly = %{candidate_window("secondary", 10_080) | metadata: %{}, used_percent: Decimal.new(30), observed_at: @now}
+    windows = [monthly, weekly]
+    project = fn receipt -> SavedResetConfirmationProjection.project(receipt, windows, windows, @now).challenged_evidence_state end
+
+    assert project.(Map.put(redemption(), "included_window_descriptors", [%{"window_kind" => "primary", "window_minutes" => 43_200}])) == :exhausted
+    assert project.(Map.put(redemption(), "included_window_descriptors", [%{"window_kind" => "secondary", "window_minutes" => 10_080}])) == :usable
+    assert project.(Map.delete(redemption(), "included_window_descriptors")) == :absent
+    assert project.(Map.put(redemption(), "phase", "expired")) == :absent
+  end
+
   defp project(window), do: SavedResetConfirmationProjection.project(redemption(), [window], [window], @now)
 
   defp redemption do
-    %{"phase" => "consumed_pending_probe", "consumed_at" => DateTime.to_iso8601(@consumed_at), "result" => %{"applied" => true, "code" => "reset"}}
+    %{"phase" => "consumed_pending_probe", "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}, %{"window_kind" => "primary", "window_minutes" => 43_200}], "consumed_at" => DateTime.to_iso8601(@consumed_at), "result" => %{"applied" => true, "code" => "reset"}}
   end
 
   defp candidate_window(kind, minutes, candidate_at \\ DateTime.add(@now, -2, :minute)) do

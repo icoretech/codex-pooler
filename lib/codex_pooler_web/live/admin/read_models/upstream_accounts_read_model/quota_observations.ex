@@ -19,6 +19,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
           candidate_role: :unconfirmed_report | nil
         }
 
+  @type pending_quota_measurement :: %{verified: String.t(), reported: String.t(), observed_at: String.t(), label: String.t()}
+
   @type observation :: %{
           optional(:saved_reset_context) => saved_reset_context(),
           required(:key) => String.t(),
@@ -53,7 +55,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     permission_facts = permission_facts(window, pending_measurement)
 
     %{
-      key: fingerprint({window.id, window.source, group_key(window)}),
+      key: observation_key(window),
       source: source_label(window.source),
       slot: allowed(window.window_kind, ~w(primary secondary)),
       used: percent(window.used_percent),
@@ -71,9 +73,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     }
   end
 
-  @spec attach([map()], [AccountQuotaWindow.t()], DateTimeDisplay.preferences(), DateTime.t()) ::
+  @spec attach([map()], [AccountQuotaWindow.t()], DateTimeDisplay.preferences(), DateTime.t(), non_neg_integer() | nil) ::
           [map()]
-  def attach(rows, windows, preferences, as_of) do
+  def attach(rows, windows, preferences, as_of, epoch \\ nil) do
     groups =
       windows
       |> Enum.filter(&nonfuture_observation?(&1, as_of))
@@ -83,20 +85,54 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
     Enum.map(rows, fn row ->
       case Map.get(row, :observations, []) do
         [selected] ->
+          grouped = Map.get(groups, row.observation_group, [])
+
           observations =
-            groups
-            |> Map.get(row.observation_group, [])
+            grouped
             |> Enum.map(&project(&1, preferences, as_of))
             |> Enum.map(&%{&1 | selected?: &1.key == selected.key})
             |> Enum.sort_by(&(not &1.selected?))
 
-          Map.put(row, :observations, observations)
+          row
+          |> Map.put(:observations, observations)
+          |> attach_pending_quota_measurement(selected, grouped, preferences, as_of, epoch)
 
         [] ->
           row
       end
     end)
   end
+
+  # The accepted measurement and the provisional Usage API reading can belong to different source rows.
+  # This comparison describes the current account window, independently of any redemption in its history.
+  defp attach_pending_quota_measurement(%{key: key, evidence_state: :fresh, percent: %Decimal{} = verified_percent} = row, selected, windows, preferences, as_of, epoch) when key in [:weekly, :primary_30d] do
+    with %AccountQuotaWindow{reset_at: %DateTime{} = reset_at} = winner <- Enum.find(windows, &(observation_key(&1) == selected.key)),
+         %AccountQuotaWindow{} = usage <- Enum.find(windows, &(&1.source == "codex_usage_api")),
+         true <- pending_quota_measurement_source?(usage, epoch) and pending_quota_measurement_source?(winner, epoch),
+         {:ok, candidate} <- pending_candidate(usage, as_of),
+         true <- DateTime.compare(candidate.observed_at, winner.observed_at) == :gt,
+         true <- abs(DateTime.diff(candidate.reset_at, reset_at, :second)) <= 5,
+         true <- Decimal.gt?(Decimal.sub(100, candidate.used_percent), verified_percent) do
+      verified = percent(verified_percent)
+      reported = remaining(candidate.used_percent)
+      observed_at = timestamp(candidate.observed_at, preferences)
+      window = if key == :weekly, do: gettext("Weekly"), else: gettext("30-day")
+      label = gettext("%{window} remaining: %{verified} verified. %{reported} reported at %{time}, awaiting verification.", window: window, verified: verified, reported: reported, time: observed_at)
+      Map.put(row, :pending_quota_measurement, %{verified: verified, reported: reported, observed_at: observed_at, label: label})
+    else
+      _absent -> row
+    end
+  end
+
+  defp attach_pending_quota_measurement(row, _selected, _windows, _preferences, _as_of, _epoch), do: row
+
+  defp pending_quota_measurement_source?(%{source: source, source_precision: precision, metadata: metadata, model: nil, upstream_model: nil} = window, epoch) when source in ["codex_usage_api", "codex_rate_limit_event", "codex_response_headers", "codex_rate_limit_error"] and precision in ["authoritative", "observed"] and is_map(metadata) do
+    WindowClassifier.saved_reset_window?(window) and (is_nil(epoch) or metadata["credential_epoch"] in [nil, epoch])
+  end
+
+  defp pending_quota_measurement_source?(_window, _epoch), do: false
+
+  defp observation_key(window), do: fingerprint({window.id, window.source, group_key(window)})
 
   @spec attach_saved_reset_context([map()], [AccountQuotaWindow.t()], map(), DateTime.t()) :: [map()]
   def attach_saved_reset_context(rows, windows, redemption, %DateTime{} = as_of) when is_map(redemption) do
@@ -105,7 +141,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
          true <- DateTime.compare(consumed_at, as_of) != :gt do
       contexts =
         windows
-        |> Enum.filter(&WindowClassifier.saved_reset_window?/1)
+        |> SavedResetConfirmationProjection.recovery_windows(redemption, as_of)
         |> Enum.group_by(&group_key/1)
         |> Map.new(fn {key, grouped_windows} ->
           candidate? = Enum.any?(grouped_windows, &(not is_nil(SavedResetConfirmationProjection.candidate_observed_at(&1, consumed_at, as_of))))
@@ -200,36 +236,35 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   defp boolean_or_nil(value) when is_boolean(value), do: value
   defp boolean_or_nil(_value), do: nil
 
-  defp pending_measurement(
-         %{
-           source: "codex_usage_api",
-           used_percent: %Decimal{} = retained_percent,
-           metadata: metadata
-         },
-         preferences,
-         as_of
-       )
-       when is_map(metadata) do
-    with {:ok, candidate} <- EvidenceStore.parse_candidate(metadata),
-         true <- EvidenceStore.candidate_valid?(candidate, as_of),
-         true <- DateTime.compare(candidate.observed_at, as_of) != :gt,
-         {:ok, %{allowed: true, limit_reached: false, observed_at: observed_at}} <-
-           EvidenceStore.parse_candidate_provider_status(metadata),
-         true <- positive_lower_percent?(candidate.used_percent, retained_percent) do
-      %{
-        role: :unconfirmed_report,
-        used: percent(candidate.used_percent),
-        remaining: remaining(candidate.used_percent),
-        retained_remaining: gettext("%{remaining} remaining", remaining: remaining(retained_percent)),
-        observed_at: timestamp(observed_at, preferences),
-        permission_facts: %{allowed: true, limit_reached: false}
-      }
-    else
-      _not_pending -> nil
+  defp pending_measurement(window, preferences, as_of) do
+    case pending_candidate(window, as_of) do
+      {:ok, candidate} ->
+        %{
+          role: :unconfirmed_report,
+          used: percent(candidate.used_percent),
+          remaining: remaining(candidate.used_percent),
+          retained_remaining: gettext("%{remaining} remaining", remaining: remaining(window.used_percent)),
+          observed_at: timestamp(candidate.observed_at, preferences),
+          permission_facts: %{allowed: true, limit_reached: false}
+        }
+
+      :none ->
+        nil
     end
   end
 
-  defp pending_measurement(_window, _preferences, _as_of), do: nil
+  defp pending_candidate(%{source: "codex_usage_api", used_percent: %Decimal{} = retained, observed_at: %DateTime{} = retained_at, metadata: metadata}, as_of) when is_map(metadata) do
+    with {:ok, candidate} <- EvidenceStore.parse_candidate(metadata),
+         true <- EvidenceStore.candidate_valid?(candidate, as_of) and EvidenceStore.candidate_provider_status_safe?(metadata),
+         true <- DateTime.compare(candidate.observed_at, as_of) != :gt and DateTime.compare(candidate.observed_at, retained_at) == :gt,
+         true <- positive_lower_percent?(candidate.used_percent, retained) do
+      {:ok, candidate}
+    else
+      _not_pending -> :none
+    end
+  end
+
+  defp pending_candidate(_window, _as_of), do: :none
 
   defp positive_lower_percent?(%Decimal{} = candidate, %Decimal{} = retained) do
     Decimal.compare(candidate, Decimal.new(0)) == :gt and

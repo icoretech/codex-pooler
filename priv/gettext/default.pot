@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:868
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:867
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:257
 #, elixir-autogen, elixir-format
 msgid "%{action} is not available: %{reason}"
@@ -627,7 +627,7 @@ msgstr ""
 msgid "%{client} user agent"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1015
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
 #, elixir-autogen, elixir-format
 msgid "%{code} - %{message}"
 msgstr ""
@@ -639,7 +639,7 @@ msgid_plural "%{count} MCP keys exist in this system."
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1077
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1070
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:508
 #, elixir-autogen, elixir-format
 msgid "%{count} Pool"
@@ -754,7 +754,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/charts.ex:136
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:312
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:347
 #, elixir-autogen, elixir-format
 msgid "%{count} hour"
 msgid_plural "%{count} hours"
@@ -797,7 +797,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/charts.ex:135
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:314
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:349
 #, elixir-autogen, elixir-format
 msgid "%{count} minute"
 msgid_plural "%{count} minutes"
@@ -811,7 +811,7 @@ msgid_plural "%{count} model not served"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:858
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:851
 #, elixir-autogen, elixir-format
 msgid "%{count} model, %{cost}"
 msgid_plural "%{count} models, %{cost}"
@@ -883,7 +883,7 @@ msgstr[1] ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:188
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1106
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1099
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/token_burn_projection.ex:230
 #, elixir-autogen, elixir-format
 msgid "%{count} request"
@@ -898,14 +898,14 @@ msgid_plural "%{count} requests over seven days; %{failed} failed in the last 24
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:40
 #, elixir-autogen, elixir-format
 msgid "%{count} retained record"
 msgid_plural "%{count} retained records"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:852
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:845
 #, elixir-autogen, elixir-format
 msgid "%{count} routing lane"
 msgid_plural "%{count} routing lanes"
@@ -987,7 +987,7 @@ msgstr[1] ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:187
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:195
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1129
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1122
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:98
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:105
 #, elixir-autogen, elixir-format
@@ -1080,12 +1080,12 @@ msgid_plural "%{date}: %{succeeded} succeeded, %{failed} failed, %{cancelled} cl
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:918
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:917
 #, elixir-autogen, elixir-format
 msgid "%{default} default · up to %{maximum}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:928
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:927
 #, elixir-autogen, elixir-format
 msgid "%{default} default · up to %{maximum} · varies by upstream"
 msgstr ""
@@ -1176,7 +1176,7 @@ msgstr ""
 msgid "%{flag} %{state} on %{pool}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:96
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:97
 #, elixir-autogen, elixir-format
 msgid "%{freshness} · retained measurement"
 msgstr ""
@@ -1196,7 +1196,7 @@ msgstr ""
 msgid "%{kind} flow"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:597
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:596
 #, elixir-autogen, elixir-format
 msgid "%{label} (%{timezone})"
 msgstr ""
@@ -1363,7 +1363,7 @@ msgid_plural "%{requests}+ newer"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:222
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
 #, elixir-autogen, elixir-format
 msgid "%{request}. %{reset}"
 msgstr ""
@@ -1408,12 +1408,12 @@ msgid_plural "%{shown} of %{count} incidents"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:178
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:179
 #, elixir-autogen, elixir-format
 msgid "%{source}: %{remaining} remaining, %{freshness}, not selected"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:175
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:176
 #, elixir-autogen, elixir-format
 msgid "%{source}: %{remaining} remaining, %{freshness}, selected for display"
 msgstr ""
@@ -1547,7 +1547,7 @@ msgstr ""
 msgid "%{title} · %{name}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1082
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1081
 #, elixir-autogen, elixir-format
 msgid "%{title}. %{description}"
 msgstr ""
@@ -1606,7 +1606,7 @@ msgid_plural "%{tokens} reasoning"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1109
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
 #, elixir-autogen, elixir-format
 msgid "%{tokens} settled token"
 msgid_plural "%{tokens} settled tokens"
@@ -1617,10 +1617,10 @@ msgstr[1] ""
 #: lib/codex_pooler_web/live/admin/components/pages/stats/leaderboard.ex:162
 #: lib/codex_pooler_web/live/admin/components/pages/stats/token_cost_chart.ex:70
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:67
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1126
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1119
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:95
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:102
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:914
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:913
 #, elixir-autogen, elixir-format
 msgid "%{tokens} token"
 msgid_plural "%{tokens} tokens"
@@ -1646,7 +1646,7 @@ msgid_plural "%{tokens} total tokens — Cached input: %{cached}; Uncached input
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1121
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1114
 #, elixir-autogen, elixir-format
 msgid "%{tokens}+ token"
 msgid_plural "%{tokens}+ tokens"
@@ -1951,14 +1951,14 @@ msgstr ""
 msgid "API pricing cutoff"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:983
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:982
 #, elixir-autogen, elixir-format
 msgid "API support differs across upstreams"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:784
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:791
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:804
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:783
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:790
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:803
 #, elixir-autogen, elixir-format
 msgid "About %{model}"
 msgstr ""
@@ -2003,18 +2003,18 @@ msgstr ""
 msgid "Access token"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:595
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:586
 #, elixir-autogen, elixir-format
 msgid "Access token expired %{age}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:589
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:580
 #, elixir-autogen, elixir-format
 msgid "Access token expires %{age}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:600
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:605
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:591
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:596
 #, elixir-autogen, elixir-format
 msgid "Access token expiry unavailable"
 msgstr ""
@@ -2042,12 +2042,12 @@ msgstr ""
 msgid "Account data refreshed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:810
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:803
 #, elixir-autogen, elixir-format
 msgid "Account deletion is already in progress."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:843
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:836
 #, elixir-autogen, elixir-format
 msgid "Account did not report plan or quota details"
 msgstr ""
@@ -2068,7 +2068,7 @@ msgstr ""
 msgid "Account label"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:838
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:831
 #, elixir-autogen, elixir-format
 msgid "Account plan: %{plan}"
 msgstr ""
@@ -2148,7 +2148,7 @@ msgstr ""
 msgid "Actions"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:667
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:660
 #, elixir-autogen, elixir-format
 msgid "Actions for %{label}"
 msgstr ""
@@ -2254,7 +2254,7 @@ msgstr ""
 msgid "Adds sanitized request and routing details to gateway logs and attempt metadata for temporary troubleshooting. It increases log and stored-data volume; keep it disabled during normal production operation to minimize overhead."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:63
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:62
 #, elixir-autogen, elixir-format
 msgid "Admin"
 msgstr ""
@@ -2289,7 +2289,7 @@ msgstr ""
 msgid "Admitted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:558
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:557
 #, elixir-autogen, elixir-format
 msgid "Advanced filters"
 msgstr ""
@@ -2852,12 +2852,12 @@ msgstr ""
 msgid "Assign this account to a Pool before it can receive traffic."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:745
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:738
 #, elixir-autogen, elixir-format
 msgid "Assign this account to a visible Pool before creating a reinvite."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1198
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1191
 #, elixir-autogen, elixir-format
 msgid "Assign this account to a visible Pool before relinking."
 msgstr ""
@@ -3437,7 +3437,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:661
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:701
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1059
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:644
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:643
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:94
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:173
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:263
@@ -3469,8 +3469,8 @@ msgstr ""
 msgid "Catalog %{status}"
 msgstr ""
 
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1019
 #: lib/codex_pooler_web/live/admin/components/shared/components.ex:1020
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1021
 #, elixir-autogen, elixir-format
 msgid "Catalog checked %{time}"
 msgstr ""
@@ -3571,7 +3571,7 @@ msgstr ""
 msgid "Check status.openai.com every five minutes for provider incident updates."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Checked"
 msgstr ""
@@ -3581,7 +3581,7 @@ msgstr ""
 msgid "Checking..."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Checks paused until"
 msgstr ""
@@ -3718,7 +3718,7 @@ msgid "Cleanup continues in the background."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:501
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:641
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:640
 #, elixir-autogen, elixir-format
 msgid "Clear"
 msgstr ""
@@ -3813,7 +3813,7 @@ msgstr ""
 msgid "Clients authenticating with prefix %{prefix} start failing immediately. This cannot be undone."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:128
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:129
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:301
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:933
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1058
@@ -3821,7 +3821,7 @@ msgstr ""
 msgid "Close"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:479
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:478
 #, elixir-autogen, elixir-format
 msgid "Close details"
 msgstr ""
@@ -3831,7 +3831,7 @@ msgstr ""
 msgid "Close event details"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:132
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:133
 #, elixir-autogen, elixir-format
 msgid "Close quota observations"
 msgstr ""
@@ -4140,14 +4140,14 @@ msgstr ""
 msgid "Consecutive failed attempts needed before opening an upstream circuit."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Consumed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:914
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:918
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:928
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:913
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:917
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:927
 #, elixir-autogen, elixir-format
 msgid "Context"
 msgstr ""
@@ -4219,7 +4219,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:727
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:92
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:123
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1165
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1164
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:250
 #, elixir-autogen, elixir-format
 msgid "Copied"
@@ -4228,8 +4228,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:113
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:118
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:277
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1154
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1173
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1153
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1172
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr ""
@@ -4637,7 +4637,7 @@ msgstr ""
 msgid "Deactivate operator"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Deadline"
 msgstr ""
@@ -4711,7 +4711,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:766
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:221
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:326
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:796
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:789
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:236
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:627
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:264
@@ -4751,7 +4751,7 @@ msgstr ""
 msgid "Deleted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1195
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1188
 #, elixir-autogen, elixir-format
 msgid "Deleted accounts cannot be relinked."
 msgstr ""
@@ -4766,13 +4766,13 @@ msgstr ""
 msgid "Deleting account: %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1041
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1034
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:503
 #, elixir-autogen, elixir-format
 msgid "Deletion failed - retry Delete"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1040
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1033
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:502
 #, elixir-autogen, elixir-format
 msgid "Deletion in progress"
@@ -4816,7 +4816,7 @@ msgstr ""
 msgid "Deny all models"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:889
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:888
 #, elixir-autogen, elixir-format
 msgid "Descriptions differ across the current upstreams."
 msgstr ""
@@ -5028,7 +5028,7 @@ msgstr ""
 msgid "Do not spend a saved reset when the weekly or monthly account quota will reset naturally within this many minutes."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:420
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:419
 #, elixir-autogen, elixir-format
 msgid "Docs"
 msgstr ""
@@ -5110,7 +5110,7 @@ msgstr ""
 msgid "Edit"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:499
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:490
 #, elixir-autogen, elixir-format
 msgid "Edit %{pool} upstream assignments"
 msgstr ""
@@ -5821,7 +5821,7 @@ msgstr ""
 msgid "Finish the device authorization in your browser. This dialog updates when the account is ready."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Finished"
 msgstr ""
@@ -6088,7 +6088,7 @@ msgstr ""
 msgid "Helper ready at %{origin}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:968
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:967
 #, elixir-autogen, elixir-format
 msgid "Hidden upstream alias"
 msgstr ""
@@ -6385,7 +6385,7 @@ msgstr ""
 msgid "Inspect request %{id}, %{time}, %{status} in %{latency}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:489
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:488
 #, elixir-autogen, elixir-format
 msgid "Inspector sections"
 msgstr ""
@@ -6619,7 +6619,7 @@ msgstr ""
 msgid "Keep request values unchanged."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:192
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:161
 #, elixir-autogen, elixir-format
 msgid "Keep resets in bank"
 msgstr ""
@@ -6711,12 +6711,12 @@ msgstr ""
 msgid "Last 5 minutes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1099
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1092
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1095
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}; usage still missing for %{missing}."
 msgstr ""
@@ -6803,7 +6803,7 @@ msgstr ""
 msgid "Latest attempt"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:94
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:64
 #, elixir-autogen, elixir-format
 msgid "Latest reset"
 msgstr ""
@@ -6980,12 +6980,12 @@ msgstr ""
 msgid "Live updates connection"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:159
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:128
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected. Reconnect to see the latest status before acting."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:159
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:128
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected. The reset continues. Reconnect to see the latest status before acting."
 msgstr ""
@@ -7488,12 +7488,12 @@ msgstr ""
 msgid "Metrics settings are unavailable, so /metrics fails closed with 401."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1007
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1006
 #, elixir-autogen, elixir-format
 msgid "Min Codex %{first}-%{last} · varies by upstream"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:997
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:996
 #, elixir-autogen, elixir-format
 msgid "Min Codex %{version}"
 msgstr ""
@@ -7624,7 +7624,7 @@ msgstr ""
 msgid "Model identifier"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:827
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:826
 #, elixir-autogen, elixir-format
 msgid "Model info"
 msgstr ""
@@ -7671,7 +7671,7 @@ msgid "Model reported at end"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/alerts/page_components/rules.ex:233
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:549
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
 #, elixir-autogen, elixir-format
 msgid "Model scope"
 msgstr ""
@@ -7880,7 +7880,7 @@ msgstr ""
 msgid "No Pool invites"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1076
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1069
 #, elixir-autogen, elixir-format
 msgid "No Pools"
 msgstr ""
@@ -7912,7 +7912,7 @@ msgid "No active Pool assignments"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:524
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:887
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:886
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1277
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1289
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:158
@@ -8029,7 +8029,7 @@ msgstr ""
 msgid "No delivery attempts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:892
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:891
 #, elixir-autogen, elixir-format
 msgid "No description was reported by the current upstreams."
 msgstr ""
@@ -8149,7 +8149,7 @@ msgstr ""
 msgid "No models"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:264
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:255
 #, elixir-autogen, elixir-format
 msgid "No models advertised or used in the last 5 minutes."
 msgstr ""
@@ -8221,7 +8221,7 @@ msgstr ""
 msgid "No requests in the last 60 minutes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1096
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1089
 #, elixir-autogen, elixir-format
 msgid "No requests toward %{pool} in the last 5 minutes."
 msgstr ""
@@ -8393,7 +8393,7 @@ msgstr ""
 msgid "Not enforced"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:978
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:977
 #, elixir-autogen, elixir-format
 msgid "Not exposed by the public API"
 msgstr ""
@@ -8547,7 +8547,7 @@ msgid "OAuth flow was superseded"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:214
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:872
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:871
 #, elixir-autogen, elixir-format
 msgid "OAuth relink"
 msgstr ""
@@ -8713,7 +8713,7 @@ msgstr ""
 msgid "Open %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:410
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:409
 #, elixir-autogen, elixir-format
 msgid "Open Codex Pooler documentation"
 msgstr ""
@@ -9047,7 +9047,7 @@ msgstr ""
 msgid "Optionally pin the model and service tier sent upstream, regardless of request values."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:66
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:67
 #, elixir-autogen, elixir-format
 msgid "Original provider window slot, not selection priority"
 msgstr ""
@@ -9160,7 +9160,7 @@ msgstr ""
 msgid "Page data is still shown; refreshes resume once the socket is back."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:118
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:117
 #, elixir-autogen, elixir-format
 msgid "Page metrics"
 msgstr ""
@@ -9277,7 +9277,7 @@ msgid "Pasted JSON must be %{limit} or smaller"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_components.ex:472
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:691
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:684
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:231
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:262
 #, elixir-autogen, elixir-format
@@ -9402,7 +9402,7 @@ msgstr ""
 msgid "Phase"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:844
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:837
 #, elixir-autogen, elixir-format
 msgid "Plan and quota not reported"
 msgstr ""
@@ -9684,9 +9684,9 @@ msgstr ""
 msgid "Pooled upstream connections idle longer than this are replaced on their next use. Checked only when a connection is taken, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT, load balancer, or proxy on the egress path."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:337
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:412
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:415
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:328
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:403
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:406
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:18
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:337
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:340
@@ -9913,7 +9913,7 @@ msgstr ""
 msgid "Provider caching remains available."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:763
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:756
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:685
 #, elixir-autogen, elixir-format
 msgid "Provider credits"
@@ -10047,7 +10047,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:52
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:206
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
 #, elixir-autogen, elixir-format
 msgid "Quota exhausted"
 msgstr ""
@@ -10059,7 +10059,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:410
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:208
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
 #, elixir-autogen, elixir-format
 msgid "Quota missing"
 msgstr ""
@@ -10132,7 +10132,7 @@ msgid "Rate limited"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:746
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:703
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:696
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:239
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:407
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:263
@@ -10156,7 +10156,7 @@ msgstr ""
 msgid "Reading the latest saved modes and routable model catalog."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:112
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:82
 #, elixir-autogen, elixir-format
 msgid "Reads the recorded status. It does not contact the provider or start another redemption."
 msgstr ""
@@ -10211,7 +10211,7 @@ msgstr ""
 msgid "Reauth required"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1004
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:997
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/reconciliation_status.ex:90
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:159
 #, elixir-autogen, elixir-format
@@ -10351,12 +10351,12 @@ msgstr ""
 msgid "Redeem"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:160
 #, elixir-autogen, elixir-format
 msgid "Redeem one reset"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:185
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:154
 #, elixir-autogen, elixir-format
 msgid "Redeem one saved reset for this account? The provider may apply it before quota checks finish. Verification can take a few minutes. You can leave this view and return to check the status."
 msgstr ""
@@ -10372,7 +10372,7 @@ msgid "Redeem saved reset is not available: %{reason}"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:243
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:118
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:88
 #, elixir-autogen, elixir-format
 msgid "Refresh"
 msgstr ""
@@ -10420,7 +10420,7 @@ msgstr ""
 msgid "Refresh paused while tab hidden"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:129
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:99
 #, elixir-autogen, elixir-format
 msgid "Refresh reads the recorded status. It does not contact the provider or start another redemption."
 msgstr ""
@@ -10431,7 +10431,7 @@ msgstr ""
 msgid "Refresh the account data to try again."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:752
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:745
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:206
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:260
 #, elixir-autogen, elixir-format
@@ -10455,8 +10455,8 @@ msgstr ""
 msgid "Refreshing"
 msgstr ""
 
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:729
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:736
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:743
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:383
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:391
 #, elixir-autogen, elixir-format
@@ -10496,7 +10496,7 @@ msgstr ""
 msgid "Relink %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:724
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:717
 #, elixir-autogen, elixir-format
 msgid "Relink account"
 msgstr ""
@@ -10522,7 +10522,7 @@ msgstr ""
 msgid "Reload this card and retry."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:74
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:75
 #, elixir-autogen, elixir-format
 msgid "Remaining quota"
 msgstr ""
@@ -10532,14 +10532,14 @@ msgstr ""
 msgid "Remove selected auth.json file"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:815
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:808
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:892
 #, elixir-autogen, elixir-format
 msgid "Remove this account from all Pools before deleting it."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:213
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:680
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:673
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:164
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:283
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:555
@@ -10554,9 +10554,9 @@ msgstr ""
 msgid "Rename upstream account"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:715
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:708
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:222
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:871
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:870
 #, elixir-autogen, elixir-format
 msgid "Replace auth.json"
 msgstr ""
@@ -10607,7 +10607,7 @@ msgid "Req/TPS %{window}"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:143
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:88
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:58
 #, elixir-autogen, elixir-format
 msgid "Request"
 msgstr ""
@@ -10713,7 +10713,7 @@ msgstr ""
 msgid "Request metrics unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:121
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:91
 #, elixir-autogen, elixir-format
 msgid "Request status and the latest account reset are separate recorded facts."
 msgstr ""
@@ -10728,7 +10728,7 @@ msgstr ""
 msgid "Request-URI Too Long"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:37
 #, elixir-autogen, elixir-format
 msgid "Requested"
 msgstr ""
@@ -10748,7 +10748,7 @@ msgstr ""
 msgid "Requested tier"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:160
 #, elixir-autogen, elixir-format
 msgid "Requesting..."
 msgstr ""
@@ -10759,7 +10759,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:50
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:61
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_distribution.ex:73
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:243
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:234
 #, elixir-autogen, elixir-format
 msgid "Requests"
 msgstr ""
@@ -10871,7 +10871,7 @@ msgstr ""
 msgid "Resume auto-refresh"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:43
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:44
 #, elixir-autogen, elixir-format
 msgid "Retained quota evidence, selected first then newest"
 msgstr ""
@@ -11040,8 +11040,8 @@ msgid "Route-class bulkheads"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:17
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:346
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:392
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:337
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:383
 #, elixir-autogen, elixir-format
 msgid "Routing"
 msgstr ""
@@ -11052,7 +11052,7 @@ msgstr ""
 msgid "Routing lanes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:979
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:972
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:591
 #, elixir-autogen, elixir-format
 msgid "Routing readiness is unavailable for this upstream account."
@@ -11071,7 +11071,7 @@ msgstr ""
 msgid "Routing summary"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:976
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:969
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:589
 #, elixir-autogen, elixir-format
 msgid "Routing unavailable"
@@ -11082,7 +11082,7 @@ msgstr ""
 msgid "Routing, quota, and health for this account live on its cockpit."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:126
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:96
 #, elixir-autogen, elixir-format
 msgid "Routing: %{status}"
 msgstr ""
@@ -11548,17 +11548,12 @@ msgstr ""
 msgid "Saved reset request was not accepted. Use Refresh to see the current account state."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:55
-#, elixir-autogen, elixir-format
-msgid "Saved reset status"
-msgstr ""
-
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:74
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:44
 #, elixir-autogen, elixir-format
 msgid "Saved reset · %{headline}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:785
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:778
 #, elixir-autogen, elixir-format
 msgid "Saved resets"
 msgstr ""
@@ -11590,7 +11585,7 @@ msgid "Scan the QR code, copy the secret if scanning is not available, then down
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/state.ex:87
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:37
 #: lib/codex_pooler_web/live/admin/forms/job_filter_form.ex:349
 #, elixir-autogen, elixir-format
 msgid "Scheduled"
@@ -11602,7 +11597,7 @@ msgid "Scheduled recovery refreshes an active account once its access token is t
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/pages/stats_live.ex:183
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:181
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:217
 #, elixir-autogen, elixir-format
 msgid "Scope"
 msgstr ""
@@ -11715,7 +11710,7 @@ msgstr ""
 msgid "Selected"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:40
 #, elixir-autogen, elixir-format
 msgid "Selected first, then newest"
 msgstr ""
@@ -11896,7 +11891,7 @@ msgstr ""
 msgid "Settled cost"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:247
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:238
 #, elixir-autogen, elixir-format
 msgid "Settled requests in the last 5 minutes"
 msgstr ""
@@ -11958,7 +11953,7 @@ msgstr ""
 msgid "Show API key notes"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:935
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:928
 #, elixir-autogen, elixir-format
 msgid "Show Pool assignments: %{count_label}"
 msgstr ""
@@ -11973,7 +11968,7 @@ msgstr ""
 msgid "Show affected keys"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:118
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:119
 #, elixir-autogen, elixir-format
 msgid "Show all %{count} record"
 msgid_plural "Show all %{count} records"
@@ -11990,7 +11985,7 @@ msgstr ""
 msgid "Show assigned Pools (%{pools}) for this operator"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:930
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:923
 #, elixir-autogen, elixir-format
 msgid "Show model usage for the last 5 minutes"
 msgstr ""
@@ -12000,8 +11995,8 @@ msgstr ""
 msgid "Show quota observations"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:929
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:932
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:922
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:925
 #, elixir-autogen, elixir-format
 msgid "Show quota status"
 msgstr ""
@@ -12167,7 +12162,7 @@ msgstr ""
 msgid "Start the Impeccable live server, then recheck. It writes its port and session token to .impeccable/live/server.json when it comes up."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Started"
 msgstr ""
@@ -12220,7 +12215,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:219
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:195
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:41
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:157
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:156
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:234
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:71
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:314
@@ -12435,7 +12430,7 @@ msgstr ""
 msgid "TLS"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:175
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:174
 #, elixir-autogen, elixir-format
 msgid "TOKEN BURN"
 msgstr ""
@@ -12711,17 +12706,17 @@ msgstr ""
 msgid "This Pool has no routable catalog models or retained model overrides yet. Run model sync after assigning an active upstream."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:845
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:838
 #, elixir-autogen, elixir-format
 msgid "This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1005
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:998
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from routing until credentials are replaced."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:993
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:986
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked."
 msgstr ""
@@ -12849,7 +12844,7 @@ msgstr ""
 msgid "Times %{timezone}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:91
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:92
 #, elixir-autogen, elixir-format
 msgid "Timestamp of the retained evidence; values may include earlier reports"
 msgstr ""
@@ -12916,7 +12911,7 @@ msgstr ""
 msgid "Token refresh"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:992
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:985
 #, elixir-autogen, elixir-format
 msgid "Token refresh failed"
 msgstr ""
@@ -12933,7 +12928,7 @@ msgstr ""
 msgid "Token refresh queued"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1132
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1125
 #, elixir-autogen, elixir-format
 msgid "Token usage in the last 5 minutes"
 msgstr ""
@@ -12998,7 +12993,7 @@ msgstr ""
 msgid "Tokens, spend, latency, and cache activity for the Pools and window you pick."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:445
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:436
 #, elixir-autogen, elixir-format
 msgid "Tokens/5m"
 msgstr ""
@@ -13315,7 +13310,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/lens/presentation.ex:101
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/attempts.ex:125
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/status.ex:99
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1046
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1039
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:104
 #: lib/codex_pooler_web/live/admin/read_models/open_ai_incidents_read_model.ex:90
 #: lib/codex_pooler_web/live/observatory/presentation.ex:428
@@ -13328,7 +13323,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:529
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1282
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:201
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1100
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1102
 #, elixir-autogen, elixir-format
 msgid "Unknown Pool"
 msgstr ""
@@ -13892,7 +13887,7 @@ msgstr ""
 msgid "Usage records missing"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1117
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1110
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:86
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:116
 #, elixir-autogen, elixir-format
@@ -14061,12 +14056,7 @@ msgstr ""
 msgid "View incident"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:71
-#, elixir-autogen, elixir-format
-msgid "View status"
-msgstr ""
-
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:973
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:972
 #, elixir-autogen, elixir-format
 msgid "Visibility differs across upstreams"
 msgstr ""
@@ -14200,8 +14190,8 @@ msgid "Will be removed on save"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/filters.ex:17
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:179
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:619
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:215
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:621
 #, elixir-autogen, elixir-format
 msgid "Window"
 msgstr ""
@@ -14216,13 +14206,13 @@ msgstr ""
 msgid "Without a model name"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1023
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1028
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1016
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1021
 #, elixir-autogen, elixir-format
 msgid "Workspace %{label}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1036
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1029
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:564
 #, elixir-autogen, elixir-format
 msgid "Workspace reference %{ref}"
@@ -14248,7 +14238,7 @@ msgstr ""
 msgid "Yes — provider reported different names in one response"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:818
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:811
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:895
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to permanently delete this account."
@@ -14319,7 +14309,7 @@ msgid "access token is expired"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:295
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:295
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:330
 #, elixir-autogen, elixir-format
 msgid "account"
 msgstr ""
@@ -14329,7 +14319,7 @@ msgstr ""
 msgid "account label"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:867
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:866
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
@@ -14397,7 +14387,7 @@ msgstr ""
 msgid "assigned-pool admin capabilities require a Pool scope"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:609
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:600
 #, elixir-autogen, elixir-format
 msgid "at an unknown time"
 msgstr ""
@@ -14420,7 +14410,7 @@ msgstr ""
 msgid "attempts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
 #, elixir-autogen, elixir-format
 msgid "attention needed"
 msgstr ""
@@ -14588,7 +14578,7 @@ msgstr ""
 msgid "cost n/a"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:587
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:586
 #, elixir-autogen, elixir-format
 msgid "dd/mm/yyyy"
 msgstr ""
@@ -14679,8 +14669,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:414
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:430
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/usage_poll_pause.ex:28
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:992
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:919
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:994
 #, elixir-autogen, elixir-format
 msgid "due"
 msgstr ""
@@ -14738,7 +14728,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:150
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:151
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
 #, elixir-autogen, elixir-format
 msgid "error"
 msgstr ""
@@ -14750,7 +14740,7 @@ msgstr ""
 msgid "errored"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:93
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:94
 #, elixir-autogen, elixir-format
 msgid "evidence as of %{time}"
 msgstr ""
@@ -14817,8 +14807,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/prose.ex:671
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:45
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:707
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:823
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:827
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:825
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:829
 #, elixir-autogen, elixir-format
 msgid "failed"
 msgstr ""
@@ -14849,7 +14839,7 @@ msgstr ""
 msgid "forced"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:180
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:181
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:56
 #, elixir-autogen, elixir-format
 msgid "fresh"
@@ -14971,7 +14961,7 @@ msgstr ""
 msgid "known"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:75
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:76
 #, elixir-autogen, elixir-format
 msgid "last known %{remaining}"
 msgstr ""
@@ -15159,7 +15149,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/format.ex:60
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:478
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:269
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:304
 #, elixir-autogen, elixir-format
 msgid "no"
 msgstr ""
@@ -15213,8 +15203,8 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:17
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:477
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:42
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:701
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:786
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:703
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:788
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:975
 #, elixir-autogen, elixir-format
 msgid "not reported"
@@ -15249,7 +15239,7 @@ msgstr ""
 msgid "off"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1274
 #, elixir-autogen, elixir-format
 msgid "ok"
 msgstr ""
@@ -15436,7 +15426,7 @@ msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:166
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:52
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:794
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:796
 #, elixir-autogen, elixir-format
 msgid "reauth required"
 msgstr ""
@@ -15461,7 +15451,7 @@ msgstr ""
 msgid "recovering"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1278
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
 #, elixir-autogen, elixir-format
 msgid "redacted"
 msgstr ""
@@ -15690,7 +15680,7 @@ msgid "slug"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:623
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:181
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:182
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:57
 #, elixir-autogen, elixir-format
 msgid "stale"
@@ -15795,8 +15785,8 @@ msgid_plural "tokens"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1015
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:793
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:795
 #, elixir-autogen, elixir-format
 msgid "token refresh failed"
 msgstr ""
@@ -15818,8 +15808,8 @@ msgstr ""
 msgid "tokens"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:233
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:448
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:224
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:439
 #, elixir-autogen, elixir-format
 msgid "tokens/5m"
 msgstr ""
@@ -15867,13 +15857,13 @@ msgstr ""
 msgid "unclassified failure"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:182
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:183
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:53
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:126
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex:415
 #: lib/codex_pooler_web/live/admin/forms/pool_form.ex:747
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:710
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:294
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:329
 #, elixir-autogen, elixir-format
 msgid "unknown"
 msgstr ""
@@ -16039,7 +16029,7 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/format.ex:60
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:478
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:500
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:268
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:303
 #, elixir-autogen, elixir-format
 msgid "yes"
 msgstr ""
@@ -16151,7 +16141,7 @@ msgid_plural "%{attempts} attempts"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:343
 #, elixir-autogen, elixir-format
 msgid "%{count} day"
 msgid_plural "%{count} days"
@@ -16179,7 +16169,7 @@ msgid_plural "%{count} more open targets"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:797
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:799
 #, elixir-autogen, elixir-format
 msgid "%{credits} credit"
 msgid_plural "%{credits} credits"
@@ -16191,12 +16181,12 @@ msgstr[1] ""
 msgid "%{flow_kind} flow"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:524
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:526
 #, elixir-autogen, elixir-format
 msgid "%{label} %{window}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:514
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:516
 #, elixir-autogen, elixir-format
 msgid "%{label} (%{identity})"
 msgstr ""
@@ -16207,16 +16197,16 @@ msgstr ""
 msgid "%{rate}/min"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:792
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:814
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:794
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:816
 #, elixir-autogen, elixir-format
 msgid "%{remaining} / %{total} credit"
 msgid_plural "%{remaining} / %{total} credits"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:223
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:245
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:246
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:280
 #, elixir-autogen, elixir-format
 msgid "%{remaining} remaining"
 msgstr ""
@@ -16243,7 +16233,7 @@ msgstr ""
 msgid "%{timestamp} · %{relative_time}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "A request succeeded on the new quota; the usage report has not caught up yet."
 msgstr ""
@@ -16278,8 +16268,8 @@ msgstr ""
 msgid "Actions for %{title}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:535
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:640
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:537
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:642
 #, elixir-autogen, elixir-format
 msgid "Additional limit"
 msgstr ""
@@ -16310,13 +16300,13 @@ msgid "Availability is conditional on the request model, transport and serving m
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:211
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery pending"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
 #, elixir-autogen, elixir-format
 msgid "Being processed."
 msgstr ""
@@ -16338,7 +16328,7 @@ msgstr ""
 msgid "Cancelled"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:187
 #, elixir-autogen, elixir-format
 msgid "Check the latest reset before acting."
 msgstr ""
@@ -16359,7 +16349,7 @@ msgid "Complete account setup and reconciliation."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:210
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
 #, elixir-autogen, elixir-format
 msgid "Conditional provider availability"
 msgstr ""
@@ -16369,7 +16359,7 @@ msgstr ""
 msgid "Current provider credit permission, identity lifecycle and assignment availability allow routing. Each request still checks its model, transport and serving mode; this does not identify a billing debit."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
 #, elixir-autogen, elixir-format
 msgid "Deadline passed — checking quota"
 msgstr ""
@@ -16411,12 +16401,12 @@ msgstr ""
 msgid "Failure detail"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:578
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
 #, elixir-autogen, elixir-format
 msgid "Family %{value}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:553
 #, elixir-autogen, elixir-format
 msgid "Feature scope"
 msgstr ""
@@ -16431,12 +16421,12 @@ msgstr ""
 msgid "HTTP %{status_code}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:899
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:901
 #, elixir-autogen, elixir-format
 msgid "HTTP %{status_code} with Retry-After"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:902
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:904
 #, elixir-autogen, elixir-format
 msgid "HTTP %{status_code} with a provider instruction"
 msgstr ""
@@ -16461,7 +16451,7 @@ msgstr ""
 msgid "Identity unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:151
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:187
 #, elixir-autogen, elixir-format
 msgid "Incoming quota report"
 msgstr ""
@@ -16471,7 +16461,7 @@ msgstr ""
 msgid "Inspect the sanitized account error and recover the upstream account."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "It does not block another redemption."
 msgstr ""
@@ -16516,12 +16506,12 @@ msgstr ""
 msgid "Last run"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:177
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:213
 #, elixir-autogen, elixir-format
 msgid "Last synchronized"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:116
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:152
 #, elixir-autogen, elixir-format
 msgid "Last verified quota"
 msgstr ""
@@ -16536,7 +16526,7 @@ msgstr ""
 msgid "Lifecycle blocked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:258
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:293
 #, elixir-autogen, elixir-format
 msgid "Limit reached"
 msgstr ""
@@ -16546,27 +16536,27 @@ msgstr ""
 msgid "Limited model availability"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:377
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:379
 #, elixir-autogen, elixir-format
 msgid "Live updates paused"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:244
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:279
 #, elixir-autogen, elixir-format
 msgid "Measurement status"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:582
 #, elixir-autogen, elixir-format
 msgid "Model %{value}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:155
 #, elixir-autogen, elixir-format
 msgid "New quota report awaiting verification"
 msgstr ""
@@ -16591,17 +16581,17 @@ msgstr ""
 msgid "No jobs match these filters"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:180
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
 #, elixir-autogen, elixir-format
 msgid "No reset result is recorded."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:312
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:320
 #, elixir-autogen, elixir-format
 msgid "No reset result recorded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:324
 #, elixir-autogen, elixir-format
 msgid "No saved reset was available"
 msgstr ""
@@ -16611,28 +16601,28 @@ msgstr ""
 msgid "No saved resets"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:301
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:300
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time. The spent reset is not refunded."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:243
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:272
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:274
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:284
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:287
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:315
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:320
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:278
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:309
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:319
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:322
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:350
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:355
 #, elixir-autogen, elixir-format
 msgid "Not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:325
 #, elixir-autogen, elixir-format
 msgid "Nothing needed resetting"
 msgstr ""
@@ -16678,7 +16668,7 @@ msgstr ""
 msgid "Only the independently evidenced Spark allowance permits model routing; ordinary account quota remains blocked."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:304
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:339
 #, elixir-autogen, elixir-format
 msgid "Other source"
 msgstr ""
@@ -16688,7 +16678,7 @@ msgstr ""
 msgid "Paused upstream accounts are excluded from model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:245
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:280
 #, elixir-autogen, elixir-format
 msgid "Pending provider measurement"
 msgstr ""
@@ -16703,17 +16693,17 @@ msgstr ""
 msgid "Pool assignment"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:596
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:598
 #, elixir-autogen, elixir-format
 msgid "Primary"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
 #, elixir-autogen, elixir-format
 msgid "Priming blocked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:115
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
 #, elixir-autogen, elixir-format
 msgid "Priming pending"
 msgstr ""
@@ -16724,15 +16714,15 @@ msgid "Priority"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:205
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
 #, elixir-autogen, elixir-format
 msgid "Provider available"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:213
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1012
 #, elixir-autogen, elixir-format
 msgid "Provider credit capacity unverified"
 msgstr ""
@@ -16743,66 +16733,66 @@ msgid "Provider credit-dependent admission is disabled; independently valid incl
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:212
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1011
 #, elixir-autogen, elixir-format
 msgid "Provider credits disabled"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:246
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:281
 #, elixir-autogen, elixir-format
 msgid "Provider observation"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:178
 #, elixir-autogen, elixir-format
 msgid "Queued. Nothing has been sent to the provider yet."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:209
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
 #, elixir-autogen, elixir-format
 msgid "Quota blocked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:378
 #, elixir-autogen, elixir-format
 msgid "Quota checks are delayed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:300
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:301
 #, elixir-autogen, elixir-format
 msgid "Quota confirmation timed out"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
 #, elixir-autogen, elixir-format
 msgid "Quota confirmed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
 #, elixir-autogen, elixir-format
 msgid "Quota expired"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
 #, elixir-autogen, elixir-format
 msgid "Quota failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Quota is still blocked."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Quota is still unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
 #, elixir-autogen, elixir-format
 msgid "Quota known"
 msgstr ""
@@ -16813,43 +16803,43 @@ msgid "Quota readiness blocks model routing: %{label}."
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:203
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:999
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
 #, elixir-autogen, elixir-format
 msgid "Quota ready"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:207
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Quota refresh needed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
 #, elixir-autogen, elixir-format
 msgid "Quota reset missing"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:186
 #, elixir-autogen, elixir-format
 msgid "Quota role"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
 #, elixir-autogen, elixir-format
 msgid "Quota stale"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:125
 #, elixir-autogen, elixir-format
 msgid "Quota unprimed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:303
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:338
 #, elixir-autogen, elixir-format
 msgid "Rate-limit error"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:302
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:337
 #, elixir-autogen, elixir-format
 msgid "Rate-limit event"
 msgstr ""
@@ -16864,7 +16854,7 @@ msgstr ""
 msgid "Reauthentication is required before this account can be selected for model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
 #, elixir-autogen, elixir-format
 msgid "Reconciling quota"
 msgstr ""
@@ -16874,12 +16864,12 @@ msgstr ""
 msgid "Recover the upstream account lifecycle before routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:186
 #, elixir-autogen, elixir-format
 msgid "Recovery verification"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "Recovery verified by a request"
 msgstr ""
@@ -16899,38 +16889,38 @@ msgstr ""
 msgid "Relink credentials or complete a successful token refresh."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:180
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:216
 #, elixir-autogen, elixir-format
 msgid "Reported slot"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
 #, elixir-autogen, elixir-format
 msgid "Request accepted"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:189
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:197
 #, elixir-autogen, elixir-format
 msgid "Request accepted — processing"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:196
 #, elixir-autogen, elixir-format
 msgid "Request accepted — queued"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:174
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:182
 #, elixir-autogen, elixir-format
 msgid "Request cancelled"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:172
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:180
 #, elixir-autogen, elixir-format
 msgid "Request completed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:173
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:181
 #, elixir-autogen, elixir-format
 msgid "Request did not complete"
 msgstr ""
@@ -16940,12 +16930,12 @@ msgstr ""
 msgid "Request retried"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:184
 #, elixir-autogen, elixir-format
 msgid "Request status unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:183
 #, elixir-autogen, elixir-format
 msgid "Request stopped"
 msgstr ""
@@ -16960,43 +16950,43 @@ msgstr ""
 msgid "Request · quota threshold"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
 #, elixir-autogen, elixir-format
 msgid "Reset applied"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Reset applied — verifying quota"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:190
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:309
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:198
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not confirmed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not recorded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:212
 #, elixir-autogen, elixir-format
 msgid "Reset reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:315
 #, elixir-autogen, elixir-format
 msgid "Reset request in progress"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:326
 #, elixir-autogen, elixir-format
 msgid "Reset was not applied"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:301
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:336
 #, elixir-autogen, elixir-format
 msgid "Response headers"
 msgstr ""
@@ -17006,23 +16996,23 @@ msgstr ""
 msgid "Resume the upstream account before routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:243
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:278
 #, elixir-autogen, elixir-format
 msgid "Retained measurement"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
 #, elixir-autogen, elixir-format
 msgid "Retained measurement awaits confirmation"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:244
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:279
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
 #, elixir-autogen, elixir-format
 msgid "Retained measurement; newer provider measurement awaits confirmation"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:257
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:292
 #, elixir-autogen, elixir-format
 msgid "Routing permission"
 msgstr ""
@@ -17033,7 +17023,7 @@ msgid "Routing ready"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:187
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
 #, elixir-autogen, elixir-format
 msgid "Routing ready via credits"
 msgstr ""
@@ -17073,17 +17063,17 @@ msgstr ""
 msgid "Scheduled · quota threshold"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:579
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
 #, elixir-autogen, elixir-format
 msgid "Scope %{value}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:117
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:153
 #, elixir-autogen, elixir-format
 msgid "Source freshness does not mean the new quota cycle has been accepted."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:214
 #, elixir-autogen, elixir-format
 msgid "Source precision"
 msgstr ""
@@ -17098,53 +17088,48 @@ msgstr ""
 msgid "Stored invitation email language"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
-#, elixir-autogen, elixir-format
-msgid "The new quota cycle is confirmed."
-msgstr ""
-
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
 #, elixir-autogen, elixir-format
 msgid "The provider applied the reset."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:325
 #, elixir-autogen, elixir-format
 msgid "The provider found no exhausted quota to reset."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:324
 #, elixir-autogen, elixir-format
 msgid "The provider had no saved reset to apply."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:349
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:357
 #, elixir-autogen, elixir-format
 msgid "The provider reported that the reset was not applied."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:353
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:361
 #, elixir-autogen, elixir-format
 msgid "The request may have reached the provider. Don't redeem again until this resolves."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:348
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:326
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:356
 #, elixir-autogen, elixir-format
 msgid "The request stopped before reaching the provider."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:377
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Reconnect to see the latest status before acting."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:379
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Refresh reads the stored status."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
 #, elixir-autogen, elixir-format
 msgid "The reset was applied, but quota is still blocked. No further reset is spent automatically."
 msgstr ""
@@ -17174,22 +17159,22 @@ msgstr ""
 msgid "Token refresh is due before this account can be selected for model routing."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:583
 #, elixir-autogen, elixir-format
 msgid "Upstream model %{value}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:550
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:552
 #, elixir-autogen, elixir-format
 msgid "Upstream model scope"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:300
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:335
 #, elixir-autogen, elixir-format
 msgid "Usage API"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:378
 #, elixir-autogen, elixir-format
 msgid "Usage polling is paused or unavailable, so confirmation can take longer."
 msgstr ""
@@ -17224,34 +17209,35 @@ msgstr ""
 msgid "Waiting for fresh included-quota data to confirm the reset."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Waiting for a usage report to confirm the new quota."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
 #, elixir-autogen, elixir-format
 msgid "Waiting for the latest quota check."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:315
 #, elixir-autogen, elixir-format
 msgid "Waiting for the provider's answer."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:222
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:603
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:223
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:605
 #, elixir-autogen, elixir-format
 msgid "Weekly"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:204
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1000
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
 #, elixir-autogen, elixir-format
 msgid "Weekly quota probe"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
 #, elixir-autogen, elixir-format
 msgid "Weekly-only probe"
 msgstr ""
@@ -17266,17 +17252,17 @@ msgstr ""
 msgid "When"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:182
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:218
 #, elixir-autogen, elixir-format
 msgid "Window state"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:904
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:906
 #, elixir-autogen, elixir-format
 msgid "a throttling response with Retry-After"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:905
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:907
 #, elixir-autogen, elixir-format
 msgid "a throttling response with a provider instruction"
 msgstr ""
@@ -17301,7 +17287,7 @@ msgstr ""
 msgid "access token expires not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:854
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:856
 #, elixir-autogen, elixir-format
 msgid "access token expiry unavailable"
 msgstr ""
@@ -17311,22 +17297,22 @@ msgstr ""
 msgid "after retry"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:266
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:301
 #, elixir-autogen, elixir-format
 msgid "allowed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1018
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1020
 #, elixir-autogen, elixir-format
 msgid "assignment health preserved"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1019
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1021
 #, elixir-autogen, elixir-format
 msgid "assignment health refreshed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1020
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1022
 #, elixir-autogen, elixir-format
 msgid "assignment health skipped"
 msgstr ""
@@ -17351,7 +17337,7 @@ msgstr ""
 msgid "auth verified not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:326
 #, elixir-autogen, elixir-format
 msgid "authoritative"
 msgstr ""
@@ -17361,7 +17347,7 @@ msgstr ""
 msgid "auto-publishing token linking is not allowed inside a caller-owned transaction"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1013
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1015
 #, elixir-autogen, elixir-format
 msgid "catalog refreshed"
 msgstr ""
@@ -17371,12 +17357,12 @@ msgstr ""
 msgid "catalog sync already running"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1014
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1016
 #, elixir-autogen, elixir-format
 msgid "catalog sync failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1015
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1017
 #, elixir-autogen, elixir-format
 msgid "catalog sync in progress"
 msgstr ""
@@ -17386,12 +17372,12 @@ msgstr ""
 msgid "catalog sync no longer owns a running claim"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1016
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1018
 #, elixir-autogen, elixir-format
 msgid "catalog sync partially completed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1017
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1019
 #, elixir-autogen, elixir-format
 msgid "catalog sync skipped"
 msgstr ""
@@ -17406,7 +17392,7 @@ msgstr ""
 msgid "credentials changed after import preparation; submit the current auth data again"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
 #, elixir-autogen, elixir-format
 msgid "current"
 msgstr ""
@@ -17421,64 +17407,64 @@ msgstr ""
 msgid "disabled accounts cannot redeem saved resets"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:353
 #, elixir-autogen, elixir-format
 msgid "elapsed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
 #, elixir-autogen, elixir-format
 msgid "evidence current"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
 #, elixir-autogen, elixir-format
 msgid "evidence stale; showing the last reported value"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:822
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:824
 #, elixir-autogen, elixir-format
 msgid "failed: %{code}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:821
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:823
 #, elixir-autogen, elixir-format
 msgid "failed: %{message}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:820
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:822
 #, elixir-autogen, elixir-format
 msgid "failed: %{message} (%{code})"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:333
 #, elixir-autogen, elixir-format
 msgid "feature"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1026
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1028
 #, elixir-autogen, elixir-format
 msgid "fresh quota evidence reused"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:706
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
 #, elixir-autogen, elixir-format
 msgid "freshness unknown"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:810
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:812
 #, elixir-autogen, elixir-format
 msgid "imported %{time}"
 msgstr ""
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:54
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:915
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
 #, elixir-autogen, elixir-format
 msgid "in %{duration}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:328
 #, elixir-autogen, elixir-format
 msgid "inferred"
 msgstr ""
@@ -17488,22 +17474,22 @@ msgstr ""
 msgid "just now"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
 #, elixir-autogen, elixir-format
 msgid "last reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:963
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:965
 #, elixir-autogen, elixir-format
 msgid "last reported %{relative_time}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
 #, elixir-autogen, elixir-format
 msgid "last reported reset is unconfirmed because quota evidence is stale"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:296
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:331
 #, elixir-autogen, elixir-format
 msgid "model"
 msgstr ""
@@ -17528,39 +17514,39 @@ msgstr ""
 msgid "no saved resets are available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:267
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:302
 #, elixir-autogen, elixir-format
 msgid "not allowed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:353
 #, elixir-autogen, elixir-format
 msgid "not elapsed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:814
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:816
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:176
 #, elixir-autogen, elixir-format
 msgid "not run"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:292
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:327
 #, elixir-autogen, elixir-format
 msgid "observed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:964
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:966
 #, elixir-autogen, elixir-format
 msgid "observed %{relative_time}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:968
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:970
 #, elixir-autogen, elixir-format
 msgid "observed %{timestamp}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:973
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:710
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:975
 #, elixir-autogen, elixir-format
 msgid "observed time not reported"
 msgstr ""
@@ -17570,92 +17556,92 @@ msgstr ""
 msgid "prepared imports must be submitted as one complete batch"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:324
 #, elixir-autogen, elixir-format
 msgid "primary"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:895
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:897
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling seven-day window until use starts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:898
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:900
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling window until use starts"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:836
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:838
 #, elixir-autogen, elixir-format
 msgid "provider usage authentication was rejected"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
 #, elixir-autogen, elixir-format
 msgid "quota evidence freshness was not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:707
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:709
 #, elixir-autogen, elixir-format
 msgid "quota evidence was not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1022
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1024
 #, elixir-autogen, elixir-format
 msgid "quota refresh authentication unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1023
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1025
 #, elixir-autogen, elixir-format
 msgid "quota refresh failed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1024
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1026
 #, elixir-autogen, elixir-format
 msgid "quota refresh superseded"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1025
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1027
 #, elixir-autogen, elixir-format
 msgid "quota refresh unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1021
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1023
 #, elixir-autogen, elixir-format
 msgid "quota refreshed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:801
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:803
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{code}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:800
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:802
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{message}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:799
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:801
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{message} (%{code})"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:833
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:835
 #, elixir-autogen, elixir-format
 msgid "refresh token is missing"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:834
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:836
 #, elixir-autogen, elixir-format
 msgid "refresh token was revoked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
 #, elixir-autogen, elixir-format
 msgid "reset unconfirmed"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:922
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:924
 #, elixir-autogen, elixir-format
 msgid "resets %{timestamp}"
 msgstr ""
@@ -17686,18 +17672,18 @@ msgstr ""
 msgid "saved reset request status is unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:290
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:325
 #, elixir-autogen, elixir-format
 msgid "secondary"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:809
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:811
 #, elixir-autogen, elixir-format
 msgid "started %{time}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:828
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:873
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:830
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:875
 #, elixir-autogen, elixir-format
 msgid "starts on use"
 msgstr ""
@@ -17712,7 +17698,7 @@ msgstr ""
 msgid "stored account id sha256:%{fingerprint}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:808
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:810
 #, elixir-autogen, elixir-format
 msgid "succeeded %{time}"
 msgstr ""
@@ -17743,22 +17729,22 @@ msgstr ""
 msgid "token linking request is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:784
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:786
 #, elixir-autogen, elixir-format
 msgid "token refresh %{status}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:798
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:800
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{code}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:797
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:799
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{message}"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:796
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:798
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{message} (%{code})"
 msgstr ""
@@ -17773,7 +17759,7 @@ msgstr ""
 msgid "token refresh imported not reported"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:787
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:789
 #, elixir-autogen, elixir-format
 msgid "token refresh not run"
 msgstr ""
@@ -17803,7 +17789,7 @@ msgstr ""
 msgid "trusted upstream account is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:837
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:839
 #, elixir-autogen, elixir-format
 msgid "upstream OAuth refresh failed"
 msgstr ""
@@ -17823,7 +17809,7 @@ msgstr ""
 msgid "upstream base URL is invalid"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:332
 #, elixir-autogen, elixir-format
 msgid "upstream model"
 msgstr ""
@@ -17833,23 +17819,23 @@ msgstr ""
 msgid "upstream model catalog contains invalid entries"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:835
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:837
 #, elixir-autogen, elixir-format
 msgid "upstream returned an invalid refresh response"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1027
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1029
 #, elixir-autogen, elixir-format
 msgid "workspace identity mismatch"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:629
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:628
 #, elixir-autogen, elixir-format
 msgctxt "calendar navigation"
 msgid "Next"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:620
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:619
 #, elixir-autogen, elixir-format
 msgctxt "calendar navigation"
 msgid "Previous"
@@ -17962,42 +17948,42 @@ msgid_plural "%{count} usage records"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
 #, elixir-autogen, elixir-format
 msgid "A balance or unknown observation grants no new routing capacity. Current included evidence and permitted banked-reset recovery are evaluated independently."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
 #, elixir-autogen, elixir-format
 msgid "A provider workspace or model denial remains in force. Provider credits do not bypass that denial."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery unavailable"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
 #, elixir-autogen, elixir-format
 msgid "Capacity basis unknown"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
 #, elixir-autogen, elixir-format
 msgid "Compatible included capacity is considered first, then usable provider credits, before blocked-request banked-reset recovery. Each request still checks its model, transport and serving mode; this does not establish a credit debit."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
 #, elixir-autogen, elixir-format
 msgid "Current evidence permits routing independently of the credit option. The account summary does not establish the billing source or permission for every model, transport and serving mode."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
 #, elixir-autogen, elixir-format
 msgid "Existing reset recovery restrictions remain in force; a provider credit balance cannot clear the recovery latch."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
 #, elixir-autogen, elixir-format
 msgid "Legacy provider availability is preserved with this policy enabled. It does not prove included quota or provider credit capacity for every model or transport."
 msgstr ""
@@ -18012,32 +17998,32 @@ msgstr ""
 msgid "OAuth relink requires a Pool assignment"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
 #, elixir-autogen, elixir-format
 msgid "Observed balance remains separate. Independently valid included capacity, exact-model allowances and permitted banked-reset recovery remain available."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
 #, elixir-autogen, elixir-format
 msgid "Provider capacity blocked"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
 #, elixir-autogen, elixir-format
 msgid "Provider credits available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
 #, elixir-autogen, elixir-format
 msgid "Provider permission available"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
 #, elixir-autogen, elixir-format
 msgid "Recovery is not yet confirmed. Provider credits on this identity cannot confirm included quota restoration."
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
 #, elixir-autogen, elixir-format
 msgid "The observed balance does not grant routing. Current evidence does not establish usable provider credit permission; included capacity, ordinary provider permission and authorized reset recovery are evaluated separately."
 msgstr ""
@@ -18803,14 +18789,14 @@ msgstr ""
 msgid "Upstream account usage cap updated"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:774
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:767
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:87
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:654
 #, elixir-autogen, elixir-format
 msgid "Usage cap"
 msgstr ""
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:196
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:195
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:95
 #, elixir-autogen, elixir-format
 msgid "Usage cap %{percent}% has no effect right now: the account has no current weekly or 30-day quota reading."
@@ -18854,4 +18840,19 @@ msgstr ""
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:146
 #, elixir-autogen, elixir-format
 msgid "This account reached its operator usage cap and takes no new work until its quota window resets or the cap is raised."
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
+#, elixir-autogen, elixir-format
+msgid "Quota was usable at the last reset check."
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:120
+#, elixir-autogen, elixir-format
+msgid "%{window} remaining: %{verified} verified. %{reported} reported at %{time}, awaiting verification."
+msgstr ""
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#, elixir-autogen, elixir-format
+msgid "30-day"
 msgstr ""

@@ -1587,6 +1587,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   defp redemption(phase, consumed_at) do
     %{
       "phase" => phase,
+      "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}],
       "consumed_at" => DateTime.to_iso8601(consumed_at),
       "deadline_at" => DateTime.add(consumed_at, 15, :minute) |> DateTime.to_iso8601()
     }

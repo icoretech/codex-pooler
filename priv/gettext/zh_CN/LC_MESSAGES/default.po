@@ -15,7 +15,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:868
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:867
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:257
 #, elixir-autogen, elixir-format
 msgid "%{action} is not available: %{reason}"
@@ -629,7 +629,7 @@ msgstr "其他运营者已更新%{card}。请重新加载后重试。"
 msgid "%{client} user agent"
 msgstr "%{client} 用户代理"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1015
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
 #, elixir-autogen, elixir-format
 msgid "%{code} - %{message}"
 msgstr "%{code} - %{message}"
@@ -640,7 +640,7 @@ msgid "%{count} MCP key exists in this system."
 msgid_plural "%{count} MCP keys exist in this system."
 msgstr[0] "此系统中有 %{count} 个 MCP 密钥。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1077
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1070
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:508
 #, elixir-autogen, elixir-format
 msgid "%{count} Pool"
@@ -739,7 +739,7 @@ msgid_plural "%{count} hidden impacted Pools"
 msgstr[0] "%{count} 个隐藏的受影响 Pool"
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/charts.ex:136
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:312
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:347
 #, elixir-autogen, elixir-format
 msgid "%{count} hour"
 msgid_plural "%{count} hours"
@@ -776,7 +776,7 @@ msgid_plural "%{count} min"
 msgstr[0] "%{count} 分钟"
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/charts.ex:135
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:314
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:349
 #, elixir-autogen, elixir-format
 msgid "%{count} minute"
 msgid_plural "%{count} minutes"
@@ -788,7 +788,7 @@ msgid "%{count} model not served"
 msgid_plural "%{count} model not served"
 msgstr[0] "%{count} 个模型未提供服务"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:858
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:851
 #, elixir-autogen, elixir-format
 msgid "%{count} model, %{cost}"
 msgid_plural "%{count} models, %{cost}"
@@ -850,7 +850,7 @@ msgstr[0] "%{count} 个需要重新授权"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:188
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1106
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1099
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/token_burn_projection.ex:230
 #, elixir-autogen, elixir-format
 msgid "%{count} request"
@@ -863,13 +863,13 @@ msgid "%{count} request over seven days; %{failed} failed in the last 24h; failu
 msgid_plural "%{count} requests over seven days; %{failed} failed in the last 24h; failure rate %{rate}; %{cancelled} cancelled by the client, not counted as failures."
 msgstr[0] "七天内有 %{count} 个请求；最近 24h 有 %{failed} 个失败；失败率 %{rate}；%{cancelled} 个由客户端取消，不计为失败。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:40
 #, elixir-autogen, elixir-format
 msgid "%{count} retained record"
 msgid_plural "%{count} retained records"
 msgstr[0] "%{count} 条保留记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:852
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:845
 #, elixir-autogen, elixir-format
 msgid "%{count} routing lane"
 msgid_plural "%{count} routing lanes"
@@ -940,7 +940,7 @@ msgstr[0] "%{count} 个时间区间，包含 %{tokens} 和 %{requests}。请求�
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:187
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:195
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1129
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1122
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:98
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:105
 #, elixir-autogen, elixir-format
@@ -1023,12 +1023,12 @@ msgid "%{date}: %{succeeded} succeeded, %{failed} failed, %{cancelled} client ca
 msgid_plural "%{date}: %{succeeded} succeeded, %{failed} failed, %{cancelled} client cancelled, %{count} total requests"
 msgstr[0] "%{date}：%{succeeded} 个成功，%{failed} 个失败，%{cancelled} 个由客户端取消，总计 %{count} 个请求"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:918
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:917
 #, elixir-autogen, elixir-format
 msgid "%{default} default · up to %{maximum}"
 msgstr "默认 %{default} · 最多 %{maximum}"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:928
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:927
 #, elixir-autogen, elixir-format
 msgid "%{default} default · up to %{maximum} · varies by upstream"
 msgstr "默认 %{default} · 最多 %{maximum} · 因上游而异"
@@ -1115,7 +1115,7 @@ msgstr "第 %{first}-%{last} 条，共 %{total} 条"
 msgid "%{flag} %{state} on %{pool}"
 msgstr "%{pool} 的%{flag}%{state}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:96
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:97
 #, elixir-autogen, elixir-format
 msgid "%{freshness} · retained measurement"
 msgstr "%{freshness} · 保留的测量值"
@@ -1135,7 +1135,7 @@ msgstr "%{hours} h %{minutes} min"
 msgid "%{kind} flow"
 msgstr "%{kind} 流程"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:597
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:596
 #, elixir-autogen, elixir-format
 msgid "%{label} (%{timezone})"
 msgstr "%{label}（%{timezone}）"
@@ -1293,7 +1293,7 @@ msgid "%{requests}+ newer"
 msgid_plural "%{requests}+ newer"
 msgstr[0] "%{requests}+ 条更新的请求日志"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:222
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
 #, elixir-autogen, elixir-format
 msgid "%{request}. %{reset}"
 msgstr "%{request}。%{reset}"
@@ -1336,12 +1336,12 @@ msgid "%{shown} of %{count} incident"
 msgid_plural "%{shown} of %{count} incidents"
 msgstr[0] "%{shown}/%{count} 个告警事件"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:178
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:179
 #, elixir-autogen, elixir-format
 msgid "%{source}: %{remaining} remaining, %{freshness}, not selected"
 msgstr "%{source}：剩余 %{remaining}，%{freshness}，未选中"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:175
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:176
 #, elixir-autogen, elixir-format
 msgid "%{source}: %{remaining} remaining, %{freshness}, selected for display"
 msgstr "%{source}：剩余 %{remaining}，%{freshness}，已选中显示"
@@ -1472,7 +1472,7 @@ msgstr "%{title} 需要指定目标"
 msgid "%{title} · %{name}"
 msgstr "%{title} · %{name}"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1082
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1081
 #, elixir-autogen, elixir-format
 msgid "%{title}. %{description}"
 msgstr "%{title}。%{description}"
@@ -1525,7 +1525,7 @@ msgid "%{tokens} reasoning"
 msgid_plural "%{tokens} reasoning"
 msgstr[0] "%{tokens} 个推理"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1109
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
 #, elixir-autogen, elixir-format
 msgid "%{tokens} settled token"
 msgid_plural "%{tokens} settled tokens"
@@ -1535,10 +1535,10 @@ msgstr[0] "%{tokens} 个已结算 Token"
 #: lib/codex_pooler_web/live/admin/components/pages/stats/leaderboard.ex:162
 #: lib/codex_pooler_web/live/admin/components/pages/stats/token_cost_chart.ex:70
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:67
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1126
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1119
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:95
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:102
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:914
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:913
 #, elixir-autogen, elixir-format
 msgid "%{tokens} token"
 msgid_plural "%{tokens} tokens"
@@ -1561,7 +1561,7 @@ msgid "%{tokens} total token — Cached input: %{cached}; Uncached input: %{unca
 msgid_plural "%{tokens} total tokens — Cached input: %{cached}; Uncached input: %{uncached}; Output: %{output}. Output includes reasoning tokens."
 msgstr[0] "共 %{tokens} 个 Token — 缓存输入：%{cached}；未缓存输入：%{uncached}；输出：%{output}。输出包含推理 Token。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1121
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1114
 #, elixir-autogen, elixir-format
 msgid "%{tokens}+ token"
 msgid_plural "%{tokens}+ tokens"
@@ -1861,14 +1861,14 @@ msgstr "API 密钥不可用"
 msgid "API pricing cutoff"
 msgstr "API 计价阈值"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:983
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:982
 #, elixir-autogen, elixir-format
 msgid "API support differs across upstreams"
 msgstr "各上游的 API 支持情况不同"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:784
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:791
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:804
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:783
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:790
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:803
 #, elixir-autogen, elixir-format
 msgid "About %{model}"
 msgstr "关于 %{model}"
@@ -1913,18 +1913,18 @@ msgstr "访问密钥"
 msgid "Access token"
 msgstr "访问令牌"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:595
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:586
 #, elixir-autogen, elixir-format
 msgid "Access token expired %{age}"
 msgstr "访问令牌已过期 %{age}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:589
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:580
 #, elixir-autogen, elixir-format
 msgid "Access token expires %{age}"
 msgstr "访问令牌到期 %{age}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:600
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:605
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:591
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:596
 #, elixir-autogen, elixir-format
 msgid "Access token expiry unavailable"
 msgstr "访问令牌到期时间不可用"
@@ -1952,12 +1952,12 @@ msgstr "账号已添加"
 msgid "Account data refreshed"
 msgstr "账号数据已刷新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:810
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:803
 #, elixir-autogen, elixir-format
 msgid "Account deletion is already in progress."
 msgstr "账号删除已在进行中。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:843
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:836
 #, elixir-autogen, elixir-format
 msgid "Account did not report plan or quota details"
 msgstr "账号未报告套餐或配额详情"
@@ -1978,7 +1978,7 @@ msgstr "账号身份"
 msgid "Account label"
 msgstr "账号标签"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:838
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:831
 #, elixir-autogen, elixir-format
 msgid "Account plan: %{plan}"
 msgstr "账号套餐：%{plan}"
@@ -2058,7 +2058,7 @@ msgstr "不支持此操作筛选条件"
 msgid "Actions"
 msgstr "操作"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:667
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:660
 #, elixir-autogen, elixir-format
 msgid "Actions for %{label}"
 msgstr "%{label} 的操作"
@@ -2164,7 +2164,7 @@ msgstr "已添加到 %{pool}"
 msgid "Adds sanitized request and routing details to gateway logs and attempt metadata for temporary troubleshooting. It increases log and stored-data volume; keep it disabled during normal production operation to minimize overhead."
 msgstr "将脱敏后的请求和路由详情添加到网关日志及尝试元数据中，用于临时排障。这会增加日志和存储数据量；正常生产运行时请保持禁用，以尽量减少开销。"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:63
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:62
 #, elixir-autogen, elixir-format
 msgid "Admin"
 msgstr "管理"
@@ -2199,7 +2199,7 @@ msgstr "为新的网关任务设置准入、超时、连续性、路由、文件
 msgid "Admitted"
 msgstr "接纳时间"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:558
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:557
 #, elixir-autogen, elixir-format
 msgid "Advanced filters"
 msgstr "高级筛选"
@@ -2760,12 +2760,12 @@ msgstr "分配"
 msgid "Assign this account to a Pool before it can receive traffic."
 msgstr "将此账号分配到 Pool 后，它才能接收流量。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:745
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:738
 #, elixir-autogen, elixir-format
 msgid "Assign this account to a visible Pool before creating a reinvite."
 msgstr "创建重新邀请前，请先将此账号分配到可见的 Pool。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1198
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1191
 #, elixir-autogen, elixir-format
 msgid "Assign this account to a visible Pool before relinking."
 msgstr "重新关联前，请先将此账号分配到可见的 Pool。"
@@ -3343,7 +3343,7 @@ msgstr "回调 URL"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:661
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:701
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1059
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:644
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:643
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:94
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:173
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:263
@@ -3375,8 +3375,8 @@ msgstr "目录"
 msgid "Catalog %{status}"
 msgstr "目录%{status}"
 
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1019
 #: lib/codex_pooler_web/live/admin/components/shared/components.ex:1020
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1021
 #, elixir-autogen, elixir-format
 msgid "Catalog checked %{time}"
 msgstr "目录检查于%{time}"
@@ -3477,7 +3477,7 @@ msgstr "告警渠道"
 msgid "Check status.openai.com every five minutes for provider incident updates."
 msgstr "每五分钟检查一次 status.openai.com，获取服务商事件更新。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Checked"
 msgstr "已检查"
@@ -3487,7 +3487,7 @@ msgstr "已检查"
 msgid "Checking..."
 msgstr "正在检查…"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Checks paused until"
 msgstr "检查暂停至"
@@ -3624,7 +3624,7 @@ msgid "Cleanup continues in the background."
 msgstr "清理将继续在后台进行。"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:501
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:641
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:640
 #, elixir-autogen, elixir-format
 msgid "Clear"
 msgstr "清除"
@@ -3719,7 +3719,7 @@ msgstr "客户端用户代理"
 msgid "Clients authenticating with prefix %{prefix} start failing immediately. This cannot be undone."
 msgstr "使用前缀 %{prefix} 进行身份验证的客户端将立即无法访问。此操作无法撤销。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:128
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:129
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:301
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:933
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1058
@@ -3727,7 +3727,7 @@ msgstr "使用前缀 %{prefix} 进行身份验证的客户端将立即无法访�
 msgid "Close"
 msgstr "关闭"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:479
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:478
 #, elixir-autogen, elixir-format
 msgid "Close details"
 msgstr "关闭详情"
@@ -3737,7 +3737,7 @@ msgstr "关闭详情"
 msgid "Close event details"
 msgstr "关闭事件详情"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:132
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:133
 #, elixir-autogen, elixir-format
 msgid "Close quota observations"
 msgstr "关闭配额观测记录"
@@ -4046,14 +4046,14 @@ msgstr "连接中断"
 msgid "Consecutive failed attempts needed before opening an upstream circuit."
 msgstr "开启上游熔断所需的连续失败尝试次数。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Consumed"
 msgstr "已消耗"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:914
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:918
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:928
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:913
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:917
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:927
 #, elixir-autogen, elixir-format
 msgid "Context"
 msgstr "上下文"
@@ -4125,7 +4125,7 @@ msgstr "冷却时间（分钟）"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:727
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:92
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/security.ex:123
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1165
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1164
 #: lib/codex_pooler_web/live/onboarding_live/invite/components.ex:250
 #, elixir-autogen, elixir-format
 msgid "Copied"
@@ -4134,8 +4134,8 @@ msgstr "已复制"
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:113
 #: lib/codex_pooler_web/live/admin/components/pages/invites/creation_dialog.ex:118
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:277
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1154
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1173
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1153
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1172
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr "复制"
@@ -4543,7 +4543,7 @@ msgstr "停用"
 msgid "Deactivate operator"
 msgstr "停用运营者"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Deadline"
 msgstr "截止时间"
@@ -4617,7 +4617,7 @@ msgstr "已降级"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:766
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:221
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:326
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:796
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:789
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:236
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:627
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:264
@@ -4657,7 +4657,7 @@ msgstr "删除已归档的 Pool"
 msgid "Deleted"
 msgstr "已删除"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1195
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1188
 #, elixir-autogen, elixir-format
 msgid "Deleted accounts cannot be relinked."
 msgstr "已删除的账号无法重新关联。"
@@ -4672,13 +4672,13 @@ msgstr "正在删除账号"
 msgid "Deleting account: %{label}"
 msgstr "正在删除账号：%{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1041
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1034
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:503
 #, elixir-autogen, elixir-format
 msgid "Deletion failed - retry Delete"
 msgstr "删除失败 - 请重试删除"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1040
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1033
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:502
 #, elixir-autogen, elixir-format
 msgid "Deletion in progress"
@@ -4721,7 +4721,7 @@ msgstr "全部拒绝"
 msgid "Deny all models"
 msgstr "拒绝全部模型"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:889
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:888
 #, elixir-autogen, elixir-format
 msgid "Descriptions differ across the current upstreams."
 msgstr "当前各上游提供的描述不同。"
@@ -4932,7 +4932,7 @@ msgstr "不强制"
 msgid "Do not spend a saved reset when the weekly or monthly account quota will reset naturally within this many minutes."
 msgstr "当账号的每周或每月配额将在指定分钟数内自然重置时，不消耗已保存的重置。"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:420
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:419
 #, elixir-autogen, elixir-format
 msgid "Docs"
 msgstr "文档"
@@ -5014,7 +5014,7 @@ msgstr "每个邀请均允许收件人通过设备码流程将账号关联到一
 msgid "Edit"
 msgstr "编辑"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:499
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:490
 #, elixir-autogen, elixir-format
 msgid "Edit %{pool} upstream assignments"
 msgstr "编辑 %{pool} 上游分配"
@@ -5721,7 +5721,7 @@ msgstr "指纹：%{fingerprint}"
 msgid "Finish the device authorization in your browser. This dialog updates when the account is ready."
 msgstr "在浏览器中完成设备授权。账号就绪后，此对话框将自动更新。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Finished"
 msgstr "已完成"
@@ -5988,7 +5988,7 @@ msgstr "辅助工具无响应"
 msgid "Helper ready at %{origin}"
 msgstr "辅助工具已在 %{origin} 就绪"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:968
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:967
 #, elixir-autogen, elixir-format
 msgid "Hidden upstream alias"
 msgstr "隐藏的上游别名"
@@ -6285,7 +6285,7 @@ msgstr "查看请求 %{id}，%{time}，%{status}"
 msgid "Inspect request %{id}, %{time}, %{status} in %{latency}"
 msgstr "查看请求 %{id}，%{time}，%{status}，耗时 %{latency}"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:489
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:488
 #, elixir-autogen, elixir-format
 msgid "Inspector sections"
 msgstr "详情分区"
@@ -6519,7 +6519,7 @@ msgstr "加入时间"
 msgid "Keep request values unchanged."
 msgstr "保持请求值不变。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:192
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:161
 #, elixir-autogen, elixir-format
 msgid "Keep resets in bank"
 msgstr "保留重置储备"
@@ -6609,12 +6609,12 @@ msgstr "最近 24 小时"
 msgid "Last 5 minutes"
 msgstr "最近 5 分钟"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1099
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1092
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}."
 msgstr "最近 5m 发往 %{pool}：%{requests}，%{tokens}。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1095
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}; usage still missing for %{missing}."
 msgstr "最近 5m 发往 %{pool}：%{requests}，%{tokens}；仍缺少 %{missing} 的用量。"
@@ -6701,7 +6701,7 @@ msgstr "最近 100 次符合条件的尝试。默认显示模型差异；缺失�
 msgid "Latest attempt"
 msgstr "最新尝试"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:94
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:64
 #, elixir-autogen, elixir-format
 msgid "Latest reset"
 msgstr "最近一次重置"
@@ -6878,12 +6878,12 @@ msgstr "实时更新已暂停。恢复更新以查看当前删除状态。"
 msgid "Live updates connection"
 msgstr "实时更新连接"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:159
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:128
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected. Reconnect to see the latest status before acting."
 msgstr "实时更新已断开。请重新连接以查看最新状态后再操作。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:159
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:128
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected. The reset continues. Reconnect to see the latest status before acting."
 msgstr "实时更新已断开。重置仍在继续。请重新连接以查看最新状态后再操作。"
@@ -7386,12 +7386,12 @@ msgstr "指标 Bearer Token 已清除"
 msgid "Metrics settings are unavailable, so /metrics fails closed with 401."
 msgstr "指标设置不可用，因此 /metrics 将拒绝请求并返回 401。"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1007
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1006
 #, elixir-autogen, elixir-format
 msgid "Min Codex %{first}-%{last} · varies by upstream"
 msgstr "最低 Codex 版本 %{first}-%{last} · 因上游而异"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:997
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:996
 #, elixir-autogen, elixir-format
 msgid "Min Codex %{version}"
 msgstr "最低 Codex 版本 %{version}"
@@ -7521,7 +7521,7 @@ msgstr "模型差异"
 msgid "Model identifier"
 msgstr "模型标识符"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:827
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:826
 #, elixir-autogen, elixir-format
 msgid "Model info"
 msgstr "模型信息"
@@ -7568,7 +7568,7 @@ msgid "Model reported at end"
 msgstr "结束时报告的模型"
 
 #: lib/codex_pooler_web/live/admin/components/pages/alerts/page_components/rules.ex:233
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:549
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
 #, elixir-autogen, elixir-format
 msgid "Model scope"
 msgstr "模型范围"
@@ -7776,7 +7776,7 @@ msgstr "无 Pool 分配"
 msgid "No Pool invites"
 msgstr "暂无 Pool 邀请"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1076
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1069
 #, elixir-autogen, elixir-format
 msgid "No Pools"
 msgstr "无 Pool"
@@ -7808,7 +7808,7 @@ msgid "No active Pool assignments"
 msgstr "无已启用的 Pool 分配"
 
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:524
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:887
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:886
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1277
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1289
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:158
@@ -7925,7 +7925,7 @@ msgstr "无阈值（统一计价）"
 msgid "No delivery attempts"
 msgstr "暂无投递尝试"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:892
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:891
 #, elixir-autogen, elixir-format
 msgid "No description was reported by the current upstreams."
 msgstr "当前上游未提供描述。"
@@ -8044,7 +8044,7 @@ msgstr "未报告模型（信息）"
 msgid "No models"
 msgstr "没有模型"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:264
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:255
 #, elixir-autogen, elixir-format
 msgid "No models advertised or used in the last 5 minutes."
 msgstr "最近 5 分钟内没有公开提供或使用的模型。"
@@ -8116,7 +8116,7 @@ msgstr "没有请求日志"
 msgid "No requests in the last 60 minutes"
 msgstr "最近 60 分钟内没有请求"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1096
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1089
 #, elixir-autogen, elixir-format
 msgid "No requests toward %{pool} in the last 5 minutes."
 msgstr "最近 5 分钟没有发往 %{pool} 的请求。"
@@ -8288,7 +8288,7 @@ msgstr "未采集"
 msgid "Not enforced"
 msgstr "未强制"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:978
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:977
 #, elixir-autogen, elixir-format
 msgid "Not exposed by the public API"
 msgstr "未通过公共 API 提供"
@@ -8441,7 +8441,7 @@ msgid "OAuth flow was superseded"
 msgstr "OAuth 流程已被替代"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:214
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:872
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:871
 #, elixir-autogen, elixir-format
 msgid "OAuth relink"
 msgstr "OAuth 重新关联"
@@ -8607,7 +8607,7 @@ msgstr "打开"
 msgid "Open %{label}"
 msgstr "打开%{label}"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:410
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:409
 #, elixir-autogen, elixir-format
 msgid "Open Codex Pooler documentation"
 msgstr "打开 Codex Pooler 文档"
@@ -8940,7 +8940,7 @@ msgstr "可选。留空表示评估此 Pool 的所有模型；设置模型 ID �
 msgid "Optionally pin the model and service tier sent upstream, regardless of request values."
 msgstr "可固定发送给上游的模型和服务层级，不受请求值影响。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:66
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:67
 #, elixir-autogen, elixir-format
 msgid "Original provider window slot, not selection priority"
 msgstr "服务商原始窗口槽位，并非选择优先级"
@@ -9053,7 +9053,7 @@ msgstr "第 %{page} 页，共 %{total} 页"
 msgid "Page data is still shown; refreshes resume once the socket is back."
 msgstr "页面数据仍然可见；连接恢复后将继续刷新。"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:118
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:117
 #, elixir-autogen, elixir-format
 msgid "Page metrics"
 msgstr "页面指标"
@@ -9170,7 +9170,7 @@ msgid "Pasted JSON must be %{limit} or smaller"
 msgstr "粘贴的 JSON 大小不得超过 %{limit}"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/page_components.ex:472
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:691
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:684
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:231
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:262
 #, elixir-autogen, elixir-format
@@ -9294,7 +9294,7 @@ msgstr "持久套接字不会占用缓冲或流式传输通道。"
 msgid "Phase"
 msgstr "阶段"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:844
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:837
 #, elixir-autogen, elixir-format
 msgid "Plan and quota not reported"
 msgstr "未报告套餐和配额"
@@ -9576,9 +9576,9 @@ msgstr "以 Pool 为基础的告警定义，仅根据已持久化的元数据进
 msgid "Pooled upstream connections idle longer than this are replaced on their next use. Checked only when a connection is taken, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT, load balancer, or proxy on the egress path."
 msgstr "池中的上游连接若空闲时间超过此值，会在下次使用时替换。仅在取用连接时检查，因此不会中断正在处理或流式传输的请求。此值应低于出站路径上任何 NAT、负载均衡器或代理的空闲超时时间。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:337
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:412
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:415
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:328
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:403
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:406
 #: lib/codex_pooler_web/live/admin/components/shared/components/shell.ex:18
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:337
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:340
@@ -9804,7 +9804,7 @@ msgstr "受保护"
 msgid "Provider caching remains available."
 msgstr "服务商缓存仍然可用。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:763
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:756
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:685
 #, elixir-autogen, elixir-format
 msgid "Provider credits"
@@ -9938,7 +9938,7 @@ msgstr "未报告配额证据"
 
 #: lib/codex_pooler_web/live/admin/forms/alert_rule_form.ex:52
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:206
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
 #, elixir-autogen, elixir-format
 msgid "Quota exhausted"
 msgstr "配额已耗尽"
@@ -9950,7 +9950,7 @@ msgstr "配额优先"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:410
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:208
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1004
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
 #, elixir-autogen, elixir-format
 msgid "Quota missing"
 msgstr "缺少配额"
@@ -10023,7 +10023,7 @@ msgid "Rate limited"
 msgstr "速率受限"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:746
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:703
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:696
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:239
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:407
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:263
@@ -10047,7 +10047,7 @@ msgstr "编辑前请重新启用 Pool"
 msgid "Reading the latest saved modes and routable model catalog."
 msgstr "正在读取最新保存的模式和可路由模型目录。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:112
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:82
 #, elixir-autogen, elixir-format
 msgid "Reads the recorded status. It does not contact the provider or start another redemption."
 msgstr "读取已记录的状态，不会联系服务商或发起另一次兑换。"
@@ -10102,7 +10102,7 @@ msgstr "推理 Token"
 msgid "Reauth required"
 msgstr "需要重新认证"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1004
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:997
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/reconciliation_status.ex:90
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:159
 #, elixir-autogen, elixir-format
@@ -10241,12 +10241,12 @@ msgstr "恢复码"
 msgid "Redeem"
 msgstr "兑换"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:160
 #, elixir-autogen, elixir-format
 msgid "Redeem one reset"
 msgstr "兑换一次重置"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:185
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:154
 #, elixir-autogen, elixir-format
 msgid "Redeem one saved reset for this account? The provider may apply it before quota checks finish. Verification can take a few minutes. You can leave this view and return to check the status."
 msgstr "为此账号兑换一次已保存的重置？服务商可能会在配额检查完成前应用重置。验证可能需要几分钟。你可以离开此页面，稍后返回查看状态。"
@@ -10262,7 +10262,7 @@ msgid "Redeem saved reset is not available: %{reason}"
 msgstr "无法兑换已保存的重置：%{reason}"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:243
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:118
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:88
 #, elixir-autogen, elixir-format
 msgid "Refresh"
 msgstr "刷新"
@@ -10310,7 +10310,7 @@ msgstr "刷新已暂停"
 msgid "Refresh paused while tab hidden"
 msgstr "标签页隐藏时刷新已暂停"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:129
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:99
 #, elixir-autogen, elixir-format
 msgid "Refresh reads the recorded status. It does not contact the provider or start another redemption."
 msgstr "刷新会读取已记录的状态，不会联系服务商或发起另一次兑换。"
@@ -10321,7 +10321,7 @@ msgstr "刷新会读取已记录的状态，不会联系服务商或发起另一
 msgid "Refresh the account data to try again."
 msgstr "刷新账号数据以重试。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:752
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:745
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:206
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:260
 #, elixir-autogen, elixir-format
@@ -10345,8 +10345,8 @@ msgstr "刷新：%{status} · 作业 %{job}"
 msgid "Refreshing"
 msgstr "正在刷新"
 
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:729
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:736
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:743
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:383
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:391
 #, elixir-autogen, elixir-format
@@ -10386,7 +10386,7 @@ msgstr "发行说明"
 msgid "Relink %{label}"
 msgstr "重新关联 %{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:724
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:717
 #, elixir-autogen, elixir-format
 msgid "Relink account"
 msgstr "重新关联账号"
@@ -10412,7 +10412,7 @@ msgstr "请重新加载页面或调整筛选条件后重试。"
 msgid "Reload this card and retry."
 msgstr "请重新加载此卡片后重试。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:74
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:75
 #, elixir-autogen, elixir-format
 msgid "Remaining quota"
 msgstr "剩余配额"
@@ -10422,14 +10422,14 @@ msgstr "剩余配额"
 msgid "Remove selected auth.json file"
 msgstr "移除选中的 auth.json 文件"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:815
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:808
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:892
 #, elixir-autogen, elixir-format
 msgid "Remove this account from all Pools before deleting it."
 msgstr "删除此账号前，请先将其从所有 Pool 中移除。"
 
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:213
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:680
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:673
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:164
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:283
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:555
@@ -10444,9 +10444,9 @@ msgstr "重命名"
 msgid "Rename upstream account"
 msgstr "重命名上游账号"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:715
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:708
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:222
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:871
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:870
 #, elixir-autogen, elixir-format
 msgid "Replace auth.json"
 msgstr "替换 auth.json"
@@ -10497,7 +10497,7 @@ msgid "Req/TPS %{window}"
 msgstr "请求/TPS %{window}"
 
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/presentation.ex:143
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:88
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:58
 #, elixir-autogen, elixir-format
 msgid "Request"
 msgstr "请求"
@@ -10601,7 +10601,7 @@ msgstr "请求指标不可用"
 msgid "Request metrics unavailable"
 msgstr "请求指标不可用"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:121
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:91
 #, elixir-autogen, elixir-format
 msgid "Request status and the latest account reset are separate recorded facts."
 msgstr "请求状态与账号最近一次重置是分别记录的事实。"
@@ -10616,7 +10616,7 @@ msgstr "请求流量可恢复账号的每周或每月配额。到期抢救仅通
 msgid "Request-URI Too Long"
 msgstr "请求 URI 过长"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:37
 #, elixir-autogen, elixir-format
 msgid "Requested"
 msgstr "已请求"
@@ -10636,7 +10636,7 @@ msgstr "请求推理强度"
 msgid "Requested tier"
 msgstr "请求层级"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:191
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:160
 #, elixir-autogen, elixir-format
 msgid "Requesting..."
 msgstr "正在请求..."
@@ -10647,7 +10647,7 @@ msgstr "正在请求..."
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:50
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:61
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_distribution.ex:73
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:243
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:234
 #, elixir-autogen, elixir-format
 msgid "Requests"
 msgstr "请求"
@@ -10759,7 +10759,7 @@ msgstr "恢复"
 msgid "Resume auto-refresh"
 msgstr "恢复自动刷新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:43
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:44
 #, elixir-autogen, elixir-format
 msgid "Retained quota evidence, selected first then newest"
 msgstr "保留的配额证据，先显示选中项，再按最新排序"
@@ -10928,8 +10928,8 @@ msgid "Route-class bulkheads"
 msgstr "路由类别隔离舱"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:17
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:346
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:392
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:337
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:383
 #, elixir-autogen, elixir-format
 msgid "Routing"
 msgstr "路由"
@@ -10940,7 +10940,7 @@ msgstr "路由"
 msgid "Routing lanes"
 msgstr "路由通道"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:979
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:972
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:591
 #, elixir-autogen, elixir-format
 msgid "Routing readiness is unavailable for this upstream account."
@@ -10959,7 +10959,7 @@ msgstr "路由策略"
 msgid "Routing summary"
 msgstr "路由摘要"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:976
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:969
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:589
 #, elixir-autogen, elixir-format
 msgid "Routing unavailable"
@@ -10970,7 +10970,7 @@ msgstr "路由不可用"
 msgid "Routing, quota, and health for this account live on its cockpit."
 msgstr "此账号的路由、配额和健康状态均可在其控制台查看。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:126
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:96
 #, elixir-autogen, elixir-format
 msgid "Routing: %{status}"
 msgstr "路由：%{status}"
@@ -11435,17 +11435,12 @@ msgstr "已保存的重置兑换不可用"
 msgid "Saved reset request was not accepted. Use Refresh to see the current account state."
 msgstr "已保存的重置请求未被接受。请使用刷新查看当前账号状态。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:55
-#, elixir-autogen, elixir-format
-msgid "Saved reset status"
-msgstr "已保存的重置状态"
-
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:74
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:44
 #, elixir-autogen, elixir-format
 msgid "Saved reset · %{headline}"
 msgstr "已保存的重置 · %{headline}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:785
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:778
 #, elixir-autogen, elixir-format
 msgid "Saved resets"
 msgstr "已保存的重置"
@@ -11477,7 +11472,7 @@ msgid "Scan the QR code, copy the secret if scanning is not available, then down
 msgstr "扫描二维码；无法扫描时请复制密钥，然后下载恢复码。"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/state.ex:87
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:37
 #: lib/codex_pooler_web/live/admin/forms/job_filter_form.ex:349
 #, elixir-autogen, elixir-format
 msgid "Scheduled"
@@ -11489,7 +11484,7 @@ msgid "Scheduled recovery refreshes an active account once its access token is t
 msgstr "当活跃账号的访问 Token 剩余有效期达到此值时，定时恢复会刷新该账号，避免无流量账号因凭据过期而需要重新认证。已进入提前刷新窗口的账号会按有界冷却间隔重试，而不是在每轮恢复时都重试。"
 
 #: lib/codex_pooler_web/live/admin/pages/stats_live.ex:183
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:181
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:217
 #, elixir-autogen, elixir-format
 msgid "Scope"
 msgstr "范围"
@@ -11602,7 +11597,7 @@ msgstr "选择此 Pool 可用的上游账号。"
 msgid "Selected"
 msgstr "已选"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:39
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:40
 #, elixir-autogen, elixir-format
 msgid "Selected first, then newest"
 msgstr "先显示选中项，再按最新排序"
@@ -11783,7 +11778,7 @@ msgstr "设置"
 msgid "Settled cost"
 msgstr "已结算成本"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:247
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:238
 #, elixir-autogen, elixir-format
 msgid "Settled requests in the last 5 minutes"
 msgstr "最近 5 分钟的已结算请求"
@@ -11845,7 +11840,7 @@ msgstr "显示 %{label} 配额观测记录；剩余 %{percent}；%{detail}"
 msgid "Show API key notes"
 msgstr "显示 API 密钥备注"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:935
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:928
 #, elixir-autogen, elixir-format
 msgid "Show Pool assignments: %{count_label}"
 msgstr "显示 Pool 分配：%{count_label}"
@@ -11860,7 +11855,7 @@ msgstr "显示此运营者的 Pool 可见性"
 msgid "Show affected keys"
 msgstr "显示受影响的密钥"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:118
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:119
 #, elixir-autogen, elixir-format
 msgid "Show all %{count} record"
 msgid_plural "Show all %{count} records"
@@ -11876,7 +11871,7 @@ msgstr "显示全部 Pool"
 msgid "Show assigned Pools (%{pools}) for this operator"
 msgstr "显示分配给此运营者的 Pool（%{pools}）"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:930
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:923
 #, elixir-autogen, elixir-format
 msgid "Show model usage for the last 5 minutes"
 msgstr "显示最近 5 分钟的模型用量"
@@ -11886,8 +11881,8 @@ msgstr "显示最近 5 分钟的模型用量"
 msgid "Show quota observations"
 msgstr "显示配额观测记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:929
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:932
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:922
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:925
 #, elixir-autogen, elixir-format
 msgid "Show quota status"
 msgstr "显示配额状态"
@@ -12053,7 +12048,7 @@ msgstr "请重新开始设备授权。"
 msgid "Start the Impeccable live server, then recheck. It writes its port and session token to .impeccable/live/server.json when it comes up."
 msgstr "启动 Impeccable 实时服务器后再次检查。服务器启动时会将端口和会话 Token 写入 .impeccable/live/server.json。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:13
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:12
 #, elixir-autogen, elixir-format
 msgid "Started"
 msgstr "已开始"
@@ -12106,7 +12101,7 @@ msgstr "统计数据不可用"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:219
 #: lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex:195
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/rows.ex:41
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:157
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:156
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:234
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:71
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:314
@@ -12321,7 +12316,7 @@ msgstr "跟随系统主题"
 msgid "TLS"
 msgstr "TLS"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:175
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:174
 #, elixir-autogen, elixir-format
 msgid "TOKEN BURN"
 msgstr "TOKEN 消耗"
@@ -12596,17 +12591,17 @@ msgstr "主题和默认显示设置"
 msgid "This Pool has no routable catalog models or retained model overrides yet. Run model sync after assigning an active upstream."
 msgstr "此 Pool 暂无可路由的目录模型或保留的模型覆盖。分配活跃上游后，请运行模型同步。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:845
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:838
 #, elixir-autogen, elixir-format
 msgid "This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch."
 msgstr "此账号未报告套餐或配额详情。路由仍依赖调度前的独立配额证据。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1005
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:998
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from routing until credentials are replaced."
 msgstr "在替换凭据之前，此账号不会参与路由。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:993
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:986
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked."
 msgstr "在令牌刷新成功或凭据重新关联之前，此账号不会参与运行时路由。"
@@ -12734,7 +12729,7 @@ msgstr "超时（ms）"
 msgid "Times %{timezone}"
 msgstr "时间 %{timezone}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:91
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:92
 #, elixir-autogen, elixir-format
 msgid "Timestamp of the retained evidence; values may include earlier reports"
 msgstr "保留证据的时间戳；数值可能包含较早的报告"
@@ -12801,7 +12796,7 @@ msgstr "Token 消耗计算：%{title}"
 msgid "Token refresh"
 msgstr "令牌刷新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:992
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:985
 #, elixir-autogen, elixir-format
 msgid "Token refresh failed"
 msgstr "令牌刷新失败"
@@ -12818,7 +12813,7 @@ msgstr "Token 刷新已在队列中"
 msgid "Token refresh queued"
 msgstr "Token 刷新已加入队列"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1132
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1125
 #, elixir-autogen, elixir-format
 msgid "Token usage in the last 5 minutes"
 msgstr "最近 5 分钟的 Token 用量"
@@ -12883,7 +12878,7 @@ msgstr "Token · 缓存"
 msgid "Tokens, spend, latency, and cache activity for the Pools and window you pick."
 msgstr "针对所选 Pool 和时间窗口的 Token、支出、延迟和缓存活动。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:445
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:436
 #, elixir-autogen, elixir-format
 msgid "Tokens/5m"
 msgstr "Token/5m"
@@ -13200,7 +13195,7 @@ msgstr "随时间变化的流量的底层区间值"
 #: lib/codex_pooler_web/live/admin/components/pages/lens/presentation.ex:101
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/attempts.ex:125
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/status.ex:99
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1046
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1039
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:104
 #: lib/codex_pooler_web/live/admin/read_models/open_ai_incidents_read_model.ex:90
 #: lib/codex_pooler_web/live/observatory/presentation.ex:428
@@ -13213,7 +13208,7 @@ msgstr "未知"
 #: lib/codex_pooler_web/live/admin/pages/invites_live.ex:529
 #: lib/codex_pooler_web/live/admin/pages/upstreams_live.ex:1282
 #: lib/codex_pooler_web/live/admin/read_models/api_keys_read_model.ex:201
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1100
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1102
 #, elixir-autogen, elixir-format
 msgid "Unknown Pool"
 msgstr "未知 Pool"
@@ -13777,7 +13772,7 @@ msgstr "用量轮询已暂停，直到 %{time}"
 msgid "Usage records missing"
 msgstr "缺少用量记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1117
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1110
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:86
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:116
 #, elixir-autogen, elixir-format
@@ -13946,12 +13941,7 @@ msgstr "查看服务商在单次响应期间更改模型名称的尝试"
 msgid "View incident"
 msgstr "查看事件"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_operation.ex:71
-#, elixir-autogen, elixir-format
-msgid "View status"
-msgstr "查看状态"
-
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:973
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:972
 #, elixir-autogen, elixir-format
 msgid "Visibility differs across upstreams"
 msgstr "各上游的可见性不同"
@@ -14085,8 +14075,8 @@ msgid "Will be removed on save"
 msgstr "将在保存时移除"
 
 #: lib/codex_pooler_web/live/admin/components/pages/lens/filters.ex:17
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:179
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:619
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:215
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:621
 #, elixir-autogen, elixir-format
 msgid "Window"
 msgstr "窗口"
@@ -14101,13 +14091,13 @@ msgstr "包含两个模型名称"
 msgid "Without a model name"
 msgstr "未包含模型名称"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1023
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1028
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1016
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1021
 #, elixir-autogen, elixir-format
 msgid "Workspace %{label}"
 msgstr "工作区 %{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1036
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1029
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:564
 #, elixir-autogen, elixir-format
 msgid "Workspace reference %{ref}"
@@ -14133,7 +14123,7 @@ msgstr "X-Real-IP"
 msgid "Yes — provider reported different names in one response"
 msgstr "是 — 服务商在同一响应中报告了不同名称"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:818
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:811
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:895
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to permanently delete this account."
@@ -14204,7 +14194,7 @@ msgid "access token is expired"
 msgstr "访问 Token 已过期"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:295
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:295
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:330
 #, elixir-autogen, elixir-format
 msgid "account"
 msgstr "账号"
@@ -14214,7 +14204,7 @@ msgstr "账号"
 msgid "account label"
 msgstr "账号标签"
 
-#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:867
+#: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live.ex:866
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:256
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/saved_reset_workflow.ex:176
 #, elixir-autogen, elixir-format
@@ -14282,7 +14272,7 @@ msgstr "已归档"
 msgid "assigned-pool admin capabilities require a Pool scope"
 msgstr "分配到 Pool 的管理员操作需要 Pool 作用域"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:609
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:600
 #, elixir-autogen, elixir-format
 msgid "at an unknown time"
 msgstr "时间未知"
@@ -14304,7 +14294,7 @@ msgstr "重新激活前至少需要保留一项分配"
 msgid "attempts"
 msgstr "次尝试"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
 #, elixir-autogen, elixir-format
 msgid "attention needed"
 msgstr "需要关注"
@@ -14472,7 +14462,7 @@ msgstr "成本"
 msgid "cost n/a"
 msgstr "费用不可用"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:587
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:586
 #, elixir-autogen, elixir-format
 msgid "dd/mm/yyyy"
 msgstr "日/月/年"
@@ -14563,8 +14553,8 @@ msgstr "显示名称"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:414
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:430
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/usage_poll_pause.ex:28
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:992
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:919
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:994
 #, elixir-autogen, elixir-format
 msgid "due"
 msgstr "已到期"
@@ -14622,7 +14612,7 @@ msgstr "强制服务层级无效"
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:150
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/errors.ex:151
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1276
 #, elixir-autogen, elixir-format
 msgid "error"
 msgstr "错误"
@@ -14634,7 +14624,7 @@ msgstr "错误"
 msgid "errored"
 msgstr "出错"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:93
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:94
 #, elixir-autogen, elixir-format
 msgid "evidence as of %{time}"
 msgstr "证据截至 %{time}"
@@ -14701,8 +14691,8 @@ msgstr "外部 Token"
 #: lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/prose.ex:671
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:45
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:707
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:823
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:827
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:825
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:829
 #, elixir-autogen, elixir-format
 msgid "failed"
 msgstr "失败"
@@ -14733,7 +14723,7 @@ msgstr "最终"
 msgid "forced"
 msgstr "强制"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:180
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:181
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:56
 #, elixir-autogen, elixir-format
 msgid "fresh"
@@ -14852,7 +14842,7 @@ msgstr "默认连接保活"
 msgid "known"
 msgstr "已知"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:75
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:76
 #, elixir-autogen, elixir-format
 msgid "last known %{remaining}"
 msgstr "上次已知 %{remaining}"
@@ -15039,7 +15029,7 @@ msgstr "下一次将在 %{duration} 后到期"
 
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/format.ex:60
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:478
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:269
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:304
 #, elixir-autogen, elixir-format
 msgid "no"
 msgstr "否"
@@ -15093,8 +15083,8 @@ msgstr "未记录"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:17
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:477
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:42
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:701
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:786
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:703
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:788
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:975
 #, elixir-autogen, elixir-format
 msgid "not reported"
@@ -15129,7 +15119,7 @@ msgstr "互联网与 Pooler 之间的代理数量，包括直接连接的代理�
 msgid "off"
 msgstr "关"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1275
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1274
 #, elixir-autogen, elixir-format
 msgid "ok"
 msgstr "正常"
@@ -15316,7 +15306,7 @@ msgstr "配额阈值百分比"
 
 #: lib/codex_pooler_web/live/admin/components/pages/jobs/presentation/targets.ex:166
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:52
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:794
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:796
 #, elixir-autogen, elixir-format
 msgid "reauth required"
 msgstr "需要重新认证"
@@ -15341,7 +15331,7 @@ msgstr "核对于 %{time}"
 msgid "recovering"
 msgstr "正在恢复"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1278
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:1277
 #, elixir-autogen, elixir-format
 msgid "redacted"
 msgstr "已脱敏"
@@ -15569,7 +15559,7 @@ msgid "slug"
 msgstr "标识"
 
 #: lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex:623
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:181
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:182
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:57
 #, elixir-autogen, elixir-format
 msgid "stale"
@@ -15673,8 +15663,8 @@ msgid "token"
 msgid_plural "tokens"
 msgstr[0] "Token"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1015
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:793
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:795
 #, elixir-autogen, elixir-format
 msgid "token refresh failed"
 msgstr "令牌刷新失败"
@@ -15696,8 +15686,8 @@ msgstr "令牌刷新失败"
 msgid "tokens"
 msgstr "Token"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:233
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:448
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:224
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:439
 #, elixir-autogen, elixir-format
 msgid "tokens/5m"
 msgstr "Token/5m"
@@ -15745,13 +15735,13 @@ msgstr "不可用"
 msgid "unclassified failure"
 msgstr "未分类的失败"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:182
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:183
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:53
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex:126
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex:415
 #: lib/codex_pooler_web/live/admin/forms/pool_form.ex:747
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:710
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:294
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:329
 #, elixir-autogen, elixir-format
 msgid "unknown"
 msgstr "未知"
@@ -15917,7 +15907,7 @@ msgstr "写入失败 %{failure}"
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/format.ex:60
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:478
 #: lib/codex_pooler_web/live/admin/read_models/alert_incidents_read_model.ex:500
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:268
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:303
 #, elixir-autogen, elixir-format
 msgid "yes"
 msgstr "是"
@@ -16028,7 +16018,7 @@ msgid "%{attempts} attempt"
 msgid_plural "%{attempts} attempts"
 msgstr[0] "%{attempts} 次尝试"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:343
 #, elixir-autogen, elixir-format
 msgid "%{count} day"
 msgid_plural "%{count} days"
@@ -16052,7 +16042,7 @@ msgid "%{count} more open target"
 msgid_plural "%{count} more open targets"
 msgstr[0] "另外 %{count} 个待处理目标"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:797
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:799
 #, elixir-autogen, elixir-format
 msgid "%{credits} credit"
 msgid_plural "%{credits} credits"
@@ -16063,12 +16053,12 @@ msgstr[0] "%{credits} 额度"
 msgid "%{flow_kind} flow"
 msgstr "%{flow_kind} 流程"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:524
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:526
 #, elixir-autogen, elixir-format
 msgid "%{label} %{window}"
 msgstr "%{label} %{window}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:514
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:516
 #, elixir-autogen, elixir-format
 msgid "%{label} (%{identity})"
 msgstr "%{label}（%{identity}）"
@@ -16079,15 +16069,15 @@ msgstr "%{label}（%{identity}）"
 msgid "%{rate}/min"
 msgstr "%{rate}/分钟"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:792
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:814
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:794
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:816
 #, elixir-autogen, elixir-format
 msgid "%{remaining} / %{total} credit"
 msgid_plural "%{remaining} / %{total} credits"
 msgstr[0] "%{remaining} / %{total} 额度"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:223
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:245
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:246
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:280
 #, elixir-autogen, elixir-format
 msgid "%{remaining} remaining"
 msgstr "剩余 %{remaining}"
@@ -16113,7 +16103,7 @@ msgstr "未报告 %{status}"
 msgid "%{timestamp} · %{relative_time}"
 msgstr "%{timestamp} · %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "A request succeeded on the new quota; the usage report has not caught up yet."
 msgstr "一个请求已使用新配额成功完成；用量报告尚未更新。"
@@ -16148,8 +16138,8 @@ msgstr "账号待处理"
 msgid "Actions for %{title}"
 msgstr "%{title} 的操作"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:535
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:640
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:537
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:642
 #, elixir-autogen, elixir-format
 msgid "Additional limit"
 msgstr "附加限制"
@@ -16180,13 +16170,13 @@ msgid "Availability is conditional on the request model, transport and serving m
 msgstr "可用性取决于请求模型、传输方式和服务模式。账号摘要不代表所有模型或路由均已获准。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:211
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery pending"
 msgstr "储备重置恢复待确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
 #, elixir-autogen, elixir-format
 msgid "Being processed."
 msgstr "正在处理。"
@@ -16208,7 +16198,7 @@ msgstr "环大小"
 msgid "Cancelled"
 msgstr "已取消"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:187
 #, elixir-autogen, elixir-format
 msgid "Check the latest reset before acting."
 msgstr "操作前请检查最新的重置状态。"
@@ -16229,7 +16219,7 @@ msgid "Complete account setup and reconciliation."
 msgstr "请完成账号设置和状态同步。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:210
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1006
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1008
 #, elixir-autogen, elixir-format
 msgid "Conditional provider availability"
 msgstr "服务商有条件可用"
@@ -16239,7 +16229,7 @@ msgstr "服务商有条件可用"
 msgid "Current provider credit permission, identity lifecycle and assignment availability allow routing. Each request still checks its model, transport and serving mode; this does not identify a billing debit."
 msgstr "当前服务商额度权限、账号身份生命周期和分配可用性允许路由。每个请求仍会检查其模型、传输方式和服务模式；这不代表已发生计费扣款。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
 #, elixir-autogen, elixir-format
 msgid "Deadline passed — checking quota"
 msgstr "已过截止时间 — 正在检查配额"
@@ -16281,12 +16271,12 @@ msgstr "立即入队"
 msgid "Failure detail"
 msgstr "失败详情"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:578
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
 #, elixir-autogen, elixir-format
 msgid "Family %{value}"
 msgstr "系列 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:551
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:553
 #, elixir-autogen, elixir-format
 msgid "Feature scope"
 msgstr "功能范围"
@@ -16301,12 +16291,12 @@ msgstr "当前筛选条件下的全局后台任务记录。已完成的任务默
 msgid "HTTP %{status_code}"
 msgstr "HTTP %{status_code}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:899
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:901
 #, elixir-autogen, elixir-format
 msgid "HTTP %{status_code} with Retry-After"
 msgstr "HTTP %{status_code}，附带 Retry-After"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:902
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:904
 #, elixir-autogen, elixir-format
 msgid "HTTP %{status_code} with a provider instruction"
 msgstr "HTTP %{status_code}，附带服务商指令"
@@ -16331,7 +16321,7 @@ msgstr "账号身份正在刷新，但此生命周期状态仍允许参与模型
 msgid "Identity unavailable"
 msgstr "账号身份不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:151
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:187
 #, elixir-autogen, elixir-format
 msgid "Incoming quota report"
 msgstr "传入的配额报告"
@@ -16341,7 +16331,7 @@ msgstr "传入的配额报告"
 msgid "Inspect the sanitized account error and recover the upstream account."
 msgstr "请检查已脱敏的账号错误并恢复上游账号。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "It does not block another redemption."
 msgstr "这不会阻止再次兑换。"
@@ -16386,12 +16376,12 @@ msgstr "最近事件"
 msgid "Last run"
 msgstr "上次运行"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:177
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:213
 #, elixir-autogen, elixir-format
 msgid "Last synchronized"
 msgstr "上次同步"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:116
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:152
 #, elixir-autogen, elixir-format
 msgid "Last verified quota"
 msgstr "上次验证的配额"
@@ -16406,7 +16396,7 @@ msgstr "最近失败"
 msgid "Lifecycle blocked"
 msgstr "生命周期受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:258
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:293
 #, elixir-autogen, elixir-format
 msgid "Limit reached"
 msgstr "已达限制"
@@ -16416,27 +16406,27 @@ msgstr "已达限制"
 msgid "Limited model availability"
 msgstr "仅部分模型可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:377
 #, elixir-autogen, elixir-format
 msgid "Live updates disconnected"
 msgstr "实时更新已断开"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:379
 #, elixir-autogen, elixir-format
 msgid "Live updates paused"
 msgstr "实时更新已暂停"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:244
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:279
 #, elixir-autogen, elixir-format
 msgid "Measurement status"
 msgstr "测量状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:580
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:582
 #, elixir-autogen, elixir-format
 msgid "Model %{value}"
 msgstr "模型 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:155
 #, elixir-autogen, elixir-format
 msgid "New quota report awaiting verification"
 msgstr "新配额报告等待验证"
@@ -16461,17 +16451,17 @@ msgstr "此上游账号没有已启用、健康且符合条件的 Pool 分配。
 msgid "No jobs match these filters"
 msgstr "没有符合这些筛选条件的任务"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:180
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
 #, elixir-autogen, elixir-format
 msgid "No reset result is recorded."
 msgstr "未记录重置结果。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:312
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:320
 #, elixir-autogen, elixir-format
 msgid "No reset result recorded"
 msgstr "未记录重置结果"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:324
 #, elixir-autogen, elixir-format
 msgid "No saved reset was available"
 msgstr "没有可用的已保存的重置"
@@ -16481,28 +16471,28 @@ msgstr "没有可用的已保存的重置"
 msgid "No saved resets"
 msgstr "没有已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:301
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time."
 msgstr "用量报告未及时确认新配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:300
 #, elixir-autogen, elixir-format
 msgid "No usage report confirmed the new quota in time. The spent reset is not refunded."
 msgstr "用量报告未及时确认新配额。已消耗的重置不会退还。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:243
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:272
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:274
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:284
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:287
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:315
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:320
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:278
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:309
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:319
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:322
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:350
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:355
 #, elixir-autogen, elixir-format
 msgid "Not reported"
 msgstr "未报告"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:325
 #, elixir-autogen, elixir-format
 msgid "Nothing needed resetting"
 msgstr "没有需要重置的配额"
@@ -16548,7 +16538,7 @@ msgstr "一个或多个模型和路由通道正在恢复；未受影响的路由
 msgid "Only the independently evidenced Spark allowance permits model routing; ordinary account quota remains blocked."
 msgstr "仅有独立证据支持的 Spark 额度允许模型路由；普通账号配额仍被阻止。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:304
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:339
 #, elixir-autogen, elixir-format
 msgid "Other source"
 msgstr "其他来源"
@@ -16558,7 +16548,7 @@ msgstr "其他来源"
 msgid "Paused upstream accounts are excluded from model routing."
 msgstr "已暂停的上游账号不会参与模型路由。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:245
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:280
 #, elixir-autogen, elixir-format
 msgid "Pending provider measurement"
 msgstr "待确认的服务商测量值"
@@ -16573,17 +16563,17 @@ msgstr "待处理的上游账号在设置完成之前不会参与模型路由。
 msgid "Pool assignment"
 msgstr "Pool 分配"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:596
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:598
 #, elixir-autogen, elixir-format
 msgid "Primary"
 msgstr "主窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
 #, elixir-autogen, elixir-format
 msgid "Priming blocked"
 msgstr "初始化受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:115
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
 #, elixir-autogen, elixir-format
 msgid "Priming pending"
 msgstr "初始化待处理"
@@ -16594,15 +16584,15 @@ msgid "Priority"
 msgstr "优先级"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:205
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
 #, elixir-autogen, elixir-format
 msgid "Provider available"
 msgstr "服务商可用"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:213
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1010
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1012
 #, elixir-autogen, elixir-format
 msgid "Provider credit capacity unverified"
 msgstr "服务商额度容量未验证"
@@ -16613,66 +16603,66 @@ msgid "Provider credit-dependent admission is disabled; independently valid incl
 msgstr "依赖服务商额度的请求准入已禁用；独立有效的套餐内容量、普通服务商权限和授权的储备重置恢复仍单独评估。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:212
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1011
 #, elixir-autogen, elixir-format
 msgid "Provider credits disabled"
 msgstr "服务商额度已禁用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:246
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:281
 #, elixir-autogen, elixir-format
 msgid "Provider observation"
 msgstr "服务商观测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:178
 #, elixir-autogen, elixir-format
 msgid "Queued. Nothing has been sent to the provider yet."
 msgstr "已排队。尚未向服务商发送任何内容。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:209
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
 #, elixir-autogen, elixir-format
 msgid "Quota blocked"
 msgstr "配额受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:378
 #, elixir-autogen, elixir-format
 msgid "Quota checks are delayed"
 msgstr "配额检查已延迟"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:292
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:300
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:301
 #, elixir-autogen, elixir-format
 msgid "Quota confirmation timed out"
 msgstr "配额确认超时"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
 #, elixir-autogen, elixir-format
 msgid "Quota confirmed"
 msgstr "配额已确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
 #, elixir-autogen, elixir-format
 msgid "Quota expired"
 msgstr "配额已过期"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:121
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:122
 #, elixir-autogen, elixir-format
 msgid "Quota failed"
 msgstr "配额失败"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Quota is still blocked."
 msgstr "配额仍被阻止。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
 #, elixir-autogen, elixir-format
 msgid "Quota is still unavailable"
 msgstr "配额仍不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
 #, elixir-autogen, elixir-format
 msgid "Quota known"
 msgstr "配额已知"
@@ -16683,43 +16673,43 @@ msgid "Quota readiness blocks model routing: %{label}."
 msgstr "配额状态阻止模型路由：%{label}。"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:203
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:999
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1001
 #, elixir-autogen, elixir-format
 msgid "Quota ready"
 msgstr "配额就绪"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:207
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1003
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Quota refresh needed"
 msgstr "需要刷新配额"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:123
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
 #, elixir-autogen, elixir-format
 msgid "Quota reset missing"
 msgstr "缺少配额重置时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:186
 #, elixir-autogen, elixir-format
 msgid "Quota role"
 msgstr "配额用途"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:120
 #, elixir-autogen, elixir-format
 msgid "Quota stale"
 msgstr "配额已陈旧"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:124
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:125
 #, elixir-autogen, elixir-format
 msgid "Quota unprimed"
 msgstr "配额未初始化"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:303
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:338
 #, elixir-autogen, elixir-format
 msgid "Rate-limit error"
 msgstr "速率限制错误"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:302
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:337
 #, elixir-autogen, elixir-format
 msgid "Rate-limit event"
 msgstr "速率限制事件"
@@ -16734,7 +16724,7 @@ msgstr "请重新认证或替换已存储的凭据。"
 msgid "Reauthentication is required before this account can be selected for model routing."
 msgstr "此账号需要重新认证后才能参与模型路由。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:116
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:117
 #, elixir-autogen, elixir-format
 msgid "Reconciling quota"
 msgstr "正在同步配额"
@@ -16744,12 +16734,12 @@ msgstr "正在同步配额"
 msgid "Recover the upstream account lifecycle before routing."
 msgstr "路由前请恢复上游账号的生命周期。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:150
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:186
 #, elixir-autogen, elixir-format
 msgid "Recovery verification"
 msgstr "恢复验证"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
 #, elixir-autogen, elixir-format
 msgid "Recovery verified by a request"
 msgstr "请求已验证恢复"
@@ -16769,38 +16759,38 @@ msgstr "请刷新账号令牌。"
 msgid "Relink credentials or complete a successful token refresh."
 msgstr "请重新关联凭据或成功完成令牌刷新。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:180
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:216
 #, elixir-autogen, elixir-format
 msgid "Reported slot"
 msgstr "报告的窗口槽位"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:170
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:171
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:179
 #, elixir-autogen, elixir-format
 msgid "Request accepted"
 msgstr "请求已接受"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:189
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:197
 #, elixir-autogen, elixir-format
 msgid "Request accepted — processing"
 msgstr "请求已接受 — 处理中"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:188
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:196
 #, elixir-autogen, elixir-format
 msgid "Request accepted — queued"
 msgstr "请求已接受 — 已排队"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:174
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:182
 #, elixir-autogen, elixir-format
 msgid "Request cancelled"
 msgstr "请求已取消"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:172
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:180
 #, elixir-autogen, elixir-format
 msgid "Request completed"
 msgstr "请求已完成"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:173
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:181
 #, elixir-autogen, elixir-format
 msgid "Request did not complete"
 msgstr "请求未完成"
@@ -16810,12 +16800,12 @@ msgstr "请求未完成"
 msgid "Request retried"
 msgstr "请求已重试"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:184
 #, elixir-autogen, elixir-format
 msgid "Request status unavailable"
 msgstr "请求状态不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:183
 #, elixir-autogen, elixir-format
 msgid "Request stopped"
 msgstr "请求已停止"
@@ -16830,43 +16820,43 @@ msgstr "请求 · 长窗口配额已耗尽"
 msgid "Request · quota threshold"
 msgstr "请求 · 配额阈值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
 #, elixir-autogen, elixir-format
 msgid "Reset applied"
 msgstr "重置已生效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Reset applied — verifying quota"
 msgstr "重置已生效 — 正在验证配额"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:190
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:309
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:198
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not confirmed"
 msgstr "重置结果未确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:308
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
 #, elixir-autogen, elixir-format
 msgid "Reset outcome not recorded"
 msgstr "重置结果未记录"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:176
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:212
 #, elixir-autogen, elixir-format
 msgid "Reset reported"
 msgstr "报告的重置时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:315
 #, elixir-autogen, elixir-format
 msgid "Reset request in progress"
 msgstr "重置请求进行中"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:326
 #, elixir-autogen, elixir-format
 msgid "Reset was not applied"
 msgstr "重置未生效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:301
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:336
 #, elixir-autogen, elixir-format
 msgid "Response headers"
 msgstr "响应头"
@@ -16876,23 +16866,23 @@ msgstr "响应头"
 msgid "Resume the upstream account before routing."
 msgstr "路由前请恢复上游账号。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:243
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:278
 #, elixir-autogen, elixir-format
 msgid "Retained measurement"
 msgstr "保留的测量值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
 #, elixir-autogen, elixir-format
 msgid "Retained measurement awaits confirmation"
 msgstr "保留的测量值等待确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:244
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:724
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:279
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:726
 #, elixir-autogen, elixir-format
 msgid "Retained measurement; newer provider measurement awaits confirmation"
 msgstr "保留的测量值；较新的服务商测量值等待确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:257
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:292
 #, elixir-autogen, elixir-format
 msgid "Routing permission"
 msgstr "路由权限"
@@ -16903,7 +16893,7 @@ msgid "Routing ready"
 msgstr "可路由"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:187
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1007
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1009
 #, elixir-autogen, elixir-format
 msgid "Routing ready via credits"
 msgstr "可通过服务商额度路由"
@@ -16943,17 +16933,17 @@ msgstr "定时 · 长窗口配额已耗尽"
 msgid "Scheduled · quota threshold"
 msgstr "定时 · 配额阈值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:579
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
 #, elixir-autogen, elixir-format
 msgid "Scope %{value}"
 msgstr "范围 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:117
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:153
 #, elixir-autogen, elixir-format
 msgid "Source freshness does not mean the new quota cycle has been accepted."
 msgstr "来源数据的新鲜度并不代表新的配额周期已被接受。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:178
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:214
 #, elixir-autogen, elixir-format
 msgid "Source precision"
 msgstr "来源精度"
@@ -16968,53 +16958,48 @@ msgstr "状态：%{state}"
 msgid "Stored invitation email language"
 msgstr "已保存的邀请邮件语言"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:288
-#, elixir-autogen, elixir-format
-msgid "The new quota cycle is confirmed."
-msgstr "新的配额周期已确认。"
-
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:310
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
 #, elixir-autogen, elixir-format
 msgid "The provider applied the reset."
 msgstr "服务商已应用重置。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:317
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:325
 #, elixir-autogen, elixir-format
 msgid "The provider found no exhausted quota to reset."
 msgstr "服务商未发现需要重置的已耗尽配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:316
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:324
 #, elixir-autogen, elixir-format
 msgid "The provider had no saved reset to apply."
 msgstr "服务商没有可应用的已保存的重置。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:349
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:357
 #, elixir-autogen, elixir-format
 msgid "The provider reported that the reset was not applied."
 msgstr "服务商报告重置未生效。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:353
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:361
 #, elixir-autogen, elixir-format
 msgid "The request may have reached the provider. Don't redeem again until this resolves."
 msgstr "请求可能已到达服务商。在结果明确之前，请勿再次兑换。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:318
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:348
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:326
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:356
 #, elixir-autogen, elixir-format
 msgid "The request stopped before reaching the provider."
 msgstr "请求在到达服务商之前已停止。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:377
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Reconnect to see the latest status before acting."
 msgstr "重置仍在继续。请重新连接，查看最新状态后再操作。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:371
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:379
 #, elixir-autogen, elixir-format
 msgid "The reset continues. Refresh reads the stored status."
 msgstr "重置仍在继续。刷新将读取已存储的状态。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:290
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:298
 #, elixir-autogen, elixir-format
 msgid "The reset was applied, but quota is still blocked. No further reset is spent automatically."
 msgstr "重置已生效，但配额仍被阻止。不会再自动消耗重置。"
@@ -17044,22 +17029,22 @@ msgstr "令牌刷新失败；在凭据恢复之前，此账号不会参与模型
 msgid "Token refresh is due before this account can be selected for model routing."
 msgstr "此账号需要刷新令牌后才能参与模型路由。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:581
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:583
 #, elixir-autogen, elixir-format
 msgid "Upstream model %{value}"
 msgstr "上游模型 %{value}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:550
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:552
 #, elixir-autogen, elixir-format
 msgid "Upstream model scope"
 msgstr "上游模型范围"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:300
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:335
 #, elixir-autogen, elixir-format
 msgid "Usage API"
 msgstr "用量 API"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:370
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:378
 #, elixir-autogen, elixir-format
 msgid "Usage polling is paused or unavailable, so confirmation can take longer."
 msgstr "用量轮询已暂停或不可用，因此确认可能需要更长时间。"
@@ -17094,34 +17079,35 @@ msgstr "请等待熔断恢复完成后再使用受影响的路由。"
 msgid "Waiting for fresh included-quota data to confirm the reset."
 msgstr "正在等待最新的套餐内配额数据以确认重置。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:299
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
 #, elixir-autogen, elixir-format
 msgid "Waiting for a usage report to confirm the new quota."
 msgstr "正在等待用量报告确认新配额。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:305
 #, elixir-autogen, elixir-format
 msgid "Waiting for the latest quota check."
 msgstr "正在等待最新的配额检查结果。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:307
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:315
 #, elixir-autogen, elixir-format
 msgid "Waiting for the provider's answer."
 msgstr "正在等待服务商答复。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:222
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:603
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:223
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:605
 #, elixir-autogen, elixir-format
 msgid "Weekly"
 msgstr "每周"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:204
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1000
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:1002
 #, elixir-autogen, elixir-format
 msgid "Weekly quota probe"
 msgstr "每周配额探测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:118
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:119
 #, elixir-autogen, elixir-format
 msgid "Weekly-only probe"
 msgstr "仅每周配额探测"
@@ -17136,17 +17122,17 @@ msgstr "权重"
 msgid "When"
 msgstr "时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:182
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:218
 #, elixir-autogen, elixir-format
 msgid "Window state"
 msgstr "窗口状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:904
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:906
 #, elixir-autogen, elixir-format
 msgid "a throttling response with Retry-After"
 msgstr "限流响应，附带 Retry-After"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:905
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:907
 #, elixir-autogen, elixir-format
 msgid "a throttling response with a provider instruction"
 msgstr "限流响应，附带服务商指令"
@@ -17171,7 +17157,7 @@ msgstr "访问令牌将于 %{timestamp} 过期 · %{relative_time}"
 msgid "access token expires not reported"
 msgstr "未报告访问令牌到期时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:854
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:856
 #, elixir-autogen, elixir-format
 msgid "access token expiry unavailable"
 msgstr "访问令牌到期时间不可用"
@@ -17181,22 +17167,22 @@ msgstr "访问令牌到期时间不可用"
 msgid "after retry"
 msgstr "重试后"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:266
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:301
 #, elixir-autogen, elixir-format
 msgid "allowed"
 msgstr "允许"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1018
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1020
 #, elixir-autogen, elixir-format
 msgid "assignment health preserved"
 msgstr "已保留分配健康状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1019
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1021
 #, elixir-autogen, elixir-format
 msgid "assignment health refreshed"
 msgstr "已刷新分配健康状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1020
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1022
 #, elixir-autogen, elixir-format
 msgid "assignment health skipped"
 msgstr "已跳过分配健康状态"
@@ -17221,7 +17207,7 @@ msgstr "凭据验证时间 %{timestamp} · %{relative_time}"
 msgid "auth verified not reported"
 msgstr "未报告凭据验证时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:291
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:326
 #, elixir-autogen, elixir-format
 msgid "authoritative"
 msgstr "权威"
@@ -17231,7 +17217,7 @@ msgstr "权威"
 msgid "auto-publishing token linking is not allowed inside a caller-owned transaction"
 msgstr "调用方拥有的事务中不允许自动发布 Token 关联"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1013
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1015
 #, elixir-autogen, elixir-format
 msgid "catalog refreshed"
 msgstr "目录已刷新"
@@ -17241,12 +17227,12 @@ msgstr "目录已刷新"
 msgid "catalog sync already running"
 msgstr "目录同步已在进行"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1014
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1016
 #, elixir-autogen, elixir-format
 msgid "catalog sync failed"
 msgstr "目录同步失败"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1015
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1017
 #, elixir-autogen, elixir-format
 msgid "catalog sync in progress"
 msgstr "目录同步中"
@@ -17256,12 +17242,12 @@ msgstr "目录同步中"
 msgid "catalog sync no longer owns a running claim"
 msgstr "目录同步不再持有运行中的执行权"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1016
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1018
 #, elixir-autogen, elixir-format
 msgid "catalog sync partially completed"
 msgstr "目录同步部分完成"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1017
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1019
 #, elixir-autogen, elixir-format
 msgid "catalog sync skipped"
 msgstr "已跳过目录同步"
@@ -17276,7 +17262,7 @@ msgstr "目录同步在完成前超时"
 msgid "credentials changed after import preparation; submit the current auth data again"
 msgstr "导入准备后凭据已更改；请重新提交当前授权数据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
 #, elixir-autogen, elixir-format
 msgid "current"
 msgstr "当前"
@@ -17291,64 +17277,64 @@ msgstr "已删除的账号无法兑换已保存的重置"
 msgid "disabled accounts cannot redeem saved resets"
 msgstr "已禁用的账号无法兑换已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:353
 #, elixir-autogen, elixir-format
 msgid "elapsed"
 msgstr "已结束"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:945
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:947
 #, elixir-autogen, elixir-format
 msgid "evidence current"
 msgstr "证据为当前状态"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
 #, elixir-autogen, elixir-format
 msgid "evidence stale; showing the last reported value"
 msgstr "证据已陈旧；显示上次报告的值"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:822
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:824
 #, elixir-autogen, elixir-format
 msgid "failed: %{code}"
 msgstr "失败：%{code}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:821
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:823
 #, elixir-autogen, elixir-format
 msgid "failed: %{message}"
 msgstr "失败：%{message}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:820
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:822
 #, elixir-autogen, elixir-format
 msgid "failed: %{message} (%{code})"
 msgstr "失败：%{message}（%{code}）"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:298
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:333
 #, elixir-autogen, elixir-format
 msgid "feature"
 msgstr "功能"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1026
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1028
 #, elixir-autogen, elixir-format
 msgid "fresh quota evidence reused"
 msgstr "已复用新鲜配额证据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:706
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
 #, elixir-autogen, elixir-format
 msgid "freshness unknown"
 msgstr "新鲜度未知"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:810
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:812
 #, elixir-autogen, elixir-format
 msgid "imported %{time}"
 msgstr "已导入 %{time}"
 
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:54
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:915
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:917
 #, elixir-autogen, elixir-format
 msgid "in %{duration}"
 msgstr "%{duration} 后"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:293
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:328
 #, elixir-autogen, elixir-format
 msgid "inferred"
 msgstr "推断"
@@ -17358,22 +17344,22 @@ msgstr "推断"
 msgid "just now"
 msgstr "刚刚"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:948
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:950
 #, elixir-autogen, elixir-format
 msgid "last reported"
 msgstr "上次报告"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:963
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:965
 #, elixir-autogen, elixir-format
 msgid "last reported %{relative_time}"
 msgstr "上次报告于 %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
 #, elixir-autogen, elixir-format
 msgid "last reported reset is unconfirmed because quota evidence is stale"
 msgstr "配额证据已陈旧，上次报告的重置时间未确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:296
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:331
 #, elixir-autogen, elixir-format
 msgid "model"
 msgstr "模型"
@@ -17398,39 +17384,39 @@ msgstr "模型列表请求失败，状态为 %{status}"
 msgid "no saved resets are available"
 msgstr "没有可用的已保存的重置"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:267
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:302
 #, elixir-autogen, elixir-format
 msgid "not allowed"
 msgstr "不允许"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:318
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:353
 #, elixir-autogen, elixir-format
 msgid "not elapsed"
 msgstr "未结束"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:814
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:175
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:816
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:176
 #, elixir-autogen, elixir-format
 msgid "not run"
 msgstr "未运行"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:292
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:327
 #, elixir-autogen, elixir-format
 msgid "observed"
 msgstr "观测"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:964
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:966
 #, elixir-autogen, elixir-format
 msgid "observed %{relative_time}"
 msgstr "观测于 %{relative_time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:968
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:970
 #, elixir-autogen, elixir-format
 msgid "observed %{timestamp}"
 msgstr "观测时间 %{timestamp}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:708
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:973
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:710
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:975
 #, elixir-autogen, elixir-format
 msgid "observed time not reported"
 msgstr "未报告观测时间"
@@ -17440,92 +17426,92 @@ msgstr "未报告观测时间"
 msgid "prepared imports must be submitted as one complete batch"
 msgstr "准备好的导入必须作为一个完整批次提交"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:289
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:324
 #, elixir-autogen, elixir-format
 msgid "primary"
 msgstr "主窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:895
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:897
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling seven-day window until use starts"
 msgstr "服务商报告在开始使用前为滚动七天窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:898
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:900
 #, elixir-autogen, elixir-format
 msgid "provider reports a rolling window until use starts"
 msgstr "服务商报告在开始使用前为滚动窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:836
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:838
 #, elixir-autogen, elixir-format
 msgid "provider usage authentication was rejected"
 msgstr "服务商用量认证被拒绝"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:951
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:953
 #, elixir-autogen, elixir-format
 msgid "quota evidence freshness was not reported"
 msgstr "未报告配额证据新鲜度"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:707
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:709
 #, elixir-autogen, elixir-format
 msgid "quota evidence was not reported"
 msgstr "未报告配额证据"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1022
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1024
 #, elixir-autogen, elixir-format
 msgid "quota refresh authentication unavailable"
 msgstr "配额刷新认证不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1023
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1025
 #, elixir-autogen, elixir-format
 msgid "quota refresh failed"
 msgstr "配额刷新失败"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1024
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1026
 #, elixir-autogen, elixir-format
 msgid "quota refresh superseded"
 msgstr "配额刷新已被取代"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1025
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1027
 #, elixir-autogen, elixir-format
 msgid "quota refresh unavailable"
 msgstr "配额刷新不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1021
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1023
 #, elixir-autogen, elixir-format
 msgid "quota refreshed"
 msgstr "配额已刷新"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:801
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:803
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{code}"
 msgstr "需要重新认证：%{code}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:800
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:802
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{message}"
 msgstr "需要重新认证：%{message}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:799
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:801
 #, elixir-autogen, elixir-format
 msgid "reauth required: %{message} (%{code})"
 msgstr "需要重新认证：%{message}（%{code}）"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:833
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:835
 #, elixir-autogen, elixir-format
 msgid "refresh token is missing"
 msgstr "缺少刷新令牌"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:834
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:836
 #, elixir-autogen, elixir-format
 msgid "refresh token was revoked"
 msgstr "刷新令牌已撤销"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:847
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:849
 #, elixir-autogen, elixir-format
 msgid "reset unconfirmed"
 msgstr "重置未确认"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:922
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:924
 #, elixir-autogen, elixir-format
 msgid "resets %{timestamp}"
 msgstr "重置时间 %{timestamp}"
@@ -17556,18 +17542,18 @@ msgstr "已保存的重置请求已接受"
 msgid "saved reset request status is unavailable"
 msgstr "已保存的重置请求状态不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:290
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:325
 #, elixir-autogen, elixir-format
 msgid "secondary"
 msgstr "次窗口"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:809
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:811
 #, elixir-autogen, elixir-format
 msgid "started %{time}"
 msgstr "已开始 %{time}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:828
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:873
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:830
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:875
 #, elixir-autogen, elixir-format
 msgid "starts on use"
 msgstr "使用时开始"
@@ -17582,7 +17568,7 @@ msgstr "未报告已存储的账号 ID"
 msgid "stored account id sha256:%{fingerprint}"
 msgstr "已存储的账号 ID sha256:%{fingerprint}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:808
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:810
 #, elixir-autogen, elixir-format
 msgid "succeeded %{time}"
 msgstr "已成功 %{time}"
@@ -17613,22 +17599,22 @@ msgstr "上次已保存的重置未及时确认；再次兑换需等待用量报
 msgid "token linking request is invalid"
 msgstr "Token 关联请求无效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:784
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:786
 #, elixir-autogen, elixir-format
 msgid "token refresh %{status}"
 msgstr "令牌刷新 %{status}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:798
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:800
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{code}"
 msgstr "令牌刷新失败：%{code}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:797
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:799
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{message}"
 msgstr "令牌刷新失败：%{message}"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:796
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:798
 #, elixir-autogen, elixir-format
 msgid "token refresh failed: %{message} (%{code})"
 msgstr "令牌刷新失败：%{message}（%{code}）"
@@ -17643,7 +17629,7 @@ msgstr "令牌刷新已导入 %{timestamp} · %{relative_time}"
 msgid "token refresh imported not reported"
 msgstr "未报告令牌刷新导入时间"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:787
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:789
 #, elixir-autogen, elixir-format
 msgid "token refresh not run"
 msgstr "令牌刷新未运行"
@@ -17673,7 +17659,7 @@ msgstr "未报告令牌刷新成功时间"
 msgid "trusted upstream account is invalid"
 msgstr "受信任的上游账号无效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:837
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:839
 #, elixir-autogen, elixir-format
 msgid "upstream OAuth refresh failed"
 msgstr "上游 OAuth 刷新失败"
@@ -17693,7 +17679,7 @@ msgstr "上游访问令牌需要刷新"
 msgid "upstream base URL is invalid"
 msgstr "上游基础 URL 无效"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:297
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:332
 #, elixir-autogen, elixir-format
 msgid "upstream model"
 msgstr "上游模型"
@@ -17703,23 +17689,23 @@ msgstr "上游模型"
 msgid "upstream model catalog contains invalid entries"
 msgstr "上游模型目录包含无效条目"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:835
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:837
 #, elixir-autogen, elixir-format
 msgid "upstream returned an invalid refresh response"
 msgstr "上游返回了无效的刷新响应"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1027
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:1029
 #, elixir-autogen, elixir-format
 msgid "workspace identity mismatch"
 msgstr "工作区身份不匹配"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:629
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:628
 #, elixir-autogen, elixir-format
 msgctxt "calendar navigation"
 msgid "Next"
 msgstr "下个月"
 
-#: lib/codex_pooler_web/live/admin/components/shared/components.ex:620
+#: lib/codex_pooler_web/live/admin/components/shared/components.ex:619
 #, elixir-autogen, elixir-format
 msgctxt "calendar navigation"
 msgid "Previous"
@@ -17831,42 +17817,42 @@ msgid "%{count} usage record"
 msgid_plural "%{count} usage records"
 msgstr[0] "%{count} 条用量记录"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:400
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:402
 #, elixir-autogen, elixir-format
 msgid "A balance or unknown observation grants no new routing capacity. Current included evidence and permitted banked-reset recovery are evaluated independently."
 msgstr "余额或未知观测不会增加路由容量。当前包含的额度证据和允许的储备重置恢复会独立评估。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
 #, elixir-autogen, elixir-format
 msgid "A provider workspace or model denial remains in force. Provider credits do not bypass that denial."
 msgstr "服务商对工作区或模型的拒绝仍然有效。服务商额度不能绕过该拒绝。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
 #, elixir-autogen, elixir-format
 msgid "Banked-reset recovery unavailable"
 msgstr "储备重置恢复不可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
 #, elixir-autogen, elixir-format
 msgid "Capacity basis unknown"
 msgstr "容量依据未知"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
 #, elixir-autogen, elixir-format
 msgid "Compatible included capacity is considered first, then usable provider credits, before blocked-request banked-reset recovery. Each request still checks its model, transport and serving mode; this does not establish a credit debit."
 msgstr "先考虑兼容的包含额度，再考虑可用的服务商额度，最后才是请求受阻时的储备重置恢复。每个请求仍会检查模型、传输方式和服务模式；这不代表已扣除服务商额度。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
 #, elixir-autogen, elixir-format
 msgid "Current evidence permits routing independently of the credit option. The account summary does not establish the billing source or permission for every model, transport and serving mode."
 msgstr "当前证据允许独立于额度选项进行路由。账号摘要不能确定每种模型、传输方式和服务模式的计费来源或使用权限。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:391
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:393
 #, elixir-autogen, elixir-format
 msgid "Existing reset recovery restrictions remain in force; a provider credit balance cannot clear the recovery latch."
 msgstr "现有重置恢复限制仍然有效；服务商额度余额不能解除恢复锁定。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:383
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:385
 #, elixir-autogen, elixir-format
 msgid "Legacy provider availability is preserved with this policy enabled. It does not prove included quota or provider credit capacity for every model or transport."
 msgstr "启用此策略时会保留原有的服务商可用性。这不能证明每种模型或传输方式都有包含配额或服务商额度容量。"
@@ -17881,32 +17867,32 @@ msgstr "过去 5 分钟内没有请求。"
 msgid "OAuth relink requires a Pool assignment"
 msgstr "OAuth 重新关联需要分配到 Pool"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:372
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:374
 #, elixir-autogen, elixir-format
 msgid "Observed balance remains separate. Independently valid included capacity, exact-model allowances and permitted banked-reset recovery remain available."
 msgstr "观测到的余额保持独立。独立有效的包含额度、精确模型许可和允许的储备重置恢复仍可使用。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:397
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:399
 #, elixir-autogen, elixir-format
 msgid "Provider capacity blocked"
 msgstr "服务商容量受阻"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:380
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:382
 #, elixir-autogen, elixir-format
 msgid "Provider credits available"
 msgstr "服务商额度可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:386
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:388
 #, elixir-autogen, elixir-format
 msgid "Provider permission available"
 msgstr "服务商权限可用"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:369
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:371
 #, elixir-autogen, elixir-format
 msgid "Recovery is not yet confirmed. Provider credits on this identity cannot confirm included quota restoration."
 msgstr "恢复尚未确认。此身份的服务商额度不能确认包含配额已恢复。"
 
-#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:394
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_projection.ex:396
 #, elixir-autogen, elixir-format
 msgid "The observed balance does not grant routing. Current evidence does not establish usable provider credit permission; included capacity, ordinary provider permission and authorized reset recovery are evaluated separately."
 msgstr "观测到的余额不授予路由权限。当前证据不能确定服务商额度权限可用；包含额度、常规服务商权限和已授权的重置恢复会分别评估。"
@@ -18672,14 +18658,14 @@ msgstr "一旦此账号的每周窗口（对于没有每周窗口的方案则为
 msgid "Upstream account usage cap updated"
 msgstr "上游账号用量上限已更新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:774
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:767
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:87
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:654
 #, elixir-autogen, elixir-format
 msgid "Usage cap"
 msgstr "用量上限"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:196
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:195
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:95
 #, elixir-autogen, elixir-format
 msgid "Usage cap %{percent}% has no effect right now: the account has no current weekly or 30-day quota reading."
@@ -18724,3 +18710,18 @@ msgstr "提高或清除用量上限，以便为此账号分配新的工作。"
 #, elixir-autogen, elixir-format
 msgid "This account reached its operator usage cap and takes no new work until its quota window resets or the cap is raised."
 msgstr "此账号已达到运维设置的用量上限，在其额度窗口重置或上限提高之前不会接收新的工作。"
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_operation_projection.ex:296
+#, elixir-autogen, elixir-format
+msgid "Quota was usable at the last reset check."
+msgstr "上次重置检查时配额可用。"
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:120
+#, elixir-autogen, elixir-format
+msgid "%{window} remaining: %{verified} verified. %{reported} reported at %{time}, awaiting verification."
+msgstr "%{window}剩余配额：已核实 %{verified}。%{time} 上报的 %{reported} 待核实。"
+
+#: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/quota_observations.ex:119
+#, elixir-autogen, elixir-format
+msgid "30-day"
+msgstr "30 天"

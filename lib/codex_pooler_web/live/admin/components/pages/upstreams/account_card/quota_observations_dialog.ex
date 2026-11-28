@@ -32,6 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
           <p id={"#{@id}-description"} class="mt-1 text-xs leading-5 text-base-content/60">
             {gettext("Retained quota state, not a history of provider responses. Values may be reconciled across multiple reports.")}
           </p>
+          <p :if={measurement = Map.get(@limit, :pending_quota_measurement)} data-role="pending-quota-measurement" class="mt-2 text-xs leading-5 text-base-content/75">{measurement.label}</p>
         </header>
         <div id={"#{@id}-scroll"} data-preserve-scroll class="grid min-h-0 gap-4 overflow-y-auto px-5 py-4">
           <div>

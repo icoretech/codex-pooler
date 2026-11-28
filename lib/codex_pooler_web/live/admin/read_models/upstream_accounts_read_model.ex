@@ -529,7 +529,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           datetime_preferences,
           snapshot_at,
           raw_quota_windows,
-          redemption
+          redemption,
+          quota_snapshot.credential_epoch
         )
         |> QuotaProjection.attach_usage_cap(quota_snapshot),
       identity_observability: identity_observability,
@@ -543,6 +544,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         redemption: redemption,
         request_summary: request_summary,
         confirmation: account.saved_reset_confirmation,
+        pending_quota_measurements: for(%{pending_quota_measurement: measurement} <- account.quota_limits, do: measurement),
         serving_readiness: account.routing_readiness,
         usage_poll_pause: account.usage_poll_pause,
         last_checked_at: snapshot_at

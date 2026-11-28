@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
       }
     }
 
-    redemption = %{"phase" => "consumed_pending_probe", "consumed_at" => DateTime.to_iso8601(consumed_at)}
+    redemption = %{"phase" => "consumed_pending_probe", "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}], "consumed_at" => DateTime.to_iso8601(consumed_at)}
     preferences = DateTimeDisplay.preferences_for_user(nil)
     project = fn retained -> QuotaProjection.quota_limit_rows([retained], preferences, now, [retained], redemption) |> Enum.find(&(&1.key == :weekly)) end
     limit = project.(window)
@@ -89,6 +89,82 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
       File.write!(Path.join(evidence_dir, "task-9-quota-updated.html"), render_quota_row(updated_limit))
       File.write!(Path.join(evidence_dir, "task-9-quota-unqualified.html"), unqualified_html)
       File.write!(Path.join(evidence_dir, "task-9-quota-distinct.html"), render_quota_row(distinct_limit))
+    end
+  end
+
+  for {key, kind, minutes, label} <- [{:weekly, "secondary", 10_080, "Weekly"}, {:primary_30d, "primary", 43_200, "30-day"}] do
+    @tag :pending_quota_measurement
+    test "shows #{label} values and localized report time when a different source still supplies the meter" do
+      now = ~U[2026-09-07 12:00:00Z]
+      reported_at = DateTime.add(now, -60)
+      reset_at = DateTime.add(now, 6, :day)
+      preferences = DateTimeDisplay.preferences_for_user(nil)
+      reported_time = DateTimeDisplay.format_datetime(reported_at, preferences)
+
+      usage = %AccountQuotaWindow{
+        id: "retained-provider",
+        quota_key: "account",
+        quota_scope: "account",
+        quota_family: "account",
+        window_kind: unquote(kind),
+        window_minutes: unquote(minutes),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        used_percent: Decimal.new(99),
+        reset_at: reset_at,
+        observed_at: DateTime.add(now, -300),
+        last_sync_at: now,
+        freshness_state: "fresh",
+        metadata: %{
+          "__quota_confirmed_candidate_v1" => %{"version" => 1, "used_percent" => "7", "reset_at" => DateTime.to_iso8601(reset_at), "observed_at" => DateTime.to_iso8601(reported_at), "count" => 1},
+          "__quota_candidate_provider_status_v1" => %{"version" => 1, "allowed" => true, "limit_reached" => false, "observed_at" => DateTime.to_iso8601(reported_at)}
+        }
+      }
+
+      event = %{usage | id: "selected-event", source: "codex_rate_limit_event", observed_at: DateTime.add(now, -180), metadata: %{}}
+      redemption = %{"phase" => "confirmed_by_quota", "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -240)), "result" => %{"applied" => true, "code" => "reset"}}
+
+      render = fn selected, provider, clock ->
+        QuotaProjection.quota_limit_rows([selected], preferences, clock, [selected, provider], redemption, 1)
+        |> Enum.find(&(&1.key == unquote(key)))
+        |> render_quota_row()
+        |> LazyHTML.from_fragment()
+      end
+
+      document = render.(event, usage, now)
+      assert LazyHTML.query(document, "#quota-row-progress[value='1']") |> Enum.any?()
+
+      assert Enum.empty?(LazyHTML.query(document, "#quota-row [data-role='pending-quota-measurement']"))
+      text = LazyHTML.query(document, "#quota-row-observations-dialog [data-role='pending-quota-measurement']") |> LazyHTML.text()
+      assert text =~ unquote(label) <> " remaining: 1% verified"
+      assert text =~ "93% reported"
+      assert text =~ reported_time
+      assert text =~ "awaiting verification"
+      assert LazyHTML.query(document, "#quota-row-observations-open") |> LazyHTML.attribute("aria-controls") == ["quota-row-observations-dialog"]
+
+      Gettext.with_locale("zh_CN", fn ->
+        text = render.(event, usage, now) |> LazyHTML.query("#quota-row-observations-dialog [data-role='pending-quota-measurement']") |> LazyHTML.text()
+        assert text =~ "已核实 1%"
+        assert text =~ "93% 待核实"
+        assert text =~ reported_time
+      end)
+
+      for {selected, provider, clock} <- [
+            {event, %{usage | metadata: %{}}, now},
+            {event, usage, DateTime.add(now, 16, :minute)},
+            {event, put_in(usage.metadata["__quota_candidate_provider_status_v1"]["allowed"], false), now},
+            {event, %{usage | source_precision: "unknown"}, now},
+            {event, %{usage | metadata: Map.put(usage.metadata, "credential_epoch", 2)}, now},
+            {%{event | observed_at: DateTime.add(reported_at, 1)}, usage, now},
+            {%{event | used_percent: Decimal.new(7)}, usage, now},
+            {event, put_in(usage.metadata["__quota_confirmed_candidate_v1"]["reset_at"], DateTime.to_iso8601(DateTime.add(reset_at, 7, :day))), now}
+          ] do
+        assert Enum.empty?(LazyHTML.query(render.(selected, provider, clock), "[data-role='pending-quota-measurement']"))
+      end
+
+      five_hour = %{usage | window_kind: "primary", window_minutes: 300}
+      [primary] = QuotaProjection.quota_limit_rows([five_hour], preferences, now, [five_hour], redemption) |> Enum.filter(&(&1.key == :primary_5h))
+      assert Enum.empty?(primary |> render_quota_row() |> LazyHTML.from_fragment() |> LazyHTML.query("[data-role='pending-quota-measurement']"))
     end
   end
 

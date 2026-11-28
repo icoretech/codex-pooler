@@ -13,7 +13,7 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.SavedResetConfirmationFixtures
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, RoutingQuotaSnapshot}
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
@@ -251,6 +251,215 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
     finish(context, [remounted, second], [fake], "manual")
   end
 
+  for {label, key, slot, minutes} <- [{"weekly", "weekly", "secondary", 10_080}, {"monthly only", "primary_30d", "primary", 43_200}] do
+    @tag :applied_reset_measurement
+    @tag slow: "waits for both connected account views to display the persisted measurement on their scheduled update"
+    test "one manual reset under #{label} traffic distinguishes usable quota from a verified measurement", context do
+      meter = %{key: unquote(key), slot: unquote(slot), minutes: unquote(minutes)}
+      fixture = apply_manual_reset(context, meter)
+      %{identity: identity, list: list, cockpit: cockpit} = fixture
+      list_meter = "#upstream-account-#{identity.id}-limit-#{meter.key}"
+      cockpit_meter = "#upstream-quota-limit-#{meter.key}"
+      pending = "[data-role='pending-quota-measurement']"
+      measurement_poll(context, fixture, 1, 10)
+      measurement_traffic(fixture, 1, 20)
+      measurement_poll(context, fixture, 4, 100)
+      measurement_traffic(fixture, 4, 150)
+      measurement_poll(context, fixture, 7, 175)
+      held = measurement_read(fixture, 175)
+      assert held == %{selected: 99, provider: 99, candidate: 7, ready: true}
+      before_disclosure = FakeUpstream.physical_counts(fixture.fake)
+      assert configured_usage_reads(fixture.fake) == 5
+      refresh_views([list, cockpit], identity)
+
+      reported_at = CodexPoolerWeb.DateTimeDisplay.format_datetime(DateTime.add(fixture.consumed_at, 175), CodexPoolerWeb.DateTimeDisplay.preferences_for_user(context.scope.user))
+
+      for {view, selector} <- [{list, list_meter}, {cockpit, cockpit_meter}] do
+        assert has_element?(view, selector <> "-progress", "1%")
+        refute has_element?(view, selector <> " " <> pending)
+        view |> element(selector <> "-observations-open") |> render_click()
+        assert has_element?(view, selector <> "-observations-dialog " <> pending, "1% verified. 93% reported at #{reported_at}")
+        view |> element(selector <> "-observations-dialog-close") |> render_click()
+      end
+
+      for {surface, view} <- [{:bank, list}, {:cockpit, cockpit}] do
+        assert has_element?(view, receipt(surface, identity) <> "[data-provider-outcome='applied']", "Quota was usable at the last reset check.")
+      end
+
+      assert has_element?(list, "#saved-reset-policy-dialog " <> pending, "93% reported at")
+      render_click(list, "cancel_saved_reset_policy", %{})
+      refute has_element?(list, receipt(:list, identity))
+      assert FakeUpstream.physical_counts(fixture.fake) == before_disclosure
+
+      {:ok, paused, _} = live(context.conn, ~p"/admin/upstreams")
+      remember(context, {:view, paused})
+      assert has_element?(paused, list_meter <> "-observations-dialog " <> pending, "93% reported at")
+      render_hook(paused, "set_live_updates", %{"paused" => true})
+
+      # Passing the 180-second boundary with successful traffic alone leaves the
+      # accepted value and the candidate unchanged until the independent GET.
+      measurement_traffic(fixture, 7, 189)
+      assert measurement_read(fixture, 190) == held
+      measurement_poll(context, fixture, 7, 190)
+      verified = measurement_read(fixture, 190)
+      assert verified == %{selected: 7, provider: 7, candidate: nil, ready: true}
+
+      for {view, selector} <- [{list, list_meter}, {cockpit, cockpit_meter}] do
+        await_update(fn -> has_element?(view, selector <> "-progress", "93%") end, "scheduled quota update did not arrive")
+        refute has_element?(view, selector <> "-observations-dialog " <> pending)
+      end
+
+      assert has_element?(paused, list_meter <> "-progress", "1%")
+      assert has_element?(paused, list_meter <> "-observations-dialog " <> pending)
+      measurement_poll(context, fixture, 9, 200)
+      assert measurement_read(fixture, 200).selected == 9
+      await_update(fn -> :sys.get_state(paused.pid).socket.assigns.live_updates_page_held? end, "paused view did not hold its scheduled read")
+      render_hook(paused, "set_live_updates", %{"paused" => false})
+      await_update(fn -> has_element?(paused, list_meter <> "-progress", "91%") end, "resumed view did not read the latest quota")
+      stop_view(paused)
+
+      counts = FakeUpstream.physical_counts(fixture.fake)
+      assert %{consume: 1, http_generation: 3, websocket_generation: 0, other: 0} = counts
+      assert configured_usage_reads(fixture.fake) == 7
+      stop_view(list)
+      stop_view(cockpit)
+      {remounted, second} = open_views(context, identity)
+      remounted |> element("#upstream-account-#{identity.id}-saved-reset-meter-open") |> render_click()
+      assert_operation([{:bank, remounted}, {:cockpit, second}], identity, "applied", "quota_confirmed")
+      assert has_element?(remounted, list_meter <> "-progress", "91%")
+      assert has_element?(second, cockpit_meter <> "-progress", "91%")
+      assert FakeUpstream.physical_counts(fixture.fake) == counts
+      assert_same_applied_debit(fixture)
+      assert [retained] = owned_jobs(fixture.assignment)
+      assert retained.id == fixture.job_id
+      record("journey", meter.key <> "_under_traffic", %{generation: 1, inventory_delta: -1, held: held, verified: verified, physical_counts: counts})
+      finish(context, [remounted, second], [fixture.fake], meter.key <> "_under_traffic")
+    end
+
+    @tag :applied_reset_measurement
+    @tag slow: "runs one manual reset and checks the independent replay through two LiveViews"
+    test "a cached #{label} provider clock cannot verify the lower measurement", context do
+      meter = %{key: unquote(key), slot: unquote(slot), minutes: unquote(minutes)}
+      fixture = apply_manual_reset(context, meter)
+      measurement_poll(context, fixture, 7, 10)
+      measurement_traffic(fixture, 7, 150)
+      assert measurement_read(fixture, 150) == %{selected: 99, provider: 99, candidate: 7, ready: true}
+      # The second HTTP GET completes three minutes later, but the unchanged
+      # provider countdown proves the report is a replay.
+      measurement_poll(context, fixture, 7, 190, 10)
+      withheld = measurement_read(fixture, 190)
+      assert withheld == %{selected: 99, provider: 99, candidate: nil, ready: true}
+      assert_same_applied_debit(fixture)
+      counts = FakeUpstream.physical_counts(fixture.fake)
+      refresh_views([fixture.list, fixture.cockpit], fixture.identity)
+      assert has_element?(fixture.list, "#upstream-account-#{fixture.identity.id}-limit-#{meter.key}-progress", "1%")
+      assert has_element?(fixture.cockpit, "#upstream-quota-limit-#{meter.key}-progress", "1%")
+      refute has_element?(fixture.cockpit, "#upstream-quota-limit-#{meter.key}-observations-dialog [data-role='pending-quota-measurement']")
+      assert FakeUpstream.physical_counts(fixture.fake) == counts
+      assert %{consume: 1, http_generation: 1} = counts
+      assert configured_usage_reads(fixture.fake) == 4
+      record("journey", meter.key <> "_replayed_clock", %{generation: 1, withheld: withheld, physical_counts: counts})
+      finish(context, [fixture.list, fixture.cockpit], [fixture.fake], meter.key <> "_replayed_clock")
+    end
+  end
+
+  defp apply_manual_reset(context, meter) do
+    consumed_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(-210)
+    reset_at = DateTime.add(consumed_at, 5, :day)
+    initial_at = DateTime.add(consumed_at, -5)
+    # The initial quota fetch fails after a real, successful POST. Subsequent
+    # physical GETs supply the debit, usable quota and independent proof clocks.
+    fake = fake!(context, {:path_json, %{@consume => {200, %{"code" => "reset"}}, @usage => {400, %{}}}})
+    pool = pool_fixture(%{created_by_user_id: context.scope.user.id})
+    stored = put_in(metadata(fake, 1), ["saved_resets", "observed_at"], DateTime.to_iso8601(initial_at))
+    fixture = active_upstream_assignment_fixture(pool, %{metadata: stored})
+    identity = fixture.identity
+    attrs = %{weekly("99", initial_at, reset_at) | window_kind: meter.slot, window_minutes: meter.minutes}
+    assert {:ok, _} = QuotaWindows.record_evidence(identity, attrs, initial_at)
+    assert Repo.reload!(identity).metadata["saved_resets"]["available_count"] == 1
+    {list, cockpit} = open_views(context, identity)
+    list |> element("#upstream-account-#{identity.id}-saved-reset-meter-open") |> render_click()
+    job = submit_one(list, Map.put(fixture, :pool, pool))
+    assert %{success: 1, failure: 0} = drain_queue()
+    assert Repo.get!(Oban.Job, job.id).state == "completed"
+    applied = Repo.reload!(identity)
+    claim = applied.metadata["saved_reset_redemption"]
+    assert claim["trigger_kind"] == "admin_manual"
+    assert %{"applied" => true, "code" => "reset"} = claim["result"]
+    assert claim["phase"] == "consumed_pending_probe"
+    assert claim["included_window_descriptors"] == [%{"window_kind" => meter.slot, "window_minutes" => meter.minutes}]
+    assert %{consume: 1} = FakeUpstream.physical_counts(fake)
+    assert configured_usage_reads(fake) == 1
+
+    # Align this real receipt's clocks to the injected provider timeline.
+    # Keep the actual attempt, credential, outcome, generation and descriptors.
+    {:ok, actual_at, 0} = DateTime.from_iso8601(claim["consumed_at"])
+    historical = shift_fixture_timeline(claim, DateTime.diff(consumed_at, actual_at, :microsecond))
+    applied |> Ecto.Changeset.change(metadata: Map.put(applied.metadata, "saved_reset_redemption", historical)) |> Repo.update!()
+    fixture = Map.merge(fixture, %{fake: fake, meter: meter, reset_at: reset_at, consumed_at: consumed_at, list: list, cockpit: cockpit, job_id: job.id, attempt_id: claim["attempt_id"]})
+    event = %{"type" => "codex.rate_limits", "rate_limits" => %{meter.slot => %{"used_percent" => 99, "window_minutes" => meter.minutes, "reset_at" => DateTime.to_unix(reset_at)}}}
+    assert {:ok, [_]} = QuotaWindows.upsert_quota_windows_from_codex_rate_limit_event(identity, event, consumed_at)
+    measurement_poll(context, fixture, 99, 1)
+    assert {:ok, :confirmed_by_quota} = Convergence.converge(identity.id, DateTime.add(consumed_at, 2), "reconciliation")
+    assert_same_applied_debit(fixture)
+    fixture
+  end
+
+  defp assert_same_applied_debit(fixture) do
+    stored = Repo.reload!(fixture.identity).metadata
+    terminal = stored["saved_reset_redemption"]
+    assert terminal["phase"] == "confirmed_by_quota"
+    assert terminal["attempt_id"] == fixture.attempt_id
+    assert terminal["generation"] == 1
+    assert stored["saved_resets"]["available_count"] == 0
+  end
+
+  defp measurement_poll(context, fixture, used, tick, proof_tick \\ nil) do
+    at = DateTime.add(fixture.consumed_at, tick)
+    meter = fixture.meter
+    proof_at = DateTime.add(fixture.consumed_at, proof_tick || tick)
+    window = %{"used_percent" => used, "limit_window_seconds" => meter.minutes * 60, "reset_after_seconds" => DateTime.diff(fixture.reset_at, proof_at), "reset_at" => DateTime.to_unix(fixture.reset_at)}
+    rate = %{"allowed" => true, "limit_reached" => false, (meter.slot <> "_window") => window}
+    rate = if meter.slot == "secondary", do: Map.put(rate, "primary_window", %{"used_percent" => 10, "limit_window_seconds" => 18_000, "reset_after_seconds" => 900, "reset_at" => DateTime.to_unix(at) + 900}), else: rate
+    payload = %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}, "rate_limit" => rate, "credits" => %{"has_credits" => false, "unlimited" => false, "balance" => "0"}, "spend_control" => %{"reached" => false}}
+    fetch_usage(context, fixture, at, payload)
+  end
+
+  defp configured_usage_reads(fake) do
+    Enum.count(FakeUpstream.physical_receipts(fake), &(&1.kind == :usage and &1.path == @usage))
+  end
+
+  defp measurement_traffic(fixture, used, tick) do
+    prefix = "x-codex-" <> fixture.meter.slot
+    headers = [{prefix <> "-used-percent", to_string(used)}, {prefix <> "-window-minutes", to_string(fixture.meter.minutes)}, {prefix <> "-reset-at", to_string(DateTime.to_unix(fixture.reset_at))}]
+    FakeUpstream.set_mode(fixture.fake, {:sse_headers, ["data: [DONE]\n\n"], headers})
+    assert %Req.Response{status: 200, headers: received} = Req.post!(FakeUpstream.url(fixture.fake) <> "/backend-api/codex/responses", json: %{"model" => "sample-model", "input" => []}, retry: false)
+    assert {:ok, [_]} = QuotaWindows.upsert_quota_windows_from_codex_headers(fixture.identity, received, DateTime.add(fixture.consumed_at, tick))
+  end
+
+  defp measurement_read(fixture, tick) do
+    at = DateTime.add(fixture.consumed_at, tick)
+    snapshot = RoutingQuotaSnapshot.load_by_identity_ids([fixture.identity.id], at)[fixture.identity.id]
+    selected = Enum.find(RoutingQuotaSnapshot.effective_windows(snapshot), &(&1.window_minutes == fixture.meter.minutes))
+    provider = Enum.find(snapshot.raw_windows, &(&1.window_minutes == fixture.meter.minutes and &1.source == "codex_usage_api"))
+
+    candidate =
+      case EvidenceStore.parse_candidate(provider.metadata) do
+        {:ok, pending} -> Decimal.to_integer(pending.used_percent)
+        :none -> nil
+      end
+
+    %{selected: Decimal.to_integer(selected.used_percent), provider: Decimal.to_integer(provider.used_percent), candidate: candidate, ready: QuotaWindows.routing_quota_eligibility_from_snapshot(snapshot).eligible?}
+  end
+
+  defp await_update(observed?, message, deadline \\ System.monotonic_time(:millisecond) + @detection_timeout) do
+    unless observed?.() do
+      assert System.monotonic_time(:millisecond) < deadline, message
+      Process.sleep(100)
+      await_update(observed?, message, deadline)
+    end
+  end
+
   test "discarded enqueue acknowledgement remount resumes the same persisted request", context do
     fake = fake!(context, {:path_json, %{@consume => {200, %{"code" => "reset"}}, @usage => {200, usage(0, DateTime.utc_now())}}})
     fixture = manual_fixture(context, fake)
@@ -485,8 +694,11 @@ defmodule CodexPoolerWeb.Admin.SavedResetRedemptionWorkflowIntegrationTest do
     identity = Repo.reload!(identity)
     stored = identity.metadata |> Map.put("saved_reset_redemption", shifted) |> put_in(["saved_resets", "observed_at"], DateTime.to_iso8601(consumed_at))
     identity |> Ecto.Changeset.change(metadata: stored) |> Repo.update!()
-    assert {:ok, _} = QuotaWindows.record_evidence(identity, weekly("100", canonical_at, DateTime.add(canonical_at, 5, :day)), canonical_at)
-    assert {:ok, pending} = QuotaWindows.record_evidence(identity, weekly("0", candidate_at, DateTime.add(candidate_at, @week, :second), @week), candidate_at)
+    canonical = weekly("100", canonical_at, DateTime.add(canonical_at, 5, :day))
+    candidate = weekly("0", candidate_at, DateTime.add(candidate_at, @week, :second), @week)
+    epoch = identity.metadata["credential_epoch"]
+    assert {:ok, _} = QuotaWindows.record_evidence(identity, put_in(canonical.metadata["credential_epoch"], epoch), canonical_at)
+    assert {:ok, pending} = QuotaWindows.record_evidence(identity, put_in(candidate.metadata["credential_epoch"], epoch), candidate_at)
     assert Decimal.equal?(pending.used_percent, Decimal.new("100"))
     assert {:ok, %{observed_at: ^candidate_at}} = EvidenceStore.parse_candidate(pending.metadata)
   end

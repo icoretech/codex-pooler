@@ -28,16 +28,15 @@ defmodule CodexPoolerWeb.Admin.Components do
   def saved_reset_connection_notice(assigns), do: SavedResetOperation.saved_reset_connection_notice(assigns)
 
   attr :identity_id, :string, required: true
-  attr :surface, :atom, required: true, values: [:list, :bank, :cockpit]
+  attr :surface, :atom, required: true, values: [:bank, :cockpit]
   attr :operation, :map, required: true
   attr :refreshing, :boolean, default: false
-  attr :status_view_disabled, :boolean, default: false
 
   @spec saved_reset_operation(map()) :: Phoenix.LiveView.Rendered.t()
   def saved_reset_operation(assigns), do: SavedResetOperation.saved_reset_operation(assigns)
 
   attr :identity_id, :string, required: true
-  attr :surface, :atom, required: true, values: [:list, :bank, :cockpit]
+  attr :surface, :atom, required: true, values: [:bank, :cockpit]
   attr :id, :string, default: nil
   attr :confirm_id, :string, default: nil
   attr :cancel_id, :string, default: nil

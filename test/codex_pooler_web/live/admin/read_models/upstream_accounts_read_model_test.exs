@@ -134,6 +134,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
           "saved_reset_redemption" => %{
             "status" => "redeeming",
             "phase" => "consumed_pending_probe",
+            "included_window_descriptors" => [%{"window_kind" => "secondary", "window_minutes" => 10_080}],
             "generation" => 1,
             "consumed_at" => DateTime.to_iso8601(consumed_at),
             "deadline_at" => DateTime.to_iso8601(DateTime.add(now, 600, :second)),
