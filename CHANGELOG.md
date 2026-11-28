@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.17.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.17.1...codex-pooler-v0.17.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **admin:** keep keyboard focus inside the saved reset bank ([b3ce55b](https://github.com/icoretech/codex-pooler/commit/b3ce55bcaa1c6b6ca3e926e2739f47c6b64f48a3))
+* adopt corroborated weekly and monthly quota after saved resets ([9fb48a8](https://github.com/icoretech/codex-pooler/commit/9fb48a8703e3494c50687ea643525a9916d9bbb7))
+* show pending weekly and monthly readings in quota details ([f6ec2d7](https://github.com/icoretech/codex-pooler/commit/f6ec2d79d84461062713d4449eadad52e9274285))
+
+
+### Tests
+
+* keep the compaction websocket client reading during barrier waits ([9e785ea](https://github.com/icoretech/codex-pooler/commit/9e785ea973cec6fdc053cdb9c53cb5d74455900a))
+* limit the shortened owner drain deadline to suspended settlement ([39754a5](https://github.com/icoretech/codex-pooler/commit/39754a5a55da512cf552ea03445bb3cae69edfea))
+* verify native websocket completions preserve input transformations ([b45f9a2](https://github.com/icoretech/codex-pooler/commit/b45f9a25ccc7ada820ba20bdb21b9253d21a7172))
+
 ## [0.17.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.17.0...codex-pooler-v0.17.1) (2026-11-27)
 
 
