@@ -29,10 +29,40 @@ export const savedResetConnectParams = (root = document) => {
 	return { saved_reset_policy_recovery: { id, policy } };
 };
 
+// The list can replace a card while a bank is open. Retain the control's id,
+// then resolve the current node after the server removes the dialog.
+const bankOpeners = new WeakMap();
+
+export const SavedResetBankDialog = {
+	mounted() {
+		const list = this.el.closest("#admin-upstreams-live");
+		this.returnFocusId =
+			bankOpeners.get(list) || this.el.dataset.bankReturnFocus;
+		bankOpeners.delete(list);
+
+		// The server renders an open, nonmodal dialog. Promote it to the native
+		// top layer so background controls are inert for the entire interaction.
+		this.el.close();
+		this.el.showModal();
+		this.el.querySelector("#saved-reset-policy-dialog-title").focus();
+	},
+	destroyed() {
+		const document = this.el.ownerDocument;
+		document.getElementById(this.returnFocusId)?.focus({ preventScroll: true });
+	},
+};
+
 export const SavedResetConnection = {
 	mounted() {
 		this.ready = true;
 		this.guard = (event) => {
+			if (event.type === "click") {
+				const opener = event.target.closest?.(
+					'[aria-controls="saved-reset-policy-dialog"]',
+				);
+				if (opener?.id)
+					bankOpeners.set(this.el, opener.dataset.bankReturnFocus || opener.id);
+			}
 			if (event.type === "keydown" && !["Enter", " "].includes(event.key))
 				return;
 			const target = event.target.closest?.(

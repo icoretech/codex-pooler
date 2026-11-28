@@ -727,22 +727,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       :if={@account && @form}
       id="saved-reset-policy-dialog"
       aria-labelledby="saved-reset-policy-dialog-title saved-reset-policy-dialog-eyebrow"
+      aria-modal="true"
+      phx-hook="SavedResetBankDialog"
+      data-bank-return-focus={"upstream-account-#{@account.identity.id}-saved-reset-meter-open"}
       class="modal modal-bottom overflow-x-hidden sm:modal-middle"
       open
     >
-      <div
+      <.focus_wrap
         id="saved-reset-policy-dialog-panel"
         class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl"
       >
-        <div class="border-b border-base-300 px-5 py-4">
+        <header class="border-b border-base-300 px-5 py-4">
           <p id="saved-reset-policy-dialog-eyebrow" class="break-words text-xs font-semibold uppercase tracking-wide text-primary">
             {gettext("Codex saved resets · %{label}", label: @account.label)}
           </p>
-          <h2 id="saved-reset-policy-dialog-title" class="mt-1 text-xl font-bold text-base-content">{gettext("Saved reset bank")}</h2>
+          <h2 id="saved-reset-policy-dialog-title" tabindex="-1" class="mt-1 text-xl font-bold text-base-content">{gettext("Saved reset bank")}</h2>
           <p class="mt-1 text-xs leading-5 text-base-content/60">
             {gettext("Account-level quota recovery capacity: spent automatically by policy or through one queued manual attempt.")}
           </p>
-        </div>
+        </header>
 
         <AdminComponents.saved_reset_connection_notice id="saved-reset-connection-bank" class="border-b border-base-300 px-5 py-3" in_flight={saved_reset_open?(@account)} />
         <.form
@@ -930,6 +933,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           <:actions>
             <AdminComponents.action_button
               id="saved-reset-policy-cancel"
+              data-role="dialog-dismiss"
               label={gettext("Close")}
               variant={:ghost}
               phx-click="cancel_saved_reset_policy"
@@ -946,9 +950,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             />
           </:actions>
         </AdminComponents.dialog_footer>
-      </div>
+      </.focus_wrap>
       <form method="dialog" class="modal-backdrop">
-        <button type="button" phx-click="cancel_saved_reset_policy">{gettext("close")}</button>
+        <button type="button" tabindex="-1" phx-click="cancel_saved_reset_policy">{gettext("close")}</button>
       </form>
     </dialog>
     """

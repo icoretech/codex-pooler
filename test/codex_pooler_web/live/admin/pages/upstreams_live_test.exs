@@ -2350,14 +2350,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
     action_selector = "#saved-reset-policy-upstream-account-#{identity.id}"
-    assert has_element?(view, action_selector, "Saved resets")
+    assert has_element?(view, action_selector <> "[aria-controls='saved-reset-policy-dialog'][data-bank-return-focus='upstream-account-actions-menu-#{identity.id}']", "Saved resets")
     assert has_element?(view, "#{action_selector} .hero-building-library-micro")
 
     view |> element(action_selector) |> render_click()
 
     assert has_element?(view, "#saved-reset-policy-dialog")
     assert has_element?(view, "#saved-reset-policy-auto-redeem-enabled")
-    assert has_element?(view, "#saved-reset-policy-dialog[aria-labelledby='saved-reset-policy-dialog-title saved-reset-policy-dialog-eyebrow']")
+    assert has_element?(view, "#saved-reset-policy-dialog[phx-hook='SavedResetBankDialog'][aria-modal='true'][aria-labelledby='saved-reset-policy-dialog-title saved-reset-policy-dialog-eyebrow']")
+    assert has_element?(view, "#saved-reset-policy-dialog-title[tabindex='-1']")
+    assert has_element?(view, "#saved-reset-policy-dialog-panel[phx-hook='Phoenix.FocusWrap']")
+    assert has_element?(view, "#saved-reset-policy-cancel[data-role='dialog-dismiss'][phx-click='cancel_saved_reset_policy']")
     assert view |> element("#saved-reset-policy-dialog-title") |> render() |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim() == "Saved reset bank"
     assert has_element?(view, "#saved-reset-policy-dialog-eyebrow", "Codex saved resets · Saved Reset Policy Codex")
     assert has_element?(view, "#saved-reset-policy-trigger-mode")
@@ -2381,7 +2384,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#saved-reset-policy-dialog-panel > div:first-child",
+             "#saved-reset-policy-dialog-panel header",
              "Account-level quota recovery capacity"
            )
 

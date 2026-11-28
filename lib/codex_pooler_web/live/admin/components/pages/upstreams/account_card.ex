@@ -777,6 +777,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             icon="hero-building-library-micro"
             label={gettext("Saved resets")}
             phx-click="open_saved_reset_policy"
+            aria-controls="saved-reset-policy-dialog"
+            aria-haspopup="dialog"
+            data-bank-return-focus={"upstream-account-actions-menu-#{@account.identity.id}"}
             phx-value-id={@account.identity.id}
             disabled={@assignment_unavailable_reason != nil or @account.identity.status == "deleted"}
             title={@assignment_unavailable_reason}

@@ -42,6 +42,7 @@ import { ObservatoryToolbar } from "./observatory_toolbar.mjs";
 import { createQuotaDialogPreservation } from "./quota_dialog_preservation.js";
 import { RelativeCountdown } from "./relative_countdown.mjs";
 import {
+	SavedResetBankDialog,
 	SavedResetConnection,
 	savedResetConnectParams,
 } from "./saved_reset_connection.mjs";
@@ -414,7 +415,10 @@ const ApexTimeSeriesChart = {
 		);
 
 		if (description) {
-			description.textContent = chartModeDescription(this.chartMode, this.el.dataset);
+			description.textContent = chartModeDescription(
+				this.chartMode,
+				this.el.dataset,
+			);
 		}
 	},
 	renderChart() {
@@ -429,7 +433,11 @@ const ApexTimeSeriesChart = {
 			this.el.dataset.chartUnits,
 			series.map(() => unit),
 		);
-		const sourceUnitLabels = chartDisplayUnits(this.el.dataset, sourceUnits, unit);
+		const sourceUnitLabels = chartDisplayUnits(
+			this.el.dataset,
+			sourceUnits,
+			unit,
+		);
 		const sourceValueKinds = parseChartJSON(
 			this.el.dataset.chartValueKinds,
 			sourceUnits,
@@ -907,11 +915,15 @@ const updateConnectionIndicator = () => {
 		if (hintEl.hidden === Boolean(hint)) hintEl.hidden = !hint;
 	}
 
-	const footer = connectionFooterParts(connection.visualState, {
-		endPoint: socket?.endPoint,
-		heartbeatIntervalMs: socket?.heartbeatIntervalMs,
-		online: navigator.onLine,
-	}, labels);
+	const footer = connectionFooterParts(
+		connection.visualState,
+		{
+			endPoint: socket?.endPoint,
+			heartbeatIntervalMs: socket?.heartbeatIntervalMs,
+			online: navigator.onLine,
+		},
+		labels,
+	);
 	const actionLabel = connectionActionLabel(connection.visualState, labels);
 
 	const metaEl = popover.querySelector("[data-ws-meta]");
@@ -1032,7 +1044,9 @@ const dismissTopAdminDialogFromEscape = (event) => {
 	const openDialogs = Array.from(
 		document.querySelectorAll("dialog.modal[open]"),
 	);
-	const dialog = openDialogs.at(-1);
+	const dialog =
+		event.target.closest?.("#saved-reset-policy-dialog:modal") ||
+		openDialogs.at(-1);
 	const target = adminEscapeTarget({
 		key: event.key,
 		hasOpenPopover: openPopover !== null,
@@ -1112,6 +1126,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		PoolTrafficVisibility,
 		QuotaPressureChart,
 		RelativeCountdown,
+		SavedResetBankDialog,
 		SavedResetConnection,
 		TotpSetupTools,
 		WorkerFailureMarker,

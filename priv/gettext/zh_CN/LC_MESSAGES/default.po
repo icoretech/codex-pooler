@@ -629,7 +629,7 @@ msgstr "其他运营者已更新%{card}。请重新加载后重试。"
 msgid "%{client} user agent"
 msgstr "%{client} 用户代理"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1011
 #, elixir-autogen, elixir-format
 msgid "%{code} - %{message}"
 msgstr "%{code} - %{message}"
@@ -640,7 +640,7 @@ msgid "%{count} MCP key exists in this system."
 msgid_plural "%{count} MCP keys exist in this system."
 msgstr[0] "此系统中有 %{count} 个 MCP 密钥。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1070
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1073
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components.ex:508
 #, elixir-autogen, elixir-format
 msgid "%{count} Pool"
@@ -788,7 +788,7 @@ msgid "%{count} model not served"
 msgid_plural "%{count} model not served"
 msgstr[0] "%{count} 个模型未提供服务"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:851
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:854
 #, elixir-autogen, elixir-format
 msgid "%{count} model, %{cost}"
 msgid_plural "%{count} models, %{cost}"
@@ -850,7 +850,7 @@ msgstr[0] "%{count} 个需要重新授权"
 
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:188
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1099
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/token_burn_projection.ex:230
 #, elixir-autogen, elixir-format
 msgid "%{count} request"
@@ -869,7 +869,7 @@ msgid "%{count} retained record"
 msgid_plural "%{count} retained records"
 msgstr[0] "%{count} 条保留记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:845
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:848
 #, elixir-autogen, elixir-format
 msgid "%{count} routing lane"
 msgid_plural "%{count} routing lanes"
@@ -882,7 +882,7 @@ msgid_plural "%{count} rules"
 msgstr[0] "%{count} 条规则"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/saved_reset_meter.ex:191
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:771
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:774
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/saved_reset_projection.ex:234
 #, elixir-autogen, elixir-format
 msgid "%{count} saved reset"
@@ -940,7 +940,7 @@ msgstr[0] "%{count} 个时间区间，包含 %{tokens} 和 %{requests}。请求�
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:689
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:187
 #: lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex:195
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1122
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1125
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:98
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:105
 #, elixir-autogen, elixir-format
@@ -1167,7 +1167,7 @@ msgid "%{label} included Codex quota remaining %{percent}"
 msgstr "%{label} 套餐内 Codex 配额剩余 %{percent}"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:281
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1072
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1076
 #, elixir-autogen, elixir-format
 msgid "%{label} reauthorized"
 msgstr "%{label} 已重新授权"
@@ -1525,7 +1525,7 @@ msgid "%{tokens} reasoning"
 msgid_plural "%{tokens} reasoning"
 msgstr[0] "%{tokens} 个推理"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1102
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1105
 #, elixir-autogen, elixir-format
 msgid "%{tokens} settled token"
 msgid_plural "%{tokens} settled tokens"
@@ -1535,7 +1535,7 @@ msgstr[0] "%{tokens} 个已结算 Token"
 #: lib/codex_pooler_web/live/admin/components/pages/stats/leaderboard.ex:162
 #: lib/codex_pooler_web/live/admin/components/pages/stats/token_cost_chart.ex:70
 #: lib/codex_pooler_web/live/admin/components/pages/stats/traffic_chart.ex:67
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1119
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1122
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:95
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:102
 #: lib/codex_pooler_web/live/admin/components/shared/components.ex:913
@@ -1561,7 +1561,7 @@ msgid "%{tokens} total token — Cached input: %{cached}; Uncached input: %{unca
 msgid_plural "%{tokens} total tokens — Cached input: %{cached}; Uncached input: %{uncached}; Output: %{output}. Output includes reasoning tokens."
 msgstr[0] "共 %{tokens} 个 Token — 缓存输入：%{cached}；未缓存输入：%{uncached}；输出：%{output}。输出包含推理 Token。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1114
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1117
 #, elixir-autogen, elixir-format
 msgid "%{tokens}+ token"
 msgid_plural "%{tokens}+ tokens"
@@ -1942,7 +1942,7 @@ msgstr "账号"
 msgid "Account actions"
 msgstr "账号操作"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1079
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1083
 #, elixir-autogen, elixir-format
 msgid "Account added"
 msgstr "账号已添加"
@@ -1952,12 +1952,12 @@ msgstr "账号已添加"
 msgid "Account data refreshed"
 msgstr "账号数据已刷新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:803
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:806
 #, elixir-autogen, elixir-format
 msgid "Account deletion is already in progress."
 msgstr "账号删除已在进行中。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:836
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:839
 #, elixir-autogen, elixir-format
 msgid "Account did not report plan or quota details"
 msgstr "账号未报告套餐或配额详情"
@@ -1978,7 +1978,7 @@ msgstr "账号身份"
 msgid "Account label"
 msgstr "账号标签"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:831
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:834
 #, elixir-autogen, elixir-format
 msgid "Account plan: %{plan}"
 msgstr "账号套餐：%{plan}"
@@ -2013,7 +2013,7 @@ msgstr "账号设置已更新"
 msgid "Account verified"
 msgstr "账号已验证"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:743
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:746
 #, elixir-autogen, elixir-format
 msgid "Account-level quota recovery capacity: spent automatically by policy or through one queued manual attempt."
 msgstr "账号级配额恢复容量：按策略自动消耗，或通过一次排队的手动尝试消耗。"
@@ -2154,7 +2154,7 @@ msgstr "适配器"
 msgid "Add a local admin account and decide how the first password is delivered."
 msgstr "添加本地管理员账号，并选择首次密码的交付方式。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1080
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1084
 #, elixir-autogen, elixir-format
 msgid "Added to %{pool}"
 msgstr "已添加到 %{pool}"
@@ -2204,7 +2204,7 @@ msgstr "接纳时间"
 msgid "Advanced filters"
 msgstr "高级筛选"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:911
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:914
 #, elixir-autogen, elixir-format
 msgid "Advanced policy settings"
 msgstr "高级策略设置"
@@ -2482,7 +2482,7 @@ msgstr "所有尝试"
 msgid "All current and future models"
 msgstr "所有当前和未来模型"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:885
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:888
 #, elixir-autogen, elixir-format
 msgid "All expirations"
 msgstr "全部到期时间"
@@ -2694,7 +2694,7 @@ msgid "Approval is still pending. Checking again in %{count} second."
 msgid_plural "Approval is still pending. Checking again in %{count} seconds."
 msgstr[0] "批准仍在等待中。将在 %{count} 秒后再次检查。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1114
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1118
 #, elixir-autogen, elixir-format
 msgid "Approve again to refresh this account's authorization."
 msgstr "再次批准以刷新此账号的授权。"
@@ -2709,7 +2709,7 @@ msgstr "在其他设备上批准，无需粘贴。"
 msgid "Approve in a tab, paste the URL back."
 msgstr "在标签页中批准，然后粘贴返回的 URL。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1106
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1110
 #, elixir-autogen, elixir-format
 msgid "Approve in the tab that opened, then paste the callback URL back here."
 msgstr "在打开的标签页中批准，然后将回调 URL 粘贴回这里。"
@@ -2765,7 +2765,7 @@ msgstr "将此账号分配到 Pool 后，它才能接收流量。"
 msgid "Assign this account to a visible Pool before creating a reinvite."
 msgstr "创建重新邀请前，请先将此账号分配到可见的 Pool。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1191
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1194
 #, elixir-autogen, elixir-format
 msgid "Assign this account to a visible Pool before relinking."
 msgstr "重新关联前，请先将此账号分配到可见的 Pool。"
@@ -3009,7 +3009,7 @@ msgstr "Auto - 由上游选择"
 msgid "Auto for %{model}"
 msgstr "%{model} 使用自动"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:800
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:803
 #, elixir-autogen, elixir-format
 msgid "Auto redeem"
 msgstr "自动兑换"
@@ -3342,7 +3342,7 @@ msgstr "回调 URL"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:620
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:661
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:701
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1059
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1063
 #: lib/codex_pooler_web/live/admin/components/shared/components.ex:643
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:94
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:173
@@ -3502,7 +3502,7 @@ msgstr "除非上游需要覆盖，否则请选择自动"
 msgid "Choose Pool"
 msgstr "选择 Pool"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1117
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1121
 #, elixir-autogen, elixir-format
 msgid "Choose a Pool, then approve the account."
 msgstr "选择 Pool，然后批准账号。"
@@ -3721,8 +3721,8 @@ msgstr "使用前缀 %{prefix} 进行身份验证的客户端将立即无法访�
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_observations_dialog.ex:129
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:301
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:933
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1058
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:937
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1062
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr "关闭"
@@ -3866,7 +3866,7 @@ msgstr "Codex 设备授权被拒绝"
 msgid "Codex device response was incomplete"
 msgstr "Codex 设备响应不完整"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:739
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:742
 #, elixir-autogen, elixir-format
 msgid "Codex saved resets · %{label}"
 msgstr "Codex 已保存的重置 · %{label}"
@@ -3918,14 +3918,14 @@ msgid "Compatibility"
 msgstr "兼容性"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex:259
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1120
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1124
 #, elixir-autogen, elixir-format
 msgid "Complete link"
 msgstr "完成关联"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:73
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:101
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1119
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1123
 #, elixir-autogen, elixir-format
 msgid "Complete relink"
 msgstr "完成重新关联"
@@ -4617,7 +4617,7 @@ msgstr "已降级"
 #: lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex:766
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:221
 #: lib/codex_pooler_web/live/admin/components/pages/settings/page_components/mcp.ex:326
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:789
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:792
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:236
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:627
 #: lib/codex_pooler_web/live/admin/pages/upstream_cockpit_live/account_lifecycle_workflow.ex:264
@@ -4657,7 +4657,7 @@ msgstr "删除已归档的 Pool"
 msgid "Deleted"
 msgstr "已删除"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1188
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1191
 #, elixir-autogen, elixir-format
 msgid "Deleted accounts cannot be relinked."
 msgstr "已删除的账号无法重新关联。"
@@ -4672,13 +4672,13 @@ msgstr "正在删除账号"
 msgid "Deleting account: %{label}"
 msgstr "正在删除账号：%{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1034
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1037
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:503
 #, elixir-autogen, elixir-format
 msgid "Deletion failed - retry Delete"
 msgstr "删除失败 - 请重试删除"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1033
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1036
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:502
 #, elixir-autogen, elixir-format
 msgid "Deletion in progress"
@@ -5272,7 +5272,7 @@ msgstr "强制设置"
 msgid "Enter and confirm the password you will use for future sign-ins."
 msgstr "请输入并确认今后登录时使用的密码。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1110
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1114
 #, elixir-autogen, elixir-format
 msgid "Enter the code below to approve. This dialog updates when the account is ready."
 msgstr "输入下方代码以批准。账号就绪后，此对话框将自动更新。"
@@ -6609,12 +6609,12 @@ msgstr "最近 24 小时"
 msgid "Last 5 minutes"
 msgstr "最近 5 分钟"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1092
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1095
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}."
 msgstr "最近 5m 发往 %{pool}：%{requests}，%{tokens}。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1095
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1098
 #, elixir-autogen, elixir-format
 msgid "Last 5m toward %{pool}: %{tokens} across %{requests}; usage still missing for %{missing}."
 msgstr "最近 5m 发往 %{pool}：%{requests}，%{tokens}；仍缺少 %{missing} 的用量。"
@@ -6822,12 +6822,12 @@ msgstr "关联"
 msgid "Link OpenAI account"
 msgstr "关联 OpenAI 账号"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1086
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1090
 #, elixir-autogen, elixir-format
 msgid "Link an account"
 msgstr "关联账号"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1087
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1091
 #, elixir-autogen, elixir-format
 msgid "Link an account to %{pool}"
 msgstr "将账号关联到 %{pool}"
@@ -7776,7 +7776,7 @@ msgstr "无 Pool 分配"
 msgid "No Pool invites"
 msgstr "暂无 Pool 邀请"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1069
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1072
 #, elixir-autogen, elixir-format
 msgid "No Pools"
 msgstr "无 Pool"
@@ -7936,7 +7936,7 @@ msgid "No details available"
 msgstr "无详细信息"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:126
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:900
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:903
 #, elixir-autogen, elixir-format
 msgid "No expiration dates reported for the available saved resets yet."
 msgstr "尚未报告可用的已保存重置的到期日期。"
@@ -8116,7 +8116,7 @@ msgstr "没有请求日志"
 msgid "No requests in the last 60 minutes"
 msgstr "最近 60 分钟内没有请求"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1089
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1092
 #, elixir-autogen, elixir-format
 msgid "No requests toward %{pool} in the last 5 minutes."
 msgstr "最近 5 分钟没有发往 %{pool} 的请求。"
@@ -9294,7 +9294,7 @@ msgstr "持久套接字不会占用缓冲或流式传输通道。"
 msgid "Phase"
 msgstr "阶段"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:837
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:840
 #, elixir-autogen, elixir-format
 msgid "Plan and quota not reported"
 msgstr "未报告套餐和配额"
@@ -9888,7 +9888,7 @@ msgstr "无法显示二维码"
 msgid "Queue limit"
 msgstr "队列上限"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:988
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:992
 #, elixir-autogen, elixir-format
 msgid "Queue manual redemption"
 msgstr "将手动兑换加入队列"
@@ -10102,7 +10102,7 @@ msgstr "推理 Token"
 msgid "Reauth required"
 msgstr "需要重新认证"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:997
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1000
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/reconciliation_status.ex:90
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model/formatting.ex:159
 #, elixir-autogen, elixir-format
@@ -10236,7 +10236,7 @@ msgstr "已使用恢复码"
 msgid "Recovery codes"
 msgstr "恢复码"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:834
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:837
 #, elixir-autogen, elixir-format
 msgid "Redeem"
 msgstr "兑换"
@@ -10381,7 +10381,7 @@ msgid "Release notes"
 msgstr "发行说明"
 
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/dialogs.ex:283
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1075
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1079
 #, elixir-autogen, elixir-format
 msgid "Relink %{label}"
 msgstr "重新关联 %{label}"
@@ -10422,7 +10422,7 @@ msgstr "剩余配额"
 msgid "Remove selected auth.json file"
 msgstr "移除选中的 auth.json 文件"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:808
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:811
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:892
 #, elixir-autogen, elixir-format
 msgid "Remove this account from all Pools before deleting it."
@@ -10940,7 +10940,7 @@ msgstr "路由"
 msgid "Routing lanes"
 msgstr "路由通道"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:972
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:975
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:591
 #, elixir-autogen, elixir-format
 msgid "Routing readiness is unavailable for this upstream account."
@@ -10959,13 +10959,13 @@ msgstr "路由策略"
 msgid "Routing summary"
 msgstr "路由摘要"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:969
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:972
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex:589
 #, elixir-autogen, elixir-format
 msgid "Routing unavailable"
 msgstr "路由不可用"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1102
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1106
 #, elixir-autogen, elixir-format
 msgid "Routing, quota, and health for this account live on its cockpit."
 msgstr "此账号的路由、配额和健康状态均可在其控制台查看。"
@@ -11360,7 +11360,7 @@ msgstr "保存运营者 URL"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex:184
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:662
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:702
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:942
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:946
 #, elixir-autogen, elixir-format
 msgid "Save policy"
 msgstr "保存策略"
@@ -11391,7 +11391,7 @@ msgstr "已保存"
 msgid "Saved model is not available in the current routable catalog"
 msgstr "已保存的模型不在当前可路由目录中"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:741
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:744
 #, elixir-autogen, elixir-format
 msgid "Saved reset bank"
 msgstr "已保存的重置储备"
@@ -11424,7 +11424,7 @@ msgstr "已保存的重置兑换已加入队列"
 msgid "Saved reset redemption requires a Pool assignment"
 msgstr "兑换已保存的重置需要先分配到 Pool"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:993
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:997
 #, elixir-autogen, elixir-format
 msgid "Saved reset redemption unavailable"
 msgstr "已保存的重置兑换不可用"
@@ -11840,7 +11840,7 @@ msgstr "显示 %{label} 配额观测记录；剩余 %{percent}；%{detail}"
 msgid "Show API key notes"
 msgstr "显示 API 密钥备注"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:928
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:931
 #, elixir-autogen, elixir-format
 msgid "Show Pool assignments: %{count_label}"
 msgstr "显示 Pool 分配：%{count_label}"
@@ -11871,7 +11871,7 @@ msgstr "显示全部 Pool"
 msgid "Show assigned Pools (%{pools}) for this operator"
 msgstr "显示分配给此运营者的 Pool（%{pools}）"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:923
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:926
 #, elixir-autogen, elixir-format
 msgid "Show model usage for the last 5 minutes"
 msgstr "显示最近 5 分钟的模型用量"
@@ -11881,8 +11881,8 @@ msgstr "显示最近 5 分钟的模型用量"
 msgid "Show quota observations"
 msgstr "显示配额观测记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:922
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:925
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:928
 #, elixir-autogen, elixir-format
 msgid "Show quota status"
 msgstr "显示配额状态"
@@ -12591,17 +12591,17 @@ msgstr "主题和默认显示设置"
 msgid "This Pool has no routable catalog models or retained model overrides yet. Run model sync after assigning an active upstream."
 msgstr "此 Pool 暂无可路由的目录模型或保留的模型覆盖。分配活跃上游后，请运行模型同步。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:838
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:841
 #, elixir-autogen, elixir-format
 msgid "This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch."
 msgstr "此账号未报告套餐或配额详情。路由仍依赖调度前的独立配额证据。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:998
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1001
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from routing until credentials are replaced."
 msgstr "在替换凭据之前，此账号不会参与路由。"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:986
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:989
 #, elixir-autogen, elixir-format
 msgid "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked."
 msgstr "在令牌刷新成功或凭据重新关联之前，此账号不会参与运行时路由。"
@@ -12796,7 +12796,7 @@ msgstr "Token 消耗计算：%{title}"
 msgid "Token refresh"
 msgstr "令牌刷新"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:985
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:988
 #, elixir-autogen, elixir-format
 msgid "Token refresh failed"
 msgstr "令牌刷新失败"
@@ -12813,7 +12813,7 @@ msgstr "Token 刷新已在队列中"
 msgid "Token refresh queued"
 msgstr "Token 刷新已加入队列"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1125
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1128
 #, elixir-autogen, elixir-format
 msgid "Token usage in the last 5 minutes"
 msgstr "最近 5 分钟的 Token 用量"
@@ -13195,7 +13195,7 @@ msgstr "随时间变化的流量的底层区间值"
 #: lib/codex_pooler_web/live/admin/components/pages/lens/presentation.ex:101
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer/attempts.ex:125
 #: lib/codex_pooler_web/live/admin/components/pages/request_logs/display/status.ex:99
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1039
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1042
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/formatting.ex:104
 #: lib/codex_pooler_web/live/admin/read_models/open_ai_incidents_read_model.ex:90
 #: lib/codex_pooler_web/live/observatory/presentation.ex:428
@@ -13772,7 +13772,7 @@ msgstr "用量轮询已暂停，直到 %{time}"
 msgid "Usage records missing"
 msgstr "缺少用量记录"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1110
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1113
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:86
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/token_burn_popover.ex:116
 #, elixir-autogen, elixir-format
@@ -14091,13 +14091,13 @@ msgstr "包含两个模型名称"
 msgid "Without a model name"
 msgstr "未包含模型名称"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1016
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1021
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1019
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1024
 #, elixir-autogen, elixir-format
 msgid "Workspace %{label}"
 msgstr "工作区 %{label}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1029
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1032
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex:564
 #, elixir-autogen, elixir-format
 msgid "Workspace reference %{ref}"
@@ -14123,7 +14123,7 @@ msgstr "X-Real-IP"
 msgid "Yes — provider reported different names in one response"
 msgstr "是 — 服务商在同一响应中报告了不同名称"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:811
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:814
 #: lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex:895
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to permanently delete this account."
@@ -14389,7 +14389,7 @@ msgstr "检查于 %{time}"
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:636
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:667
 #: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:707
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:951
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:955
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:110
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:189
 #: lib/codex_pooler_web/live/admin/components/shared/operator_components/dialogs.ex:279
@@ -15022,7 +15022,7 @@ msgstr "网络：在线"
 msgid "next expires %{time}"
 msgstr "下次到期 %{time}"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:792
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:795
 #, elixir-autogen, elixir-format
 msgid "next expires in %{duration}"
 msgstr "下一次将在 %{duration} 后到期"
@@ -15503,7 +15503,7 @@ msgstr "观测于 %{date}"
 msgid "selected API keys are not available"
 msgstr "所选 API 密钥不可用"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1163
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/page_components.ex:1167
 #, elixir-autogen, elixir-format
 msgid "selected account"
 msgstr "选中的账号"
@@ -15663,7 +15663,7 @@ msgid "token"
 msgid_plural "tokens"
 msgstr[0] "Token"
 
-#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1008
+#: lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex:1011
 #: lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex:795
 #, elixir-autogen, elixir-format
 msgid "token refresh failed"
