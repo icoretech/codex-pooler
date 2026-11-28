@@ -22,12 +22,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
   for disposition <- [:complete, :deadline] do
     @tag slow: "runs eight accounted websocket turns across owner replacement and a controlled finalization drain"
     test "normal drain retains cleanup authority before caller #{disposition}" do
-      # A drain waits for the settlement of the turn its owner forwarded,
-      # within the drain call's budget (findings#287): 750 ms with this owner
-      # call budget, then the cut the `:deadline` disposition expects.
-      owner_defaults = CodexPooler.TestAppEnv.restore_on_exit(OwnerDefaults)
-      Application.put_env(:codex_pooler, OwnerDefaults, Keyword.merge(owner_defaults, owner_call_timeout_ms: 1_500))
-
       {setup, upstream, state, release_ref} =
         fixture(completed_responses: Enum.map(1..7, &custom_response/1))
 
@@ -50,7 +44,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
       first_owner = state.websocket_owner_pid
       WebsocketOwnerSession.begin_drain(first_owner)
       # The owner's last turn, relayed and settled, before the drain (findings#287).
-      assert {:ok, :settled} = WebsocketOwnerSession.drain_owner(first_owner)
+      drain_completed_owner!(first_owner)
+      assert FakeUpstream.count(upstream) == 1
+      assert [%Request{status: "succeeded", last_error_code: nil}] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
       # The idle socket closes rather than tell its client (findings#276).
       state = receive_until(state, {:close, {1001, "websocket owner is draining"}})
       assert :ok = CodexResponsesSocket.terminate(:closed, state)
@@ -189,8 +185,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
         end
 
       owner_ref = Process.monitor(owner)
-      drained = if unquote(disposition) == :complete, do: {:ok, :settled}, else: :ok
-      assert WebsocketOwnerSession.drain_owner(owner) == drained
+      drain_owner!(owner, unquote(disposition))
       assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}, @budget
 
       assert Repo.aggregate(
@@ -232,6 +227,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
         assert %{socket: ^socket, task: ^caller, finished?: false} = pending
       end
     end
+  end
+
+  defp drain_owner!(owner, :complete), do: drain_completed_owner!(owner)
+
+  defp drain_owner!(owner, :deadline) do
+    # Only the suspended final caller needs the real 750 ms settlement cutoff.
+    # Preserve the normal owner call budget during every turn and ordinary drain.
+    prior = Application.fetch_env(:codex_pooler, OwnerDefaults)
+    options = CodexPooler.TestAppEnv.restore_on_exit(OwnerDefaults)
+
+    try do
+      Application.put_env(:codex_pooler, OwnerDefaults, Keyword.put(options, :owner_call_timeout_ms, 1_500))
+      assert OwnerDefaults.owner_call_timeout_ms() == 1_500
+      started_at = System.monotonic_time(:millisecond)
+      assert :ok = WebsocketOwnerSession.drain_owner(owner)
+      assert System.monotonic_time(:millisecond) - started_at >= 750
+    after
+      case prior do
+        {:ok, previous} -> Application.put_env(:codex_pooler, OwnerDefaults, previous)
+        :error -> Application.delete_env(:codex_pooler, OwnerDefaults)
+      end
+    end
+
+    assert Application.fetch_env(:codex_pooler, OwnerDefaults) == prior
+  end
+
+  defp drain_completed_owner!(owner) do
+    refute Keyword.has_key?(Application.get_env(:codex_pooler, OwnerDefaults, []), :owner_call_timeout_ms)
+    assert {:ok, :settled} = WebsocketOwnerSession.drain_owner(owner)
   end
 
   defp continuation(first, anchor, call_id),
